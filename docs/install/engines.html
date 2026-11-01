@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.b9407fd1.css">
-<script src="/ZMRIG/assets/js/runtime~main.ec44b425.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/runtime~main.6e12f229.js" defer="defer"></script>
 <script src="/ZMRIG/assets/js/main.9a13e464.js" defer="defer"></script>
 </head>
 <body>
@@ -19,9 +19,11 @@
 <p>Both engines compile to the same hash loop: <code>zmrig/capi</code> binds the C++ RandomX
 implementation into the Zig binary, so the numbers are the same within noise. The
 difference is everything around the loop.</p>
-<table><thead><tr><th></th><th><code>xmrig</code> (C++)</th><th><code>zmrig</code> (Zig)</th></tr></thead><tbody><tr><td>Algorithms</td><td>all of them (34+)</td><td>the RandomX family: <code>rx/0</code>, <code>rx/2</code>, <code>rx/wow</code>, <code>rx/arq</code>, <code>rx/graft</code>, <code>rx/sfx</code>, <code>rx/yada</code>, <code>panthera</code></td></tr><tr><td>Transports</td><td>TCP, TLS</td><td>TCP, TLS, <code>ws</code>, <code>wss</code></td></tr><tr><td>Proxy</td><td>partial SOCKS5</td><td>HTTP CONNECT and SOCKS5, with auth and remote DNS</td></tr><tr><td>Monitoring API</td><td>yes, complete</td><td>yes, read-only, XMRig-compatible shape</td></tr><tr><td>Report code for the calculator</td><td>no</td><td>yes (<code>--report</code>)</td></tr><tr><td>Health watchdog</td><td>no</td><td>yes, restarts when earnings stop</td></tr><tr><td>Measured <code>rx/0</code></td><td>1075 H/s</td><td>1008–1103 H/s, same host, same config</td></tr></tbody></table>
-<p>Both are measured on the same 2 vCPU machine; the spread is the host, not the
-engine. <a class="" href="/ZMRIG/docs/reference/benchmarks">Benchmarks</a> has the method.</p>
+<table><thead><tr><th></th><th><code>xmrig</code> (C++)</th><th><code>zmrig</code> (Zig)</th></tr></thead><tbody><tr><td>Algorithms</td><td>all of them (34+)</td><td>the RandomX family: <code>rx/0</code>, <code>rx/wow</code>, <code>rx/arq</code>, <code>rx/graft</code>, <code>rx/sfx</code>, <code>rx/yada</code>, <code>panthera</code> (<code>rx/2</code> parses but no coin uses it and it is not tested)</td></tr><tr><td>Transports</td><td>TCP, TLS</td><td>TCP, TLS, <code>ws</code>, <code>wss</code></td></tr><tr><td>Proxy</td><td>partial SOCKS5</td><td>HTTP CONNECT and SOCKS5, with auth and remote DNS</td></tr><tr><td>Monitoring API</td><td>yes, complete</td><td>yes, read-only, XMRig-compatible shape</td></tr><tr><td>Report code for the calculator</td><td>no</td><td>yes (<code>--report</code>)</td></tr><tr><td>Health watchdog</td><td>no</td><td>yes, restarts when earnings stop</td></tr><tr><td>Measured <code>rx/0</code></td><td>832 H/s</td><td>800–841 H/s, same host, same config</td></tr></tbody></table>
+<p>Both are measured on the same 2 vCPU machine, <code>--bench</code>, 2 MiB pages; the spread
+is the host, not the engine. <a class="" href="/ZMRIG/docs/reference/benchmarks">Benchmarks</a> has the
+method. Every algorithm above has a reference vector in <code>zmrig --self-test</code>, so
+the Zig engine&#x27;s coverage is checked rather than claimed.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="which-one">Which one<a href="#which-one" class="hash-link" aria-label="Direct link to Which one" title="Direct link to Which one" translate="no">​</a></h2>
 <ul>
 <li class=""><strong>RandomX on a normal VPS:</strong> either. <code>zmrig</code> is smaller, has the transport

@@ -1,3 +1,53 @@
+# Unreleased — huge pages, measured instead of assumed
+
+The miner used to treat "no reserved huge pages" as "4 KiB pages", and tell
+unprivileged users to take a root action they did not need. It also built the
+dataset with the mining thread count, so `-t 1` doubled every seed change. Both
+are measured below and both are fixed; nothing else changed the hashrate, and
+the sections that say so are the honest half of this list.
+
+### Fixed
+- **`--bench` and `--report` refused to start on a host that had the memory.**
+  The pre-flight compared the requirement against the huge-page pool and against
+  `MemAvailable` separately, so a machine that had followed the miner's own
+  advice (`echo 1168 > nr_hugepages`) had 2336 MB of pool and 1.2 GB of RAM and
+  matched neither a 2404 MB requirement. The two are summed now, which is what
+  the allocator does, and the message says which two numbers it added.
+- **`--mode=auto` decided `fast` from `MemTotal`.** On a 4 GB box already running
+  something else that meant mapping a 2 GiB dataset into 1.5 GB of free memory:
+  OOM kill, or a silent fall back to the 10× slower light mode. It now uses
+  `MemTotal` and `MemAvailable` plus reserved-but-unused huge pages, whichever is
+  smaller, and says which of the two failed when it picks light mode.
+- **The dataset was built with the mining thread count.** `--randomx-init`
+  defaulted to `-t`, so `-t 1` built Monero's 2 GiB dataset with one thread:
+  42.9 s against 21.1 s on a 2 vCPU host, and a switching pool pays that on
+  every seed change. The default is now every hardware thread; the flag still
+  overrides, and `miner.zig` has a unit test for the rule.
+
+### Changed
+- **Huge-page status is measured, not assumed.** After the dataset is built the
+  miner reads its own `AnonHugePages` from `/proc/self/smaps_rollup` and prints
+  `huge pages: 2332 MB via THP (99% of the 2336 MB mapping, measured by the
+  kernel)`. `MADV_HUGEPAGE` returning 0 means "request noted", not "granted", and
+  the log no longer confuses the two.
+- **The root advice is conditional.** `nr_hugepages=…` is suggested only when
+  `/sys/kernel/mm/transparent_hugepage/enabled` is `never` (or unreadable). On
+  the common `[madvise]` default the mapping is backed by 2 MiB pages without
+  any root step, and the warning that used to appear there was wrong by 24
+  percentage points: 786 H/s with THP against 615–626 H/s on 4 KiB pages, and
+  800–841 H/s with the reserved pool.
+- **`--check` prints a `thp` line** next to the memory line, so the decision is
+  visible before the first hash instead of after an hour of mining.
+- **The API test covers all seven algorithms in full-memory mode**, and decides
+  on its own whether the box can hold the dataset (usable RAM plus free huge
+  pages) instead of counting pages against a hardcoded 1152.
+
+### The new mark
+A bold Z — bar, diagonal, bar — drawn on a 32 unit grid, one tone, generated
+from `site/tools/make-logo.py`: `logo.svg`, `logo-dark.svg`, `favicon.svg`, three
+PNGs and the social cards. Diagonal cut thinner than the bars, two corners
+chamfered on that axis, symmetric under a 180° rotation.
+
 # Unreleased — every coin sized and tuned for itself
 
 Both engines hashed seven coins; only Monero decided how much memory they used.
@@ -56,14 +106,16 @@ light mode on that coin crash.
   `--self-test --algo=panthera` verified Monero and reported success).
 
 ### Brand
-- **A new mark**, and the letter Z is gone. It is the RandomX cache (the solid
-  core) inside the dataset (the ring around it): the two layers of memory every
-  coin here builds before it can hash, drawn as a die with two corners cut at 45°
-  so the block has an axis. One geometry, one tone, no gradient, no letterform.
-  `site/tools/make-logo.py` writes `logo.svg`, `logo-dark.svg`, an adaptive
-  `favicon.svg` and the three PNG icons; the social cards paste the same render.
-  Light pages get black, dark pages get white, the favicon follows
-  `prefers-color-scheme`.
+- **A new mark**: a bold Z — bar, diagonal, bar — on a 32 unit grid, one tone,
+  nothing else. The diagonal is cut thinner than the bars because an equal-weight
+  diagonal reads heavier, the two corners on its axis are chamfered at the same
+  angle, and the outline is symmetric under a 180° rotation, so it sits straight
+  in a tab, a tile or a circle. ZMRIG and Zig share the shape, and a letter
+  survives 16 px without a caption; the earlier ring-and-core concept read as a
+  generic chip logo at that size. `site/tools/make-logo.py` writes `logo.svg`,
+  `logo-dark.svg`, an adaptive `favicon.svg` and the three PNG icons; the social
+  cards paste the same render. Light pages get black, dark pages get white, the
+  favicon follows `prefers-color-scheme`.
 
 # Unreleased — seven coins, one installer
 

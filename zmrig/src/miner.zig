@@ -14,6 +14,7 @@ const topology = @import("topology.zig");
 const log = @import("log.zig");
 const options = @import("options.zig");
 const memory_mod = @import("memory.zig");
+const hugepages_mod = @import("hugepages.zig");
 const stratum = @import("stratum.zig");
 
 pub const max_threads = 128;
@@ -198,7 +199,9 @@ pub const Shared = struct {
     bench_limit: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     hashes: [max_threads]Counter = [_]Counter{.{}} ** max_threads,
     thread_count: usize = 0,
-    /// Threads used to build the dataset (`--randomx-init`), 0 = hashing threads.
+    /// Hardware threads, for the dataset initialiser's default.
+    hw_threads: usize = 0,
+    /// Threads used to build the dataset (`--randomx-init`), 0 = every CPU.
     init_threads: usize = 0,
     priority: i32 = -1,
 
@@ -212,8 +215,19 @@ pub const Shared = struct {
     }
 
     /// Threads to hand to the dataset initialiser.
+    ///
+    /// Default: every hardware thread, not just the mining threads. Building
+    /// Monero's 2 GiB dataset is a pure memory-bandwidth job, and it is the
+    /// longest wait a rig has: 42.9 s with one thread against 21.1 s with two
+    /// on a 2 vCPU box. A rig told to mine with one thread was paying that
+    /// difference on every start - and on every seed change, which on a
+    /// multi-algorithm pool is every few minutes.
     pub fn initThreads(self: *const Shared) usize {
-        return if (self.init_threads > 0) self.init_threads else self.thread_count;
+        if (self.init_threads > 0) return self.init_threads;
+
+        const hw = if (self.hw_threads > 0) self.hw_threads else self.thread_count;
+
+        return @max(self.thread_count, @min(hw, max_threads));
     }
 
     pub fn pause(self: *Shared) void {
@@ -322,13 +336,22 @@ pub const Engine = struct {
         });
 
         if (self.advise_hugepages and huge_total != 0 and huge_explicit != huge_total) {
-            // One actionable line, once per engine start. The exact command
-            // depends on how much memory this mode needs.
-            const need_pages = (huge_total + (2 * 1024 * 1024) - 1) / (2 * 1024 * 1024);
-            self.logger.warn("no reserved huge pages: using {s} pages instead costs up to ~25% hashrate (measured on a 2 vCPU host)", .{
-                if (huge_explicit == 0) "4 KiB" else "partly 4 KiB",
-            });
-            self.logger.warn("fix it once as root: echo {d} > /proc/sys/vm/nr_hugepages  (or: sudo zmrig-tune)", .{need_pages});
+            // Not having *reserved* pages is only a problem when transparent
+            // huge pages are off as well. With THP in `madvise` (or `always`)
+            // the mapping still comes back in 2 MiB pages, and the difference
+            // between that and the reserved pool is small; the difference
+            // between a 2 MiB page and a 4 KiB page is not - 800.6 H/s against
+            // 614.8 H/s on the validation host, measured by switching the
+            // MADV_HUGEPAGE hint off rather than by believing the manual.
+            switch (hugepages_mod.thp()) {
+                .never, .unknown => {
+                    const need_pages = (huge_total + (2 * 1024 * 1024) - 1) / (2 * 1024 * 1024);
+
+                    self.logger.warn("transparent huge pages are {s} and no huge pages are reserved: RandomX will read 4 KiB pages, ~28% slower (measured 614.8 H/s against 800.6 H/s on 2 vCPU)", .{hugepages_mod.thp().label()});
+                    self.logger.warn("fix it once as root: echo {d} > /proc/sys/vm/nr_hugepages, or boot with transparent_hugepage=madvise (sudo zmrig-tune does both)", .{need_pages});
+                },
+                .always, .madvise => {},
+            }
         }
 
         self.wrapped = wrapped;
@@ -363,7 +386,45 @@ pub const Engine = struct {
             self.has_seed = true;
 
             self.logger.info("dataset ready in {d} ms", .{nowMs() - started});
+
+            // "huge pages 0 MB (THP fallback)" is a claim about intent. Once
+            // the dataset has been written, the kernel's own count of pages it
+            // actually collapsed is available, and it is the only number that
+            // describes how the next hour of hashing will go.
+            self.reportHugePages(wrapped);
         }
+    }
+
+    /// One line, after the dataset exists, saying how much of this process's
+    /// memory really is on 2 MiB pages - from the kernel, not from us.
+    fn reportHugePages(self: *Self, wrapped: *api.Wrapped) void {
+        const explicit = wrapped.hugePageBytes();
+        const total = wrapped.hugePageBytesTotal();
+        if (total == 0) return;
+
+        // The reserved pool is exact; THP is a process-wide figure that also
+        // counts the scratchpads, so it is compared as a share and never
+        // presented as the mapping size.
+        if (explicit == total) {
+            self.logger.info("huge pages: {d} MB of {d} MB came from the reserved pool", .{ explicit / (1024 * 1024), total / (1024 * 1024) });
+
+            return;
+        }
+
+        const thp_bytes = hugepages_mod.anonymousHugeBytes();
+        if (thp_bytes == 0) {
+            self.logger.warn("huge pages: the kernel has collapsed none of the {d} MB mapping; every dataset read is a TLB miss (see the note above)", .{total / (1024 * 1024)});
+
+            return;
+        }
+
+        const share = @min(thp_bytes, total) * 100 / total;
+
+        self.logger.info("huge pages: {d} MB via THP ({d}% of the {d} MB mapping, measured by the kernel)", .{
+            (@min(thp_bytes, total)) / (1024 * 1024),
+            share,
+            total / (1024 * 1024),
+        });
     }
 
     pub fn createVm(self: *Self) !*api.Vm {
@@ -494,13 +555,22 @@ pub const Miner = struct {
             const algo = opts.algo orelse .rx_0;
             const sizes = memory_mod.Sizes{ .cache = algo.cacheBytes(), .dataset = algo.datasetBytes() };
             const need = sizes.total() + memory_mod.slack_bytes;
-            flags.full_memory = memory_mod.fullMemory(sizes, .auto, totalMemory());
+            // MemTotal is what the machine has, not what this process can get.
+            // A 4 GB box already running a database has 4 GB of MemTotal and
+            // maybe 1.5 GB left; deciding from MemTotal mapped the 2 GiB
+            // dataset anyway, which is how a rig ends up OOM-killed (or in the
+            // 10x slower light mode after the allocation is refused) instead
+            // of being told, at startup, that it does not fit.
+            const usable = @min(totalMemory(), memoryForDataset());
+            flags.full_memory = memory_mod.fullMemory(sizes, .auto, usable);
             if (!flags.full_memory) {
-                logger.warn("less than {d} MB of RAM for {s}, starting in light mode ({d} MB cache, no dataset)", .{
-                    need / (1024 * 1024),
+                logger.warn("{s} needs {d} MB and this machine has {d} MB usable, starting in light mode: {d} MB cache, no dataset", .{
                     algo.label(),
+                    need / (1024 * 1024),
+                    usable / (1024 * 1024),
                     algo.cacheBytes() / (1024 * 1024),
                 });
+                logger.warn("light mode rebuilds every dataset line on demand - about 10x slower than fast mode (82 H/s against 857 H/s on 2 cores) - close what is using the RAM and restart", .{});
             }
         }
 
@@ -515,7 +585,12 @@ pub const Miner = struct {
             .logger = logger,
             .engine = blk: {
                 var engine = Engine.init(logger, flags);
-                engine.advise_hugepages = !opts.auto_hugepages;
+                // The reservation itself happens in main.zig, before the engine
+                // exists (autoReserveHugePages). This flag only gates the
+                // warning the engine prints when the mapping came back small,
+                // and it is on by default: the measurement after seeding is the
+                // line that explains a slow rig.
+                engine.advise_hugepages = opts.huge_pages;
                 break :blk engine;
             },
             .hw_threads = hw_threads,
@@ -537,6 +612,7 @@ pub const Miner = struct {
         miner.cpu_order_len = @min(order.len, miner.cpu_order.len);
 
         miner.shared.thread_count = threads;
+        miner.shared.hw_threads = hw_threads;
         miner.shared.init_threads = opts.init_threads;
         miner.shared.priority = opts.priority;
 
@@ -945,4 +1021,41 @@ fn pinToCpu(cpu: usize) void {
 
     const rc = std.os.linux.syscall3(.sched_setaffinity, 0, @sizeOf(std.os.linux.cpu_set_t), @intFromPtr(&set));
     _ = rc;
+}
+
+test "the dataset is built with every CPU, not just the mining threads" {
+    const testing = std.testing;
+
+    var shared = Shared{};
+
+    // A rig told to mine with one thread on a 4-CPU box still builds the
+    // dataset with all four: 42.9 s against 21.1 s for Monero's 2 GiB on the
+    // two-core validation host, and a seed change on a multi-algorithm pool
+    // pays that again.
+    shared.thread_count = 1;
+    shared.hw_threads = 4;
+    try testing.expectEqual(@as(usize, 4), shared.initThreads());
+
+    // Mining with more threads than the heuristic chose is not a reason to
+    // build with fewer.
+    shared.thread_count = 4;
+    shared.hw_threads = 4;
+    try testing.expectEqual(@as(usize, 4), shared.initThreads());
+
+    // --randomx-init is an explicit instruction and is never second-guessed.
+    shared.init_threads = 2;
+    try testing.expectEqual(@as(usize, 2), shared.initThreads());
+
+    // No hardware count (a container that cannot read /proc): fall back to the
+    // hashing threads rather than dividing by zero.
+    shared.init_threads = 0;
+    shared.hw_threads = 0;
+    shared.thread_count = 3;
+    try testing.expectEqual(@as(usize, 3), shared.initThreads());
+
+    // And the ceiling still holds: more CPUs than the worker array can hold
+    // must not produce an initialiser that writes past it.
+    shared.hw_threads = 4096;
+    shared.thread_count = 1;
+    try testing.expectEqual(@as(usize, max_threads), shared.initThreads());
 }

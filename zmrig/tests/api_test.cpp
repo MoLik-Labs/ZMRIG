@@ -3,6 +3,7 @@
 #include "../capi/xmo_randomx.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -22,6 +23,51 @@ static void check(const char *name, const uint8_t *got, const uint8_t *want)
     for (int i = 0; i < 32; ++i) std::printf("%02x", want[i]);
     std::printf("\n");
     ++failures;
+}
+
+struct AlgoVector {
+    int         algo;
+    const char *name;
+    const char *hex;
+};
+
+/* One known answer per RandomX configuration, copied from tests/hash/main.cpp.
+ * rx/2 is missing on purpose: no coin uses it, and upstream v6.26 disagrees with
+ * itself about it - the interpreter ignores its AES tweak while the JIT applies
+ * it, and tests/hash/main.cpp skips the same comparison for the same reason. */
+static const AlgoVector algoVectors[] = {
+    { XMO_RX_0,     "rx/0",     "1833ff322e60dad7d6885bcd5e0844ec8e4808a47d8d354806668f0c241a6af5" },
+    { XMO_RX_WOW,   "rx/wow",   "45896210539d9ba37377b9c186b7343304cd6bf797c75f3d1087ee63f22a73e4" },
+    { XMO_RX_ARQ,   "rx/arq",   "ca2b7afe5c50ab45296c5457337ff7cf27624139f05ec5d44c1e4ae8bfe95bb6" },
+    { XMO_RX_GRAFT, "rx/graft", "c4a9cfd2f0a9359c78f089902b44b42623fbf18a1a01786879bfed3f0be255f7" },
+    { XMO_RX_SFX,   "rx/sfx",   "3b88936e289ff3240dc074b289fe6464194bdfe31a80c9dc10c9c1eaa1975513" },
+    { XMO_RX_YADA,  "rx/yada",  "04d68fb9c445f4437dfce6ebb8028367b060140066ebaa416a4cd2ca63cdb723" },
+    { XMO_RX_XLA,   "panthera", "1805aa4fd26f5686dada26d9e16ccb290811b2a79404fdd1064f1ca092902212" },
+};
+
+/* What a full-memory run of `algo` can actually map: MemAvailable plus the huge
+ * pages that are reserved but not handed out. The kernel does not count those as
+ * available for ordinary allocations, and the dataset can be allocated from
+ * exactly those pages, so both have to be in the sum. */
+static double usableMb()
+{
+    double kb = 0;
+    double free_pages = 0;
+    double page_kb = 2048;
+
+    if (FILE *f = std::fopen("/proc/meminfo", "r")) {
+        char line[256];
+
+        while (std::fgets(line, sizeof(line), f)) {
+            if (std::strncmp(line, "MemAvailable:", 13) == 0) std::sscanf(line + 13, "%lf", &kb);
+            else if (std::strncmp(line, "HugePages_Free:", 15) == 0) std::sscanf(line + 15, "%lf", &free_pages);
+            else if (std::strncmp(line, "Hugepagesize:", 13) == 0) std::sscanf(line + 13, "%lf", &page_kb);
+        }
+
+        std::fclose(f);
+    }
+
+    return kb / 1024.0 + free_pages * page_kb / 1024.0;
 }
 
 static void unhex(const char *hex, uint8_t *out)
@@ -166,23 +212,7 @@ int main()
      * applies it (tests/hash/main.cpp skips the JIT comparison for the same
      * reason). There is nothing to compare against, so we do not pretend. */
     {
-        struct AlgoVector {
-            int         algo;
-            const char *name;
-            const char *hex;
-        };
-
-        const AlgoVector variants[] = {
-            { XMO_RX_0,     "rx/0",     "1833ff322e60dad7d6885bcd5e0844ec8e4808a47d8d354806668f0c241a6af5" },
-            { XMO_RX_WOW,   "rx/wow",   "45896210539d9ba37377b9c186b7343304cd6bf797c75f3d1087ee63f22a73e4" },
-            { XMO_RX_ARQ,   "rx/arq",   "ca2b7afe5c50ab45296c5457337ff7cf27624139f05ec5d44c1e4ae8bfe95bb6" },
-            { XMO_RX_GRAFT, "rx/graft", "c4a9cfd2f0a9359c78f089902b44b42623fbf18a1a01786879bfed3f0be255f7" },
-            { XMO_RX_SFX,   "rx/sfx",   "3b88936e289ff3240dc074b289fe6464194bdfe31a80c9dc10c9c1eaa1975513" },
-            { XMO_RX_YADA,  "rx/yada",  "04d68fb9c445f4437dfce6ebb8028367b060140066ebaa416a4cd2ca63cdb723" },
-            { XMO_RX_XLA,   "panthera", "1805aa4fd26f5686dada26d9e16ccb290811b2a79404fdd1064f1ca092902212" },
-        };
-
-        for (const auto &variant : variants) {
+        for (const auto &variant : algoVectors) {
             char name[64];
 
             xmo_engine *e = xmo_engine_new(variant.algo, /*jit*/ 8, err, sizeof(err));
@@ -226,14 +256,19 @@ int main()
     /* --- full memory mode equals light mode, and the dataset is 2 GiB ---
      * Needs 2.25 GiB, so it only runs when the machine has reserved huge pages
      * (or plenty of RAM); otherwise we would OOM the box, not test the code. */
-    unsigned long hp = 0;
-    if (FILE *f = std::fopen("/proc/sys/vm/nr_hugepages", "r")) {
-        if (std::fscanf(f, "%lu", &hp) != 1) hp = 0;
-        std::fclose(f);
+    /* Monero's cache plus dataset is 2336 MiB; 2500 leaves room for the
+     * scratchpads, the binary and the page cache. */
+    const double usable_mb = usableMb();
+
+    if (std::getenv("ZMRIG_TEST_QUICK")) {
+        std::printf("SKIP full-memory test (ZMRIG_TEST_QUICK)\n");
+        std::printf(failures == 0 ? "\nall API checks passed\n" : "\n%d FAILURES\n", failures);
+
+        return failures == 0 ? 0 : 1;
     }
 
-    if (hp < 1152) {
-        std::printf("SKIP full-memory test (only %lu huge pages of the 1152 needed)\n", hp);
+    if (usable_mb < 2500) {
+        std::printf("SKIP full-memory test (%.0f MB usable, 2500 MB needed; reserve huge pages or free RAM)\n", usable_mb);
         std::printf(failures == 0 ? "\nall API checks passed\n" : "\n%d FAILURES\n", failures);
 
         return failures == 0 ? 0 : 1;
@@ -278,6 +313,53 @@ int main()
 
     xmo_vm_free(fvm);
     xmo_engine_free(full);
+
+    /* --- full memory has to agree with light mode for every coin -----------
+     * Light mode derives the dataset line by line from the cache; fast mode
+     * reads it from a 2 GiB table built once. If those two ever disagree, the
+     * miner hashes one thing and the pool expects another, and the only
+     * symptom is rejected shares. Until now nothing exercised the dataset
+     * path for anything but rx/0. */
+    for (const auto &variant : algoVectors) {
+        if (variant.algo == XMO_RX_0) continue;   /* tested above, with commitments */
+
+        char name[64];
+        xmo_engine *e = xmo_engine_new(variant.algo, /*huge|jit|full*/ 13, err, sizeof(err));
+        if (!e) {
+            std::printf("FAIL %s full engine: %s\n", variant.name, err);
+            ++failures;
+
+            continue;
+        }
+
+        if (xmo_engine_seed(e, reinterpret_cast<const uint8_t *>(seed.data()), seed.size(), 2, err, sizeof(err)) != 0) {
+            std::printf("FAIL %s full seed: %s\n", variant.name, err);
+            ++failures;
+            xmo_engine_free(e);
+
+            continue;
+        }
+
+        xmo_vm *v = xmo_vm_new(e, 0, 0, err, sizeof(err));
+        if (!v) {
+            std::printf("FAIL %s full vm: %s\n", variant.name, err);
+            ++failures;
+            xmo_engine_free(e);
+
+            continue;
+        }
+
+        uint8_t want[32];
+        uint8_t got[32] = {};
+        unhex(variant.hex, want);
+        xmo_hash(v, reinterpret_cast<const uint8_t *>(inA.data()), inA.size(), got);
+
+        std::snprintf(name, sizeof(name), "%s full-mem hash equals light mode", variant.name);
+        check(name, got, want);
+
+        xmo_vm_free(v);
+        xmo_engine_free(e);
+    }
 
     std::printf(failures == 0 ? "\nall API checks passed\n" : "\n%d FAILURES\n", failures);
 

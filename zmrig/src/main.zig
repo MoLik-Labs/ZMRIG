@@ -1129,6 +1129,12 @@ fn printConfigSummary(opts: *const options.Options) !void {
                 algo.label(), need_mb, (need_mb + 1) / 2, hugePageStatus(opts),
             }) catch "cannot describe the memory this mode needs",
         });
+
+        // Reserved pages are one way to get 2 MiB pages; transparent huge pages
+        // are the other, and on most hosts it is the only one an unprivileged
+        // user has. Saying which one is in play turns "huge pages: 0" from a
+        // scare into an answer.
+        try out.print("  thp     {s}\n", .{thpStatus()});
     }
 
     // MSR is read-only here: probe the first CPU, never write during --check.
@@ -1314,10 +1320,19 @@ fn autoReserveHugePages(opts: *const options.Options, logger: *@import("log.zig"
 
     const want = hugepages_mod.pagesFor(need_mb, before.page_kb);
     const after = hugepages_mod.reserve(want) orelse {
-        // Not root is the normal case here; say the cost once and move on.
-        logger.warn("huge pages: {d} reserved, {d} needed for {d} MB; run as root or set vm.nr_hugepages={d} for up to ~21% more hashrate", .{
-            before.reserved, want, need_mb, want,
-        });
+        // Not root is the normal case here. Whether that matters depends on
+        // transparent huge pages: with THP in `madvise` the kernel collapses
+        // this mapping to 2 MiB pages anyway (measured: 99% of a 2336 MB
+        // rx/0 mapping), and the miner verifies that figure after the dataset
+        // is built. With THP off, the warning is real and worth acting on.
+        switch (hugepages_mod.thp()) {
+            .never, .unknown => logger.warn("huge pages: {d} reserved, {d} needed for {d} MB, and transparent huge pages are {s}: RandomX is ~28% slower on 4 KiB pages. Run as root or set vm.nr_hugepages={d}", .{
+                before.reserved, want, need_mb, hugepages_mod.thp().label(), want,
+            }),
+            .always, .madvise => logger.info("huge pages: {d} of {d} reserved; transparent huge pages ({s}) will back the {d} MB mapping instead", .{
+                before.reserved, want, hugepages_mod.thp().label(), need_mb,
+            }),
+        }
 
         return;
     };
@@ -1380,11 +1395,34 @@ fn hugePageStatus(opts: *const options.Options) []const u8 {
     if (total >= pages_needed) return "huge pages reserved, RandomX will use 2 MiB pages";
 
     // Returning a slice of a thread-local buffer is not possible here, so the
-    // caller gets one of two static messages and the command in the usage text.
-    return if (total == 0)
-        "huge pages: 0 reserved -> falling back to 4 KiB (up to 25% slower); see --help"
-    else
-        "huge pages: fewer reserved than this mode needs; see --help";
+    // caller gets one of a few static messages and the command in the usage
+    // text. "0 reserved" on its own is not a verdict: with transparent huge
+    // pages on, the mapping is collapsed anyway.
+    const thp_ok = switch (hugepages_mod.thp()) {
+        .always, .madvise => true,
+        .never, .unknown => false,
+    };
+
+    if (total == 0) {
+        return if (thp_ok)
+            "no pages reserved; transparent huge pages collapse the mapping instead"
+        else
+            "no huge pages and THP off -> 4 KiB pages, ~28% slower; see --help";
+    }
+
+    return "fewer pages reserved than this mode needs; see --help";
+}
+
+/// One line for `--check`: which huge-page mechanism this host has, and what it
+/// means. Reserved pages only matter when THP is off, so this is the line that
+/// decides whether the number above is a problem.
+fn thpStatus() []const u8 {
+    return switch (hugepages_mod.thp()) {
+        .always => "always: the kernel collapses anonymous memory into 2 MiB pages without being asked",
+        .madvise => "madvise (default): the hint this miner sets is honoured, so no root step is needed",
+        .never => "never: nothing backs the mapping with 2 MiB pages; reserve pages as root or boot with transparent_hugepage=madvise (~28% hashrate)",
+        .unknown => "unknown: this kernel does not report a THP policy; reserve pages as root",
+    };
 }
 
 /// Detaches from the controlling terminal: the parent returns and the child
@@ -1619,7 +1657,7 @@ fn requireMemory(needed_mb: u64) !void {
 
     var stderr = std.io.getStdErr().writer();
     try stderr.print(
-        "zmrig: not enough memory for the {d} MB dataset: {d} MB free in huge pages, {d} MB available\n" ++
+        "zmrig: not enough memory for the {d} MB dataset: {d} MB free in huge pages plus {d} MB available\n" ++
             "       stop other miners (or lower vm.nr_hugepages) and try again, or use --mode light\n",
         .{ needed_mb, memory.huge_free_mb, memory.available_mb },
     );

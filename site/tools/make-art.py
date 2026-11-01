@@ -103,7 +103,7 @@ def draw_mark(d, x, y, size, colour):
     make_logo = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(make_logo)
 
-    mark = make_logo.png(size, ink=(0, 0, 0, 255))
+    mark = make_logo.png(size, ink=colour if len(colour) == 4 else (*colour, 255))
     d._image.paste(mark, (int(x), int(y)), mark)
 
 

@@ -6,6 +6,13 @@ validated in (2 vCPU Xeon, AVX2, no huge pages available); numbers marked
 *typical* are community/upstream ranges and must be verified on your own host
 with `scripts/bench.sh`.
 
+Two measurement rounds are recorded. The older sections (2b and later) were
+taken in a faster session on the same class of host and sit around 1050–1100
+H/s for `rx/0`; the 2026-11 round below measures the same binary at 800–841 H/s
+on a shared vCPU whose clock the hypervisor controls. A 20–25 % spread between
+sessions on the same box is normal and is exactly why every table here states
+the ratio next to the absolute number.
+
 ---
 
 ## 0. TL;DR checklist
@@ -133,6 +140,49 @@ Measured on the container used for this release (2 vCPU Xeon 2.6 GHz, 3.9 GiB,
 
 That is the whole story of this engine on a small box: page size and thread
 count decide the hashrate, everything else is noise.
+
+### The 2026-11 round: what "THP fallback" actually costs
+
+The row above calls the unprivileged case a "THP fallback" as if it were a
+degraded state. It is not the same thing as 4 KiB pages, and conflating the two
+made the miner tell unprivileged users to take a root action they did not need.
+Measured on the same host (`--bench=4000`, `rx/0`, two runs per row, same
+session):
+
+| Pages | Backing | H/s |
+|---|---|---:|
+| 1168 reserved | `MAP_HUGETLB` | 814.5 / 832.2 |
+| none reserved | THP collapsed 99 % of the mapping | 785.9 / 786.1 |
+| none reserved, no `MADV_HUGEPAGE` | 4 KiB | 614.8 / 626.3 |
+
+4 KiB → 2 MiB is the step that matters (≈ +28 %); the reserved pool adds 4–6 %
+on top. So `zmrig` now:
+
+* prints the kernel's own figure after the dataset is built —
+  `huge pages: 2332 MB via THP (99 % of the 2336 MB mapping, measured by the
+  kernel)` — read from `/proc/self/smaps_rollup`, rather than claiming the hint
+  worked;
+* warns and gives the `nr_hugepages` command only when
+  `/sys/kernel/mm/transparent_hugepage/enabled` says `never` (or the kernel does
+  not report a policy at all);
+* prints `thp` in `--check`, so the decision is visible before the first hash.
+
+Reproduce by running the same command with `nr_hugepages` at 1200 and at 0; the
+4 KiB row needs THP switched off, which is the one case that needs root.
+
+### Dataset build: 42.9 s or 21.1 s
+
+The seed-to-dataset step is pure memory bandwidth and it was being run with the
+mining thread count, so `-t 1` on a 2-core box built Monero's 2 GiB dataset with
+one thread: 42.9 s against 21.1 s. On a pool that switches coins (and therefore
+seeds) this happens every few minutes. The initialiser now defaults to every
+hardware thread, `--randomx-init=N` still overrides it, and `miner.zig` has a
+unit test for the rule.
+
+| Initialiser threads | `dataset ready in` |
+|---|---:|
+| 1 | 42.9 s |
+| 2 | 21.1 s |
 
 ### Automatic reservation
 

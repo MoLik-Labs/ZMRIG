@@ -185,7 +185,7 @@ pub const Options = struct {
     affinity_mask: ?u64 = null,
     /// `--user-agent`: what the pool sees in the WebSocket upgrade.
     user_agent: ?[]const u8 = null,
-    /// `--randomx-init`: threads used to build the dataset (0 = hashing threads).
+    /// `--randomx-init`: threads used to build the dataset (0 = every CPU).
     init_threads: usize = 0,
     colors: bool = true,
     verbose: bool = false,
@@ -369,7 +369,7 @@ pub const usage =
     \\Mining:
     \\  -t, --threads=N          number of mining threads (default: cache aware)
     \\      --mode=MODE          auto | fast (2 GiB dataset) | light (256 MiB cache)
-    \\      --randomx-init=N     threads used to build the dataset (default: hashing threads)
+    \\      --randomx-init=N     threads used to build the dataset (default: every CPU)
     \\      --no-huge-pages      disable huge pages
     \\      --auto-hugepages     reserve the pages this mode needs when running as root (default)
     \\      --no-auto-hugepages  never reserve huge pages, even when running as root

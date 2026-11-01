@@ -119,12 +119,21 @@ sudo zmrig -c /etc/zmrig/config.json --check
 
 ```text
 config ok
-  pool    wss://my-relay.example.com:443/pool user=4Ad... algo=auto
+  pool    wss://my-relay.example.com:443/pool user=4Ad algo=auto (all RandomX variants)
   route   connect 10.0.0.7:443, Host: my-relay.example.com
   proxy   socks5 127.0.0.1:1080
   threads 2 (default would be 2)
+  cpus    [0,1] on 2 cpu(s), 2 physical core(s)
   mode    auto, huge pages on, jit on
+  memory  rx/0 maps 2336 MB, 1168 pages of 2 MiB: no pages reserved; transparent huge pages collapse the mapping instead
+  thp     madvise (default): the hint this miner sets is honoured, so no root step is needed
+  msr     intel preset; reading /dev/cpu/0/msr needs root (off: --msr is worth 5-15% on Zen 3/4 …)
 ```
+
+The `memory` line is the coin's own size — `panthera maps 192 MB, 96 pages` —
+and the `thp` line answers the question it raises: `madvise` and `always` mean
+the kernel backs the mapping with 2 MiB pages without any root step, `never`
+means it does not and the miner will be ~28 % slower until pages are reserved.
 
 `--check` reads the file and prints; it opens no socket and allocates no
 dataset. If the file is root-only, run it with `sudo` or you get

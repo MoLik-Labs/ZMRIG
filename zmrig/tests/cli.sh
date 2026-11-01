@@ -120,6 +120,16 @@ else
     record FAIL "--check sizes panthera memory" "expected '192 MB, 96 pages'"
 fi
 
+# "0 reserved" is not the same as "4 KiB pages": with transparent huge pages on
+# the kernel collapses the mapping anyway. --check has to say which mechanism is
+# in play, or the line above reads like a problem that cannot be fixed without
+# root when in fact there is nothing to fix.
+if "$BIN" -o pool.example.com:3333 -u "$WALLET" -a rx/0 --check 2>/dev/null | grep -q '^  thp     '; then
+    record PASS "--check reports the THP policy" ""
+else
+    record FAIL "--check reports the THP policy" "no 'thp' line in --check"
+fi
+
 # The opt-out must be visible in --help (it is a safety valve, not a hidden knob)
 if "$BIN" --help | grep -qF -- "--no-auto-hugepages"; then
     record PASS "--no-auto-hugepages is documented" ""

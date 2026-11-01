@@ -10,8 +10,8 @@ image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
 
 | Triệu chứng | Nguyên nhân thường gặp | Làm gì |
 | --- | --- | --- |
-| `dataset ready` mất 20–30 s | bình thường: dựng 2 GiB | không phải lỗi; `--mode light` mất 0.6 s nhưng chỉ còn 9 % hashrate |
-| hashrate thấp hơn kỳ vọng 20–30 % | không được cấp huge pages | `grep HugePages /proc/meminfo`; log phải ghi `huge pages … (explicit)`, không phải `(THP fallback)` |
+| `dataset ready` mất 20–30 s | bình thường: dựng 2 GiB | không phải lỗi; `--mode light` mất 0.6 s nhưng chỉ còn 10 % hashrate. `panthera` dựng 64 MB, sẵn sàng trong khoảng 0.4 s |
+| hashrate thấp hơn kỳ vọng 20–30 % | mapping đang chạy trên trang 4 KiB | `zmrig --check` in chính sách `thp`; log phải cho thấy trang 2 MiB, hoặc `huge pages … (explicit)` hoặc `huge pages: … MB via THP (…, measured by the kernel)` |
 | process bị kill, exit 137 | hết RAM khi dựng dataset (huge pages đã giữ phần còn lại) | sửa phần đặt trước huge page, hoặc dùng `--mode light` |
 | `cannot read …: check the path or run as root` | config chỉ root đọc được | chạy bằng `sudo` |
 | `config ok` nhưng không đào gì | thiếu `-c`, hoặc chưa có pool | `--check` chỉ kiểm tra file được đưa |
@@ -35,6 +35,12 @@ image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
   đào được nó ở fast mode. Mức đặt huge pages, quyết định `--mode=auto`, bước
   kiểm tra RAM trước `--bench` và `zmrig-tune --algo` giờ đều đọc cấu hình đã
   biên dịch của thuật toán.
+- **Máy có đủ bộ nhớ mà vẫn bị từ chối dataset.** Bước kiểm tra trước `--bench`
+  và `--report` so yêu cầu với pool huge pages và với `MemAvailable` riêng rẽ,
+  nên một host đã làm đúng lời khuyên của chính miner (`echo 1168 >
+  nr_hugepages`) có 2336 MB trong pool và 1.2 GB RAM, và mức cần 2404 MB không
+  khớp với con số nào. Giờ hai số được cộng lại — allocator fallback theo từng
+  mapping nên cả hai đều dùng được — và thông báo nói rõ nó đã cộng hai số nào.
 - **Đổi thuật toán làm rò 2.3 GiB.** Cache cấp bằng `posix_memalign` nhưng giải
   phóng bằng `munmap`, nên các trang vẫn nằm trong ánh xạ. Pool xoay coin
   (MoneroOcean có làm) sẽ làm máy hết RAM sau vài lần đổi. Cấp và giải phóng giờ

@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.b9407fd1.css">
-<script src="/ZMRIG/assets/js/runtime~main.ec44b425.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/runtime~main.6e12f229.js" defer="defer"></script>
 <script src="/ZMRIG/assets/js/main.9a13e464.js" defer="defer"></script>
 </head>
 <body>
@@ -20,7 +20,13 @@
 random order. Almost everything that matters follows from that one sentence.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="the-three-levers-that-matter">The three levers that matter<a href="#the-three-levers-that-matter" class="hash-link" aria-label="Direct link to The three levers that matter" title="Direct link to The three levers that matter" translate="no">​</a></h2>
 <p><strong>Huge pages.</strong> The largest and most obvious gain. A 4 KiB page size makes the
-dataset walk a TLB miss every few accesses.</p>
+dataset walk a TLB miss every few accesses. There are two ways to get 2 MiB
+pages and the miner reports which one it got: <code>huge pages … MB (explicit)</code> means
+the reserved pool, and <code>huge pages: … MB via THP (…, measured by the kernel)</code>
+means transparent huge pages collapsed the mapping — read from
+<code>/proc/self/smaps_rollup</code>, not assumed. The second is what an unprivileged user
+gets on a stock Ubuntu kernel, and it is worth most of the gain: 786 H/s against
+615 H/s for 4 KiB pages on the test host, where the reserved pool gives 800–841.</p>
 <div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token builtin class-name" style="color:rgb(255, 203, 107)">echo</span><span class="token plain"> </span><span class="token number" style="color:rgb(247, 140, 108)">1168</span><span class="token plain"> </span><span class="token operator" style="color:rgb(137, 221, 255)">|</span><span class="token plain"> </span><span class="token function" style="color:rgb(130, 170, 255)">sudo</span><span class="token plain"> </span><span class="token function" style="color:rgb(130, 170, 255)">tee</span><span class="token plain"> /proc/sys/vm/nr_hugepages    </span><span class="token comment" style="color:rgb(105, 112, 152);font-style:italic"># ~2.3 GiB of 2 MiB pages, for Monero</span><span class="token plain"></span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain"></span><span class="token function" style="color:rgb(130, 170, 255)">grep</span><span class="token plain"> HugePages_ /proc/meminfo</span><br></div></code></pre></div></div>
 <p>The installer does this and sets <code>LimitMEMLOCK=infinity</code> in the unit. The number
 is not a constant: it is the cache plus the dataset of the coin being mined —
@@ -36,9 +42,11 @@ from explicit huge pages (<code>huge pages 2336 MB (explicit)</code>), and the A
 2 GiB dataset does not fit. Set <code>nr_hugepages</code> to 0 before measuring that case,
 and remember to put it back.</p></div></div>
 <p><strong>Fast or light mode.</strong> <code>fast</code> builds one dataset shared by every thread. <code>light</code>
-keeps the cache and rebuilds the dataset per hash: 76 H/s against 814 H/s on the
-same machine (<code>rx/0</code>). Light mode exists for a VPS that cannot give the RAM, not
-as a power-saving option.</p>
+keeps the cache and rebuilds every dataset line per hash: 82 H/s against 849 H/s
+on the same machine, same minute, <code>rx/0</code> — a factor of ten, not a power-saving
+option. A rig that falls back to light mode is not mining, it is idling at 10 %.
+The startup log says which one it chose and why, and <code>--check</code> prints the
+decision before you start.</p>
 <p>Which one you get in <code>--mode=auto</code> depends on the <strong>coin</strong>, because the coins are
 not the same size. This is measured, not estimated from a constant:</p>
 <table><thead><tr><th>Algorithm</th><th>Coin</th><th style="text-align:right">Cache</th><th style="text-align:right">Dataset</th><th style="text-align:right">Total</th><th>Fits in 1 GiB VPS?</th></tr></thead><tbody><tr><td><code>rx/0</code></td><td>Monero</td><td style="text-align:right">256 MB</td><td style="text-align:right">2080 MB</td><td style="text-align:right">2336 MB</td><td>light only</td></tr><tr><td><code>rx/wow</code></td><td>Wownero</td><td style="text-align:right">256 MB</td><td style="text-align:right">2080 MB</td><td style="text-align:right">2336 MB</td><td>light only</td></tr><tr><td><code>rx/arq</code></td><td>ArQmA</td><td style="text-align:right">256 MB</td><td style="text-align:right">2080 MB</td><td style="text-align:right">2336 MB</td><td>light only</td></tr><tr><td><code>rx/graft</code></td><td>Graft</td><td style="text-align:right">256 MB</td><td style="text-align:right">2080 MB</td><td style="text-align:right">2336 MB</td><td>light only</td></tr><tr><td><code>rx/sfx</code></td><td>Safex Cash</td><td style="text-align:right">256 MB</td><td style="text-align:right">2080 MB</td><td style="text-align:right">2336 MB</td><td>light only</td></tr><tr><td><code>rx/yada</code></td><td>YadaCoin</td><td style="text-align:right">256 MB</td><td style="text-align:right">2080 MB</td><td style="text-align:right">2336 MB</td><td>light only</td></tr><tr><td><code>panthera</code></td><td>Scala (XLA)</td><td style="text-align:right">128 MB</td><td style="text-align:right">64 MB</td><td style="text-align:right"><strong>192 MB</strong></td><td>yes</td></tr></tbody></table>
@@ -50,9 +58,9 @@ datasets are sized from the compiled configuration rather than from
 <code>RANDOMX_DATASET_MAX_SIZE</code> — that constant is 2 GiB and using it for a 64 MB
 dataset is how a 512 MB VPS ends up refusing to start on a coin it can mine.</p>
 <p><strong>Threads.</strong> One per physical core, two per core only when SMT helps: on the test
-host, two threads on two vCPUs gave 814 H/s and one thread gave 408 H/s, which is
-linear. SMT usually adds 5–15 % hashrate for 30–40 % more power, which is why the
-<code>watt</code> profile drops it.</p>
+host, two threads on two vCPUs gave 808–817 H/s, one thread 408 H/s, and four
+threads on two cores 798–801 H/s — oversubscribing buys nothing. SMT usually adds
+5–15 % hashrate for 30–40 % more power, which is why the <code>watt</code> profile drops it.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="the-two-that-do-not">The two that do not<a href="#the-two-that-do-not" class="hash-link" aria-label="Direct link to The two that do not" title="Direct link to The two that do not" translate="no">​</a></h2>
 <ul>
 <li class=""><strong>Scratchpad prefetch mode</strong> (0/1/2/3): 823, 814, 823, 814 H/s — inside noise.
@@ -65,7 +73,7 @@ thread count should be measured before it is believed.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="measured">Measured<a href="#measured" class="hash-link" aria-label="Direct link to Measured" title="Direct link to Measured" translate="no">​</a></h2>
 <p>2 vCPU Xeon at 2.60 GHz, 3.9 GiB RAM, 1234 × 2 MiB huge pages, algorithm <code>rx/0</code>,
 one run per configuration.</p>
-<table><thead><tr><th>Configuration</th><th style="text-align:right">Hashrate</th><th style="text-align:right">Ratio</th></tr></thead><tbody><tr><td>default: 2 threads, huge pages, prefetch 1</td><td style="text-align:right">814 H/s</td><td style="text-align:right">100 %</td></tr><tr><td><code>--no-huge-pages</code></td><td style="text-align:right">634 H/s</td><td style="text-align:right">78 %</td></tr><tr><td><code>--mode light</code></td><td style="text-align:right">76 H/s</td><td style="text-align:right">9 %</td></tr><tr><td><code>-t 1</code></td><td style="text-align:right">408 H/s</td><td style="text-align:right">50 %</td></tr><tr><td><code>--scratchpad-prefetch=0</code></td><td style="text-align:right">823 H/s</td><td style="text-align:right">101 % (noise)</td></tr><tr><td><code>--scratchpad-prefetch=2</code></td><td style="text-align:right">823 H/s</td><td style="text-align:right">101 % (noise)</td></tr><tr><td><code>--no-affinity</code></td><td style="text-align:right">814 H/s</td><td style="text-align:right">100 % (noise)</td></tr></tbody></table>
+<table><thead><tr><th>Configuration</th><th style="text-align:right">Hashrate</th><th style="text-align:right">Ratio</th></tr></thead><tbody><tr><td>default: 2 threads, 1168 pages reserved, prefetch 1</td><td style="text-align:right">800–841 H/s</td><td style="text-align:right">100 %</td></tr><tr><td>same, no pages reserved (THP backs the mapping)</td><td style="text-align:right">786 H/s</td><td style="text-align:right">95 %</td></tr><tr><td>same, no pages reserved and THP off (4 KiB)</td><td style="text-align:right">615–626 H/s</td><td style="text-align:right">76 %</td></tr><tr><td><code>--mode light</code></td><td style="text-align:right">82 H/s</td><td style="text-align:right">10 %</td></tr><tr><td><code>-t 1</code></td><td style="text-align:right">408 H/s</td><td style="text-align:right">50 %</td></tr><tr><td><code>-t 4</code> on two cores</td><td style="text-align:right">798–801 H/s</td><td style="text-align:right">98 % (noise)</td></tr><tr><td><code>--scratchpad-prefetch=0/2/3</code></td><td style="text-align:right">1208–1302 kH/s on <code>panthera</code></td><td style="text-align:right">noise</td></tr><tr><td><code>--no-affinity</code></td><td style="text-align:right">814 H/s</td><td style="text-align:right">100 % (noise)</td></tr></tbody></table>
 <p>The same binary on the same host in a quieter session measured <strong>1008–1103 H/s</strong>.
 That 20–25 % spread is why absolute numbers in documentation are close to
 useless, and why the ratios above are the useful part.</p>
