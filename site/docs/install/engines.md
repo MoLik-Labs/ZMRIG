@@ -12,16 +12,18 @@ difference is everything around the loop.
 
 | | `xmrig` (C++) | `zmrig` (Zig) |
 | --- | --- | --- |
-| Algorithms | all of them (34+) | the RandomX family: `rx/0`, `rx/2`, `rx/wow`, `rx/arq`, `rx/graft`, `rx/sfx`, `rx/yada`, `panthera` |
+| Algorithms | all of them (34+) | the RandomX family: `rx/0`, `rx/wow`, `rx/arq`, `rx/graft`, `rx/sfx`, `rx/yada`, `panthera` (`rx/2` parses but no coin uses it and it is not tested) |
 | Transports | TCP, TLS | TCP, TLS, `ws`, `wss` |
 | Proxy | partial SOCKS5 | HTTP CONNECT and SOCKS5, with auth and remote DNS |
 | Monitoring API | yes, complete | yes, read-only, XMRig-compatible shape |
 | Report code for the calculator | no | yes (`--report`) |
 | Health watchdog | no | yes, restarts when earnings stop |
-| Measured `rx/0` | 1075 H/s | 1008–1103 H/s, same host, same config |
+| Measured `rx/0` | 832 H/s | 800–841 H/s, same host, same config |
 
-Both are measured on the same 2 vCPU machine; the spread is the host, not the
-engine. [Benchmarks](/docs/reference/benchmarks) has the method.
+Both are measured on the same 2 vCPU machine, `--bench`, 2 MiB pages; the spread
+is the host, not the engine. [Benchmarks](/docs/reference/benchmarks) has the
+method. Every algorithm above has a reference vector in `zmrig --self-test`, so
+the Zig engine's coverage is checked rather than claimed.
 
 ## Which one
 

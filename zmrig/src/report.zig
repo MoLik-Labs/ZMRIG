@@ -405,14 +405,23 @@ test "cpuModel never returns an empty string" {
     try std.testing.expect(model.len > 0);
 }
 
-/// Cheap pre-flight for `--bench`/`--report`: the RandomX dataset needs either
-/// the huge page pool or the same amount of normal RAM. Without this check the
+/// Cheap pre-flight for `--bench`/`--report`: the RandomX dataset needs the
+/// huge page pool, normal RAM, or a mixture of the two. Without this check the
 /// process is killed by the OOM killer with no explanation, which is how a
 /// report ends up as "Killed" in the shell.
+///
+/// The pool and ordinary RAM add up because the allocator falls back per
+/// mapping: a host with 1200 pages free and 1.2 GB available maps the cache
+/// either way. Testing them separately is what made the miner refuse to start
+/// on a host that had followed its own advice - `echo 1168 > nr_hugepages`
+/// leaves 2336 MB in the pool against a 2404 MB requirement (the dataset, the
+/// scratchpads and a 64 MB margin), and `--bench` exited with "not enough
+/// memory" on a machine with two gigabytes of it sitting unused.
 pub const Memory = struct {
     ok: bool,
     huge_free_mb: u64 = 0,
     available_mb: u64 = 0,
+    needed_mb: u64 = 0,
 };
 
 pub fn checkMemory(needed_mb: u64) Memory {
@@ -445,9 +454,16 @@ pub fn checkMemory(needed_mb: u64) Memory {
 
     result.huge_free_mb = huge_free_pages * huge_page_kb / 1024;
     result.available_mb = available_kb / 1024;
-    result.ok = result.huge_free_mb >= needed_mb or result.available_mb >= needed_mb;
+    result.needed_mb = needed_mb;
+    result.ok = result.huge_free_mb + result.available_mb >= needed_mb;
 
     return result;
+}
+
+/// The same rule, without reading /proc: testable, and it is the only part with
+/// a decision in it.
+pub fn memoryFits(needed_mb: u64, huge_free_mb: u64, available_mb: u64) bool {
+    return huge_free_mb + available_mb >= needed_mb;
 }
 
 fn parseField(line: []const u8) ?u64 {
@@ -465,4 +481,23 @@ test "parseField reads the first number of a meminfo line" {
     try std.testing.expectEqual(@as(?u64, 1234), parseField("HugePages_Free:     1234"));
     try std.testing.expectEqual(@as(?u64, 2048), parseField("Hugepagesize:       2048 kB"));
     try std.testing.expectEqual(@as(?u64, null), parseField("no colon here"));
+}
+
+test "the pool and ordinary RAM are added, because the allocator falls back" {
+    const testing = std.testing;
+
+    // 1200 pages free, 1215 MB available, 2404 MB needed: this exact host was
+    // refused a benchmark before the rule changed.
+    try testing.expect(memoryFits(2404, 2400, 1215));
+
+    // The documented reservation on its own is enough (2336 MB of pool).
+    try testing.expect(memoryFits(2404, 2336, 200));
+
+    // A host with no huge pages but plenty of RAM still runs.
+    try testing.expect(memoryFits(2404, 0, 3000));
+
+    // And a genuinely small box is still refused: the check has to keep doing
+    // its job, or the OOM killer becomes the error message again.
+    try testing.expect(!memoryFits(2404, 0, 1215));
+    try testing.expect(!memoryFits(2404, 512, 512));
 }

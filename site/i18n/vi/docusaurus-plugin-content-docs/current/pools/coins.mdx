@@ -1,6 +1,6 @@
 ---
 title: Các coin khác
-description: Bảy thuật toán mà cả hai engine đều băm được, cách đào Wownero, ArQmA, Graft, Safex Cash, YadaCoin hay Scala bằng cùng một installer, và cách trang này xếp hạng theo số tiền thật.
+description: Bảy thuật toán zmrig băm được, cách đào Wownero, ArQmA, Graft, Safex Cash, YadaCoin hay Scala bằng cùng một installer, và cách trang này xếp hạng theo số tiền thật.
 image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
 ---
 
@@ -9,11 +9,13 @@ import CoinMatrix from '@site/src/components/CoinMatrix';
 # Các coin khác
 
 Monero là mặc định vì thị trường sâu nhất và là đồng duy nhất ở đây có preset
-pool mà repo dám bảo đảm. Nó không phải đồng duy nhất hai engine băm được.
+pool mà repo dám bảo đảm. Nó không phải đồng duy nhất zmrig băm được.
 
-Cả hai miner đều chạy được cả họ RandomX — bảy thuật toán — cộng thêm Panthera.
-Đó là giới hạn thật: một đồng nằm ngoài danh sách này không có thuật toán nào ở
-đây, và không cấu hình nào biến nó thành đào được.
+zmrig băm được cả họ RandomX — `rx/0`, `rx/wow`, `rx/arq`, `rx/graft`, `rx/sfx`,
+`rx/yada` — cộng Panthera, tổng cộng bảy thuật toán. Đó là giới hạn thật: một
+đồng nằm ngoài danh sách này không có thuật toán nào ở đây, và không cấu hình nào
+biến nó thành đào được. Cả bảy đều có vector kiểm tra trong bộ test, mỗi thuật
+toán một vector, nên "hỗ trợ" ở đây là đã kiểm chứng chứ không phải đã quảng cáo.
 
 | Coin | Mã | Thuật toán | Đào bằng |
 | --- | --- | --- | --- |

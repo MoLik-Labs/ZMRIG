@@ -12,7 +12,7 @@ by **[@nggkhaiz](https://github.com/NggKhaiz)**
 [![licence](https://img.shields.io/badge/licence-GPL--3.0-blue)](LICENSE)
 [![dev fee](https://img.shields.io/badge/developer%20fee-0%25-46b17b)](doc/ZERO_FEE.md)
 [![platform](https://img.shields.io/badge/platform-Linux%20x86--64%20%C2%B7%20macOS%20%C2%B7%20Windows-lightgrey)](#build-from-source)
-[![tests](https://img.shields.io/badge/tests-477%20checks%20%C2%B7%2011%20suites-46b17b)](#tests)
+[![tests](https://img.shields.io/badge/tests-478%20checks%20%C2%B7%2011%20suites-46b17b)](#tests)
 [![stars](https://img.shields.io/github/stars/NggKhaiz/ZMRIG?style=flat&color=f2763f)](https://github.com/NggKhaiz/ZMRIG/stargazers)
 [![last commit](https://img.shields.io/github/last-commit/NggKhaiz/ZMRIG)](https://github.com/NggKhaiz/ZMRIG/commits/BETA)
 
@@ -296,11 +296,11 @@ same box), so the ratios are the useful part.
 
 | Configuration | Hashrate | Ratio |
 | --- | ---: | ---: |
-| tuned install (huge pages reserved by the miner, MSR, affinity) | **1070 H/s** | 100 % |
-| stock defaults, nothing reserved (what a fresh VPS does) | 856 H/s | 80 % |
-| `--no-huge-pages` | 634 H/s | 59 % |
+| tuned install (huge pages reserved by the miner, affinity) | **800–841 H/s** | 100 % |
+| stock defaults, nothing reserved (a fresh VPS: THP backs the mapping) | 786 H/s | 95 % |
+| no huge pages at all, THP off (4 KiB) | 615–626 H/s | 76 % |
 | `-t 1` (one thread on two vCPUs) | 553 H/s | 52 % |
-| `--mode light` (256 MiB cache, for tiny VPS) | 76 H/s | 7 % |
+| `--mode light` (256 MiB cache, for tiny VPS) | 82 H/s | 10 % |
 | `--no-jit` (interpreter only) | ~180 H/s | never for mining |
 
 Everything else that was tried — scratchpad prefetch modes, `--no-affinity`,
@@ -354,7 +354,7 @@ cd .. && ./zmrig/tests/unit.sh && ./zmrig/tests/cli.sh && ./zmrig/tests/health.s
 | `proxy` `npm test` | 60 | extranonce allocation, vardiff, real sockets, WebSocket rig, banned pool left alone |
 | `pool` `npm test` | 29 | PPLNS in BigInt, share verification, payouts, audit log, end-to-end with a real miner |
 | `zmrig/tests/unit.sh` | 17 modules | options, hashing, health, report codes, stratum parsing, proxy handshakes, and the per-algorithm memory rule |
-| `zmrig/tests/cli.sh` | 42 | flags, exit codes, `--help` covers the parser, `--check` reports the memory of the coin it was asked about |
+| `zmrig/tests/cli.sh` | 43 | flags, exit codes, `--help` covers the parser, `--check` reports the memory of the coin it was asked about and which huge-page mechanism backs it |
 | `zmrig/tests/net.sh` | 29 | TCP/TLS/WS/WSS against a fake pool, ban and refusal handling, failover, seed change |
 | `zmrig/tests/health.sh` | 7 | the watchdog, both directions: an honest pool is not a fault, an all-reject pool is |
 | `tests/oneclick/*.sh` | 63 | plan, config, governor, purge (removes only its own paths), branch switching, `--coin` mapping and the algorithm-name guard |

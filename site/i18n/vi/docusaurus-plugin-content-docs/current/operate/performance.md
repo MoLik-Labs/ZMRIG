@@ -12,7 +12,13 @@ ngẫu nhiên. Gần như mọi thứ quan trọng suy ra từ đúng một câu
 ## Ba đòn bẩy thật sự
 
 **Huge pages.** Mức lợi lớn nhất và rõ nhất. Trang 4 KiB làm mỗi vài lần truy cập
-dataset lại thành một TLB miss.
+dataset lại thành một TLB miss. Có hai cách có trang 2 MiB và miner nói rõ nó
+được cách nào: `huge pages … MB (explicit)` là pool đã đặt trước, còn
+`huge pages: … MB via THP (…, measured by the kernel)` là transparent huge pages
+đã gộp mapping — đọc từ `/proc/self/smaps_rollup`, không phải đoán. Cách thứ hai
+là thứ một user thường nhận được trên kernel Ubuntu mặc định, và nó chiếm phần
+lớn lợi ích: 786 H/s so với 615 H/s khi dùng trang 4 KiB trên máy test, trong khi
+pool đặt trước cho 800–841.
 
 ```bash
 echo 1168 | sudo tee /proc/sys/vm/nr_hugepages    # ~2.3 GiB trang 2 MiB, cho Monero
@@ -37,9 +43,11 @@ lúc đó sẽ bị OOM-kill (exit 137), vì dataset 2 GiB thứ hai không có 
 :::
 
 **Chế độ fast hay light.** `fast` dựng một dataset dùng chung cho mọi thread.
-`light` giữ cache và dựng lại dataset cho mỗi hash: 76 H/s so với 814 H/s trên
-cùng máy (`rx/0`). Light mode tồn tại cho VPS không cho nổi RAM, không phải để
-tiết kiệm điện.
+`light` giữ cache và dựng lại từng dòng dataset cho mỗi hash: 82 H/s so với
+849 H/s trên cùng máy, cùng phút, `rx/0` — chênh mười lần, không phải một lựa
+chọn tiết kiệm điện. Một rig rơi về light mode không phải đang đào, nó đang chạy
+không ở 10 %. Log khởi động nói nó chọn chế độ nào và vì sao, và `--check` in ra
+quyết định đó trước khi bạn bắt đầu.
 
 `--mode=auto` chọn chế độ nào là tuỳ **coin**, vì các coin không cùng kích thước.
 Đây là số đo, không phải suy ra từ một hằng số:
@@ -64,14 +72,14 @@ cấu hình đã biên dịch chứ không theo `RANDOMX_DATASET_MAX_SIZE` — h
 trên coin mà nó đào được.
 
 **Số thread.** Một thread mỗi core vật lý, hai mỗi core chỉ khi SMT giúp: trên
-máy test, hai thread trên hai vCPU cho 814 H/s và một thread cho 408 H/s, tức là
-tuyến tính. SMT thường thêm 5–15 % hashrate với 30–40 % điện hơn, nên profile
-`watt` bỏ nó.
+máy test, hai thread trên hai vCPU cho 808–817 H/s, một thread 408 H/s, và bốn
+thread trên hai core 798–801 H/s — chia quá số core không được gì. SMT thường
+thêm 5–15 % hashrate với 30–40 % điện hơn, nên profile `watt` bỏ nó.
 
 ## Hai thứ không có tác dụng
 
-- **Chế độ scratchpad prefetch** (0/1/2/3): 823, 814, 823, 814 H/s — trong nhiễu.
-  Mặc định (1) được giữ nguyên.
+- **Chế độ scratchpad prefetch** (0/1/2/3): 1208–1302 kH/s trên `panthera` — trong
+  nhiễu. Mặc định (1) được giữ nguyên.
 - **Affinity** trên máy 2 vCPU: không khác gì. Nó có ý nghĩa trên máy nhiều core
   với L3 không đều, đó là một phép đo khác.
 
@@ -85,12 +93,13 @@ mỗi cấu hình một lần chạy.
 
 | Cấu hình | Hashrate | Tỉ lệ |
 | --- | ---: | ---: |
-| mặc định: 2 thread, huge pages, prefetch 1 | 814 H/s | 100 % |
-| `--no-huge-pages` | 634 H/s | 78 % |
-| `--mode light` | 76 H/s | 9 % |
+| mặc định: 2 thread, đặt trước 1168 trang, prefetch 1 | 800–841 H/s | 100 % |
+| như trên, không đặt trang nào (THP gộp mapping) | 786 H/s | 95 % |
+| như trên, không đặt trang và THP tắt (4 KiB) | 615–626 H/s | 76 % |
+| `--mode light` | 82 H/s | 10 % |
 | `-t 1` | 408 H/s | 50 % |
-| `--scratchpad-prefetch=0` | 823 H/s | 101 % (nhiễu) |
-| `--scratchpad-prefetch=2` | 823 H/s | 101 % (nhiễu) |
+| `-t 4` trên hai core | 798–801 H/s | 98 % (nhiễu) |
+| `--scratchpad-prefetch=0/2/3` | 1208–1302 kH/s trên `panthera` | nhiễu |
 | `--no-affinity` | 814 H/s | 100 % (nhiễu) |
 
 Cùng binary, cùng host, ở một phiên ít tải hơn: **1008–1103 H/s**. Độ tản 20–25 %

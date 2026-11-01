@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.b9407fd1.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.2ae25d14.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/runtime~main.d6294630.js" defer="defer"></script>
 <script src="/ZMRIG/vi/assets/js/main.18b2f40c.js" defer="defer"></script>
 </head>
 <body>
@@ -20,7 +20,13 @@
 ngẫu nhiên. Gần như mọi thứ quan trọng suy ra từ đúng một câu đó.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="ba-đòn-bẩy-thật-sự">Ba đòn bẩy thật sự<a href="#ba-đòn-bẩy-thật-sự" class="hash-link" aria-label="Đường dẫn trực tiếp đến Ba đòn bẩy thật sự" title="Đường dẫn trực tiếp đến Ba đòn bẩy thật sự" translate="no">​</a></h2>
 <p><strong>Huge pages.</strong> Mức lợi lớn nhất và rõ nhất. Trang 4 KiB làm mỗi vài lần truy cập
-dataset lại thành một TLB miss.</p>
+dataset lại thành một TLB miss. Có hai cách có trang 2 MiB và miner nói rõ nó
+được cách nào: <code>huge pages … MB (explicit)</code> là pool đã đặt trước, còn
+<code>huge pages: … MB via THP (…, measured by the kernel)</code> là transparent huge pages
+đã gộp mapping — đọc từ <code>/proc/self/smaps_rollup</code>, không phải đoán. Cách thứ hai
+là thứ một user thường nhận được trên kernel Ubuntu mặc định, và nó chiếm phần
+lớn lợi ích: 786 H/s so với 615 H/s khi dùng trang 4 KiB trên máy test, trong khi
+pool đặt trước cho 800–841.</p>
 <div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token builtin class-name" style="color:rgb(255, 203, 107)">echo</span><span class="token plain"> </span><span class="token number" style="color:rgb(247, 140, 108)">1168</span><span class="token plain"> </span><span class="token operator" style="color:rgb(137, 221, 255)">|</span><span class="token plain"> </span><span class="token function" style="color:rgb(130, 170, 255)">sudo</span><span class="token plain"> </span><span class="token function" style="color:rgb(130, 170, 255)">tee</span><span class="token plain"> /proc/sys/vm/nr_hugepages    </span><span class="token comment" style="color:rgb(105, 112, 152);font-style:italic"># ~2.3 GiB trang 2 MiB, cho Monero</span><span class="token plain"></span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain"></span><span class="token function" style="color:rgb(130, 170, 255)">grep</span><span class="token plain"> HugePages_ /proc/meminfo</span><br></div></code></pre></div></div>
 <p>Installer làm việc này và đặt <code>LimitMEMLOCK=infinity</code> trong unit. Con số này
 không cố định: nó là cache cộng dataset của coin đang đào — 1168 trang cho
@@ -35,9 +41,11 @@ tường minh (<code>huge pages 2336 MB (explicit)</code>), API trả
 lúc đó sẽ bị OOM-kill (exit 137), vì dataset 2 GiB thứ hai không có chỗ. Đặt
 <code>nr_hugepages</code> về 0 trước khi đo trường hợp đó, và nhớ đặt lại.</p></div></div>
 <p><strong>Chế độ fast hay light.</strong> <code>fast</code> dựng một dataset dùng chung cho mọi thread.
-<code>light</code> giữ cache và dựng lại dataset cho mỗi hash: 76 H/s so với 814 H/s trên
-cùng máy (<code>rx/0</code>). Light mode tồn tại cho VPS không cho nổi RAM, không phải để
-tiết kiệm điện.</p>
+<code>light</code> giữ cache và dựng lại từng dòng dataset cho mỗi hash: 82 H/s so với
+849 H/s trên cùng máy, cùng phút, <code>rx/0</code> — chênh mười lần, không phải một lựa
+chọn tiết kiệm điện. Một rig rơi về light mode không phải đang đào, nó đang chạy
+không ở 10 %. Log khởi động nói nó chọn chế độ nào và vì sao, và <code>--check</code> in ra
+quyết định đó trước khi bạn bắt đầu.</p>
 <p><code>--mode=auto</code> chọn chế độ nào là tuỳ <strong>coin</strong>, vì các coin không cùng kích thước.
 Đây là số đo, không phải suy ra từ một hằng số:</p>
 <table><thead><tr><th>Thuật toán</th><th>Coin</th><th style="text-align:right">Cache</th><th style="text-align:right">Dataset</th><th style="text-align:right">Tổng</th><th>Vừa VPS 1 GiB?</th></tr></thead><tbody><tr><td><code>rx/0</code></td><td>Monero</td><td style="text-align:right">256 MB</td><td style="text-align:right">2080 MB</td><td style="text-align:right">2336 MB</td><td>chỉ light</td></tr><tr><td><code>rx/wow</code></td><td>Wownero</td><td style="text-align:right">256 MB</td><td style="text-align:right">2080 MB</td><td style="text-align:right">2336 MB</td><td>chỉ light</td></tr><tr><td><code>rx/arq</code></td><td>ArQmA</td><td style="text-align:right">256 MB</td><td style="text-align:right">2080 MB</td><td style="text-align:right">2336 MB</td><td>chỉ light</td></tr><tr><td><code>rx/graft</code></td><td>Graft</td><td style="text-align:right">256 MB</td><td style="text-align:right">2080 MB</td><td style="text-align:right">2336 MB</td><td>chỉ light</td></tr><tr><td><code>rx/sfx</code></td><td>Safex Cash</td><td style="text-align:right">256 MB</td><td style="text-align:right">2080 MB</td><td style="text-align:right">2336 MB</td><td>chỉ light</td></tr><tr><td><code>rx/yada</code></td><td>YadaCoin</td><td style="text-align:right">256 MB</td><td style="text-align:right">2080 MB</td><td style="text-align:right">2336 MB</td><td>chỉ light</td></tr><tr><td><code>panthera</code></td><td>Scala (XLA)</td><td style="text-align:right">128 MB</td><td style="text-align:right">64 MB</td><td style="text-align:right"><strong>192 MB</strong></td><td>được</td></tr></tbody></table>
@@ -49,13 +57,13 @@ cấu hình đã biên dịch chứ không theo <code>RANDOMX_DATASET_MAX_SIZE</
 2 GiB, và dùng nó cho một dataset 64 MB là cách một VPS 512 MB từ chối khởi động
 trên coin mà nó đào được.</p>
 <p><strong>Số thread.</strong> Một thread mỗi core vật lý, hai mỗi core chỉ khi SMT giúp: trên
-máy test, hai thread trên hai vCPU cho 814 H/s và một thread cho 408 H/s, tức là
-tuyến tính. SMT thường thêm 5–15 % hashrate với 30–40 % điện hơn, nên profile
-<code>watt</code> bỏ nó.</p>
+máy test, hai thread trên hai vCPU cho 808–817 H/s, một thread 408 H/s, và bốn
+thread trên hai core 798–801 H/s — chia quá số core không được gì. SMT thường
+thêm 5–15 % hashrate với 30–40 % điện hơn, nên profile <code>watt</code> bỏ nó.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="hai-thứ-không-có-tác-dụng">Hai thứ không có tác dụng<a href="#hai-thứ-không-có-tác-dụng" class="hash-link" aria-label="Đường dẫn trực tiếp đến Hai thứ không có tác dụng" title="Đường dẫn trực tiếp đến Hai thứ không có tác dụng" translate="no">​</a></h2>
 <ul>
-<li class=""><strong>Chế độ scratchpad prefetch</strong> (0/1/2/3): 823, 814, 823, 814 H/s — trong nhiễu.
-Mặc định (1) được giữ nguyên.</li>
+<li class=""><strong>Chế độ scratchpad prefetch</strong> (0/1/2/3): 1208–1302 kH/s trên <code>panthera</code> — trong
+nhiễu. Mặc định (1) được giữ nguyên.</li>
 <li class=""><strong>Affinity</strong> trên máy 2 vCPU: không khác gì. Nó có ý nghĩa trên máy nhiều core
 với L3 không đều, đó là một phép đo khác.</li>
 </ul>
@@ -64,7 +72,7 @@ dataset hay số thread thì nên được đo trước khi tin.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="số-đo">Số đo<a href="#số-đo" class="hash-link" aria-label="Đường dẫn trực tiếp đến Số đo" title="Đường dẫn trực tiếp đến Số đo" translate="no">​</a></h2>
 <p>2 vCPU Xeon 2.60 GHz, 3.9 GiB RAM, 1234 × 2 MiB huge pages, thuật toán <code>rx/0</code>,
 mỗi cấu hình một lần chạy.</p>
-<table><thead><tr><th>Cấu hình</th><th style="text-align:right">Hashrate</th><th style="text-align:right">Tỉ lệ</th></tr></thead><tbody><tr><td>mặc định: 2 thread, huge pages, prefetch 1</td><td style="text-align:right">814 H/s</td><td style="text-align:right">100 %</td></tr><tr><td><code>--no-huge-pages</code></td><td style="text-align:right">634 H/s</td><td style="text-align:right">78 %</td></tr><tr><td><code>--mode light</code></td><td style="text-align:right">76 H/s</td><td style="text-align:right">9 %</td></tr><tr><td><code>-t 1</code></td><td style="text-align:right">408 H/s</td><td style="text-align:right">50 %</td></tr><tr><td><code>--scratchpad-prefetch=0</code></td><td style="text-align:right">823 H/s</td><td style="text-align:right">101 % (nhiễu)</td></tr><tr><td><code>--scratchpad-prefetch=2</code></td><td style="text-align:right">823 H/s</td><td style="text-align:right">101 % (nhiễu)</td></tr><tr><td><code>--no-affinity</code></td><td style="text-align:right">814 H/s</td><td style="text-align:right">100 % (nhiễu)</td></tr></tbody></table>
+<table><thead><tr><th>Cấu hình</th><th style="text-align:right">Hashrate</th><th style="text-align:right">Tỉ lệ</th></tr></thead><tbody><tr><td>mặc định: 2 thread, đặt trước 1168 trang, prefetch 1</td><td style="text-align:right">800–841 H/s</td><td style="text-align:right">100 %</td></tr><tr><td>như trên, không đặt trang nào (THP gộp mapping)</td><td style="text-align:right">786 H/s</td><td style="text-align:right">95 %</td></tr><tr><td>như trên, không đặt trang và THP tắt (4 KiB)</td><td style="text-align:right">615–626 H/s</td><td style="text-align:right">76 %</td></tr><tr><td><code>--mode light</code></td><td style="text-align:right">82 H/s</td><td style="text-align:right">10 %</td></tr><tr><td><code>-t 1</code></td><td style="text-align:right">408 H/s</td><td style="text-align:right">50 %</td></tr><tr><td><code>-t 4</code> trên hai core</td><td style="text-align:right">798–801 H/s</td><td style="text-align:right">98 % (nhiễu)</td></tr><tr><td><code>--scratchpad-prefetch=0/2/3</code></td><td style="text-align:right">1208–1302 kH/s trên <code>panthera</code></td><td style="text-align:right">nhiễu</td></tr><tr><td><code>--no-affinity</code></td><td style="text-align:right">814 H/s</td><td style="text-align:right">100 % (nhiễu)</td></tr></tbody></table>
 <p>Cùng binary, cùng host, ở một phiên ít tải hơn: <strong>1008–1103 H/s</strong>. Độ tản 20–25 %
 đó là lý do con số tuyệt đối trong tài liệu gần như vô dụng, và tỉ lệ ở trên mới
 là phần dùng được.</p>

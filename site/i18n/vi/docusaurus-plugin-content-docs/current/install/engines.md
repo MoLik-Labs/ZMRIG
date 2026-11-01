@@ -12,16 +12,18 @@ thứ xung quanh vòng hash.
 
 | | `xmrig` (C++) | `zmrig` (Zig) |
 | --- | --- | --- |
-| Thuật toán | tất cả (34+) | họ RandomX: `rx/0`, `rx/2`, `rx/wow`, `rx/arq`, `rx/graft`, `rx/sfx`, `rx/yada`, `panthera` |
+| Thuật toán | tất cả (34+) | họ RandomX: `rx/0`, `rx/wow`, `rx/arq`, `rx/graft`, `rx/sfx`, `rx/yada`, `panthera` (`rx/2` phân tích được nhưng không coin nào dùng và không có trong test) |
 | Transport | TCP, TLS | TCP, TLS, `ws`, `wss` |
 | Proxy | SOCKS5 một phần | HTTP CONNECT và SOCKS5, có auth và DNS từ xa |
 | API giám sát | có, đầy đủ | có, chỉ đọc, cùng hình dạng với XMRig |
 | Mã báo cáo cho máy tính | không | có (`--report`) |
 | Watchdog sức khoẻ | không | có, tự khởi động lại khi hết thu nhập |
-| `rx/0` đo được | 1075 H/s | 1008–1103 H/s, cùng máy, cùng config |
+| `rx/0` đo được | 832 H/s | 800–841 H/s, cùng máy, cùng config |
 
-Cả hai đo trên cùng một máy 2 vCPU; độ tản là do host, không do engine.
-[Hiệu năng](/docs/reference/benchmarks) có cách đo.
+Cả hai đo trên cùng một máy 2 vCPU, `--bench`, trang 2 MiB; độ tản là do host,
+không do engine. [Hiệu năng](/docs/reference/benchmarks) có cách đo. Mỗi thuật
+toán ở trên đều có vector kiểm tra trong `zmrig --self-test`, nên độ phủ của
+engine Zig là đã kiểm chứng chứ không phải lời quảng cáo.
 
 ## Chọn bên nào
 

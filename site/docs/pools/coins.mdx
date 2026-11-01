@@ -1,6 +1,6 @@
 ---
 title: Other coins
-description: The seven algorithms both engines hash, how to mine Wownero, ArQmA, Graft, Safex Cash, YadaCoin or Scala with the same installer, and how the site ranks them by what they actually pay.
+description: The seven algorithms zmrig hashes - six RandomX variants plus Panthera - how to mine Wownero, ArQmA, Graft, Safex Cash, YadaCoin or Scala with the same installer, and how the site ranks them by what they actually pay.
 image: https://nggkhaiz.github.io/ZMRIG/img/og-en.png
 ---
 
@@ -11,9 +11,11 @@ import CoinMatrix from '@site/src/components/CoinMatrix';
 Monero is the default because it has the deepest market and the only pool presets
 this repository can vouch for. It is not the only coin these engines can hash.
 
-Both miners implement the whole RandomX family — seven algorithms — plus
-Panthera. That is the honest limit: a coin outside this list has no algorithm
-here, and no amount of configuration will make it mine one.
+zmrig hashes the whole RandomX family — `rx/0`, `rx/wow`, `rx/arq`, `rx/graft`,
+`rx/sfx`, `rx/yada` — plus Panthera, seven algorithms in all. That is the honest
+limit: a coin outside this list has no algorithm here, and no amount of
+configuration will make it mine one. All seven are covered by the test suite,
+one reference vector each, so "supported" means checked rather than advertised.
 
 | Coin | Ticker | Algorithm | Mine it with |
 | --- | --- | --- | --- |

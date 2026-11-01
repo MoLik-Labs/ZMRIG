@@ -104,7 +104,7 @@ html:not([data-theme="dark"]) .zm-mark--dark {
   display: none;
 }
 
-/* The navbar logo is 32 px of stroke; at that size a 3.4 px stroke is right, so
+/* The navbar logo is the 32 unit mark drawn at 30 px: the outline is solid, so
    only the spacing needs a nudge. */
 .navbar__logo {
   height: 30px;

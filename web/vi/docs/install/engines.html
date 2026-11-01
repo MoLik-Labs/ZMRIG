@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.b9407fd1.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.2ae25d14.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/runtime~main.d6294630.js" defer="defer"></script>
 <script src="/ZMRIG/vi/assets/js/main.18b2f40c.js" defer="defer"></script>
 </head>
 <body>
@@ -19,9 +19,11 @@
 <p>Cả hai engine biên dịch ra cùng một vòng hash: <code>zmrig/capi</code> gắn phần RandomX C++
 vào binary Zig, nên con số giống nhau trong biên độ nhiễu. Khác biệt nằm ở mọi
 thứ xung quanh vòng hash.</p>
-<table><thead><tr><th></th><th><code>xmrig</code> (C++)</th><th><code>zmrig</code> (Zig)</th></tr></thead><tbody><tr><td>Thuật toán</td><td>tất cả (34+)</td><td>họ RandomX: <code>rx/0</code>, <code>rx/2</code>, <code>rx/wow</code>, <code>rx/arq</code>, <code>rx/graft</code>, <code>rx/sfx</code>, <code>rx/yada</code>, <code>panthera</code></td></tr><tr><td>Transport</td><td>TCP, TLS</td><td>TCP, TLS, <code>ws</code>, <code>wss</code></td></tr><tr><td>Proxy</td><td>SOCKS5 một phần</td><td>HTTP CONNECT và SOCKS5, có auth và DNS từ xa</td></tr><tr><td>API giám sát</td><td>có, đầy đủ</td><td>có, chỉ đọc, cùng hình dạng với XMRig</td></tr><tr><td>Mã báo cáo cho máy tính</td><td>không</td><td>có (<code>--report</code>)</td></tr><tr><td>Watchdog sức khoẻ</td><td>không</td><td>có, tự khởi động lại khi hết thu nhập</td></tr><tr><td><code>rx/0</code> đo được</td><td>1075 H/s</td><td>1008–1103 H/s, cùng máy, cùng config</td></tr></tbody></table>
-<p>Cả hai đo trên cùng một máy 2 vCPU; độ tản là do host, không do engine.
-<a class="" href="/ZMRIG/vi/docs/reference/benchmarks">Hiệu năng</a> có cách đo.</p>
+<table><thead><tr><th></th><th><code>xmrig</code> (C++)</th><th><code>zmrig</code> (Zig)</th></tr></thead><tbody><tr><td>Thuật toán</td><td>tất cả (34+)</td><td>họ RandomX: <code>rx/0</code>, <code>rx/wow</code>, <code>rx/arq</code>, <code>rx/graft</code>, <code>rx/sfx</code>, <code>rx/yada</code>, <code>panthera</code> (<code>rx/2</code> phân tích được nhưng không coin nào dùng và không có trong test)</td></tr><tr><td>Transport</td><td>TCP, TLS</td><td>TCP, TLS, <code>ws</code>, <code>wss</code></td></tr><tr><td>Proxy</td><td>SOCKS5 một phần</td><td>HTTP CONNECT và SOCKS5, có auth và DNS từ xa</td></tr><tr><td>API giám sát</td><td>có, đầy đủ</td><td>có, chỉ đọc, cùng hình dạng với XMRig</td></tr><tr><td>Mã báo cáo cho máy tính</td><td>không</td><td>có (<code>--report</code>)</td></tr><tr><td>Watchdog sức khoẻ</td><td>không</td><td>có, tự khởi động lại khi hết thu nhập</td></tr><tr><td><code>rx/0</code> đo được</td><td>832 H/s</td><td>800–841 H/s, cùng máy, cùng config</td></tr></tbody></table>
+<p>Cả hai đo trên cùng một máy 2 vCPU, <code>--bench</code>, trang 2 MiB; độ tản là do host,
+không do engine. <a class="" href="/ZMRIG/vi/docs/reference/benchmarks">Hiệu năng</a> có cách đo. Mỗi thuật
+toán ở trên đều có vector kiểm tra trong <code>zmrig --self-test</code>, nên độ phủ của
+engine Zig là đã kiểm chứng chứ không phải lời quảng cáo.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="chọn-bên-nào">Chọn bên nào<a href="#chọn-bên-nào" class="hash-link" aria-label="Đường dẫn trực tiếp đến Chọn bên nào" title="Đường dẫn trực tiếp đến Chọn bên nào" translate="no">​</a></h2>
 <ul>
 <li class=""><strong>RandomX trên VPS bình thường:</strong> bên nào cũng được. <code>zmrig</code> nhỏ hơn, có các

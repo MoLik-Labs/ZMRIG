@@ -99,6 +99,92 @@ pub fn reserve(pages: u64) ?u64 {
     return readNumber("/proc/sys/vm/nr_hugepages");
 }
 
+/// What the kernel does with the MADV_HUGEPAGE hint this miner sets on its
+/// cache and dataset mapping. `[madvise]` (the usual default) means the hint is
+/// honoured; `always` means it is not even needed; `never` means the mapper is
+/// silently running RandomX on 4 KiB pages.
+pub const Thp = enum {
+    always,
+    madvise,
+    never,
+    unknown,
+
+    pub fn label(self: Thp) []const u8 {
+        return switch (self) {
+            .always => "always",
+            .madvise => "madvise",
+            .never => "never",
+            .unknown => "unknown",
+        };
+    }
+};
+
+/// Parses `/sys/kernel/mm/transparent_hugepage/enabled`, which the kernel
+/// writes as one line with the active policy in brackets:
+///
+///     always [madvise] never
+///
+/// Reading the file as a whole and looking for the first token is the bug that
+/// made a previous version of this module believe the host had no huge pages
+/// at all, so the bracketed value is the only value that counts here.
+pub fn parseThp(text: []const u8) Thp {
+    var words = std.mem.tokenizeAny(u8, text, " \t\n\r");
+
+    while (words.next()) |word| {
+        if (std.mem.startsWith(u8, word, "[")) {
+            if (std.mem.startsWith(u8, word[1..], "always")) return .always;
+            if (std.mem.startsWith(u8, word[1..], "madvise")) return .madvise;
+            if (std.mem.startsWith(u8, word[1..], "never")) return .never;
+
+            return .unknown;
+        }
+    }
+
+    return .unknown;
+}
+
+pub fn thp() Thp {
+    var buf: [128]u8 = undefined;
+    const text = readFile(&buf, "/sys/kernel/mm/transparent_hugepage/enabled") orelse return .unknown;
+
+    return parseThp(text);
+}
+
+/// Bytes of this process's anonymous memory that the kernel has already
+/// collapsed into huge pages, from `/proc/self/smaps_rollup`.
+///
+/// The mapping is asked for huge pages, not promised them: `madvise` returning
+/// 0 means "request noted", and on a fragmented or busy host the pages that
+/// come back are ordinary 4 KiB ones. This is the number that says which
+/// happened, which the "huge pages MB (explicit)" figure cannot: that one only
+/// counts pages that came from the reserved pool.
+pub fn anonymousHugeBytes() u64 {
+    var buf: [8192]u8 = undefined;
+    const text = readFile(&buf, "/proc/self/smaps_rollup") orelse return 0;
+
+    return parseAnonHugeBytes(text);
+}
+
+/// The `AnonHugePages:` line of an smaps_rollup file, in bytes. A file that
+/// has no such line (an old kernel, or a permissions quirk) reports 0 rather
+/// than the whole RSS: this only ever answers "how much of the mapping really
+/// came back as huge pages".
+pub fn parseAnonHugeBytes(text: []const u8) u64 {
+    var lines = std.mem.splitScalar(u8, text, '\n');
+
+    while (lines.next()) |line| {
+        if (!std.mem.startsWith(u8, line, "AnonHugePages:")) continue;
+
+        var it = std.mem.tokenizeAny(u8, line["AnonHugePages:".len..], " \t");
+
+        const kb = std.fmt.parseInt(u64, it.next() orelse return 0, 10) catch return 0;
+
+        return kb * 1024;
+    }
+
+    return 0;
+}
+
 fn readFile(buf: []u8, path: []const u8) ?[]const u8 {
     const file = std.fs.openFileAbsolute(path, .{}) catch return null;
     defer file.close();
@@ -187,4 +273,48 @@ test "the host really reports a page size we can divide by" {
         try testing.expect(state.page_kb >= 64);
         try testing.expectEqual(@as(u64, state.reserved * state.page_kb / 1024), state.reservedMb());
     }
+}
+
+test "the bracketed THP policy is the one that counts" {
+    const testing = std.testing;
+
+    // Verbatim from Ubuntu 24.04 and from a hardened VPS image.
+    try testing.expectEqual(Thp.madvise, parseThp("always [madvise] never\n"));
+    try testing.expectEqual(Thp.always, parseThp("[always] madvise never\n"));
+    try testing.expectEqual(Thp.never, parseThp("always madvise [never]\n"));
+
+    // No brackets (an older kernel, or a redirected file) is not a policy this
+    // module can act on; say so instead of guessing "never".
+    try testing.expectEqual(Thp.unknown, parseThp("always madvise never\n"));
+    try testing.expectEqual(Thp.unknown, parseThp(""));
+    try testing.expectEqual(Thp.unknown, parseThp("[defer]\n"));
+}
+
+test "the host's own THP state is one this module understands" {
+    const testing = std.testing;
+
+    try testing.expect(thp() != .unknown);
+}
+
+test "anonymous huge pages are read from smaps_rollup, not meminfo" {
+    const testing = std.testing;
+
+    // Verbatim from a running zmrig with THP doing its job: 2.28 GiB of the
+    // 2.34 GB mapping collapsed into 2 MiB pages.
+    const rollup =
+        \\Rss:             2405340 kB
+        \\Pss:             2405340 kB
+        \\AnonHugePages:   2396160 kB
+        \\Shared_Hugetlb:       0 kB
+    ;
+
+    try testing.expectEqual(@as(u64, 2396160 * 1024), parseAnonHugeBytes(rollup));
+
+    // A host with THP switched off reports zero, and that is an answer, not an
+    // error: it is how the miner knows to say so.
+    try testing.expectEqual(@as(u64, 0), parseAnonHugeBytes("Rss: 2405340 kB\nAnonHugePages:         0 kB\n"));
+
+    // No line at all is also zero rather than a guess.
+    try testing.expectEqual(@as(u64, 0), parseAnonHugeBytes("Rss: 100 kB\n"));
+    try testing.expectEqual(@as(u64, 0), parseAnonHugeBytes(""));
 }
