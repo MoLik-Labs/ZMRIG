@@ -1,6 +1,6 @@
 ---
 title: What ZMRIG is
-description: A RandomX miner with no developer fee, the installer that sets it up, a farm proxy and a self-hosted pool. What each part does, what it costs, and where the code came from.
+description: A RandomX miner with a 1 % developer fee you can see and switch off, the installer that sets it up, a farm proxy and a self-hosted pool. What each part does, what it costs, and where the code came from.
 slug: /intro
 image: https://nggkhaiz.github.io/ZMRIG/img/og-en.png
 ---
@@ -11,7 +11,7 @@ ZMRIG is a complete Monero mining setup, not a collection of scripts:
 
 | Part | What it is | What it costs |
 | --- | --- | --- |
-| **Miner** | XMRig 6.26.0 with every line of donation code removed, plus a complete Zig miner on the same RandomX engine | **0 %**, and that claim is checkable |
+| **Miner** | XMRig 6.26.0 with every line of donation code removed, plus a complete Zig miner on the same RandomX engine | **1 %** of Monero time on the Zig engine, printed and switchable off; the C++ engine has no fee code |
 | **Installer** | `oneclick.sh`: one flag, host tuning, systemd unit, self-check, purge | free |
 | **Proxy** | one pool connection for a farm: extranonce per rig, per-rig difficulty, tunnels | free |
 | **Pool** | self-hosted Monero pool: stratum over TCP and WebSocket, PPLNS, every share verified | 1 % of each block, nothing else |
@@ -25,7 +25,7 @@ is no account, token or telemetry anywhere in it.
 **The fee is provable, so it is checked.** `sudo ./oneclick.sh verify` greps the
 binary for the upstream donation endpoints and known wallets, then runs hash
 self-tests so that "it found nothing" cannot mean "it looked at the wrong file".
-See [the zero-fee page](/docs/reference/zero-fee).
+See [the fee page](/docs/reference/fee) for the rate, the log lines and how to turn it off.
 
 **There are no flags to start.** `--wallet` is the only required input. The
 installer reads the CPU, the RAM, the hypervisor and the battery, then picks the

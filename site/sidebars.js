@@ -61,7 +61,7 @@ const sidebars = {
       type: "category",
       label: "Reference",
       collapsible: true,
-      items: ["reference/benchmarks", "reference/zero-fee"],
+      items: ["reference/benchmarks", "reference/fee"],
     },
     {
       type: "category",

@@ -153,18 +153,20 @@ python3 site/tools/make-logo.py     # the mark, all formats
 python3 site/tools/make-art.py      # the social cards, which use it
 ```
 
-The shape is a **Z**: bar, diagonal, bar, one weight throughout, with the
-diagonal cut thinner than the bars because an equal-weight diagonal always reads
-heavier. The two corners on the diagonal's axis are chamfered at the same angle,
-which gives the terminals a direction, and the whole outline is symmetric under
-a 180° rotation so it cannot look crooked inside a tab, a tile or a circle. The
-name is ZMRIG, the miner is written in Zig; the bold zigzag is the shape both
-words already share, and a letter survives 16 px without a caption.
+The shape is a bold **Z sitting on a wave**: bar, diagonal, bar, with the lower
+edge of the bottom bar rising and falling like a water line. The name is ZMRIG,
+the miner is written in Zig — a bold zigzag is the shape both words already
+share — and the rig swims in the pool and the proxy, so the base of the letter is
+water. The wave is part of the same outline rather than a second element next to
+it: a stroke drawn under the letter would be a smudge at 16 px and a seam at
+32 px, and a wave drawn *inside* the stroke (a curved diagonal, a split stem, a
+ring) stops reading as a letter at all.
 
 One tone only, because a mark that needs an accent colour is a mark that changes
-its meaning in a dark theme. Every coordinate is a whole or half unit on a 32
+its meaning in a dark theme. The straight parts are whole and half units on a 32
 unit grid, so the 16, 32 and 48 pixel renders land on pixels instead of on grey
-fringes.
+fringes; the water line is sampled from a sine at a fixed step so it stays the
+same curve in the SVG, the PNGs and the social cards.
 
 Light and dark pages get the same file in opposite tones (`logo.svg` /
 `logo-dark.svg`), the navbar swaps them with `srcDark`, the home page swaps them

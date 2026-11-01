@@ -7,7 +7,7 @@
 # install is any good testable:
 #
 #   engine  - a pool that switches algorithms needs the C++ engine; a plain
-#             Monero pool can only send rx/0, where zmrig is faster and 0% fee
+#             Monero pool can only send rx/0, where zmrig is faster
 #   profile - free (watts do not matter) unless the user says otherwise
 #
 #   ./tests/oneclick/plan.sh
@@ -36,12 +36,12 @@ engine_of() { printf '%s\n' "$1" | sed -n 's/^ *engine *\([a-z]*\).*/\1/p' | hea
 field_of()  { printf '%s\n' "$1" | sed -n "s/^ *$2 *\([a-z]*\).*/\1/p" | head -1; }
 
 # --- engine follows the pool -------------------------------------------
-# A switching pool now keeps the fee-free engine: zmrig advertises the RandomX
+# A switching pool keeps the Zig engine: zmrig advertises the RandomX
 # family at login, so the pool can still pick the best-paying variant. The C++
 # engine was only ever chosen here because zmrig could not negotiate.
 out=$(plan --pool=gulf.moneroocean.stream:10001)
 if [ "$(engine_of "$out")" = "zmrig" ]; then
-    pass "a switching pool (moneroocean) keeps the fee-free engine"
+    pass "a switching pool (moneroocean) keeps the Zig engine"
 else
     fail "moneroocean should resolve to zmrig, got '$(engine_of "$out")'"
 fi
@@ -198,7 +198,7 @@ else
 fi
 
 if [ "$(engine_of "$out")" = "zmrig" ]; then
-    pass "a RandomX variant stays on the fee-free engine"
+    pass "a RandomX variant stays on the Zig engine"
 else
     fail "--coin=wow should resolve to zmrig, got '$(engine_of "$out")'"
 fi

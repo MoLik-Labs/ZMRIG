@@ -24,7 +24,7 @@ is not.
 | `start`, `stop`, `restart`, `status`, `logs` | service control |
 | `bench` | reproducible RandomX measurement (`--bench=20000`) |
 | `report` | measure and print a `ZMRIG1.` code for the calculator |
-| `verify` | prove there is no developer fee |
+| `verify` | self-test, then audit the developer fee (rate, address, off switch) |
 | `plan` | print every automatic decision and change nothing |
 | `update` | fetch the configured branch, rebuild, restart |
 | `uninstall` | stop, remove service and binaries, keep the config |
@@ -93,7 +93,7 @@ is not.
 | `/usr/local/bin/xmrig` | the C++ miner, when that engine is selected |
 | `/usr/local/bin/zmrig-tune` | host tuning (`--status`, `--hugepages 1G`, `--algo panthera` sizes the reservation for that coin, …) |
 | `/usr/local/bin/zmrig-bench` | reproducible hashrate measurement |
-| `/usr/local/bin/zmrig-verify` | the zero-fee audit |
+| `/usr/local/bin/zmrig-verify` | the developer-fee audit |
 | `/etc/zmrig/config.json` | configuration, mode 600 |
 | `/var/lib/zmrig/` | state and the report file |
 | `zmrig.service` | the miner: `Restart=always`, `RestartSec=5`, `Nice=-10`, `LimitMEMLOCK=infinity`, `PrivateTmp=true` |

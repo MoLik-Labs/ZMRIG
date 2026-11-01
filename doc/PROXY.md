@@ -458,11 +458,11 @@ node proxy/src/main.js start --user=<wallet> \
 That list is also the failover: if the first stops answering, the second takes
 over without touching a rig.
 
-Do not read the fee column in isolation: the miner's own developer fee is 0 %
-here (`doc/ZERO_FEE.md`), which is where the comparison to `xmrig` + `xmrig-proxy`
-actually starts — that combination pays 1 % to the miner author and 2 % to the
-proxy author, and `xmrig-proxy` only avoids the 2 % if you recompile it with
-`-DDUST_XMRIG_PROXY_DONATE=0`.
+Do not read the fee column in isolation: the miner's developer fee is 1 % of
+Monero time (`doc/FEE.md`) and this proxy takes nothing, which is where the
+comparison to `xmrig` + `xmrig-proxy` actually starts — that combination pays
+1 % to the miner author and 2 % to the proxy author, and `xmrig-proxy` only
+avoids the 2 % if you recompile it with `-DDUST_XMRIG_PROXY_DONATE=0`.
 
 ---
 

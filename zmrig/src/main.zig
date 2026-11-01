@@ -1,10 +1,12 @@
 //! zmrig - a RandomX miner written in Zig on top of the RandomX engine shipped
-//! in this repository. 0% developer fee, nothing is mined for anyone but the
-//! wallet you pass on the command line.
+//! in this repository. 1% of Monero mining time goes to the developer wallet
+//! (`zmrig/src/fee.zig`), stated in the banner, in `--check` and in the log
+//! whenever a fee session opens; `--donate-level=0` turns it off.
 
 const std = @import("std");
 const api = @import("api.zig");
 const autotune = @import("autotune.zig");
+const fee = @import("fee.zig");
 const hugepages_mod = @import("hugepages.zig");
 const memory_mod = @import("memory.zig");
 const job_mod = @import("job.zig");
@@ -19,7 +21,7 @@ const health = @import("health.zig");
 const verify = @import("verify.zig");
 const util = @import("util.zig");
 
-pub const version = "6.32.1";
+pub const version = "6.33.0";
 
 var running = std.atomic.Value(bool).init(true);
 
@@ -34,7 +36,7 @@ fn onSignal(_: c_int) callconv(.C) void {
 /// and a rejected config. One string, so the author line cannot go stale.
 pub const banner =
     "ZMRIG " ++ version ++ " - RandomX miner by @nggkhaiz\n" ++
-    "0% developer fee, GPL-3.0, https://github.com/NggKhaiz/ZMRIG\n";
+    "1% of Monero mining time goes to the developer (--donate-level=0 turns it off), GPL-3.0, https://github.com/NggKhaiz/ZMRIG\n";
 
 fn installSignalHandlers() void {
     const act = std.posix.Sigaction{
@@ -123,10 +125,23 @@ pub fn main() !void {
         break;
     }
 
-    if (opts.donate_level_ignored) |level| {
-        // Do not silently accept `--donate-level=1` and then take 1 %: the fee
-        // is 0 % by construction (see doc/ZERO_FEE.md).
-        log.global.info("--donate-level={d} ignored: this miner has a 0% developer fee", .{level});
+    // The fee is a policy decision, so it is stated before anything else runs:
+    // what it costs, which coin it applies to, where it goes, how to stop it.
+    if (opts.donate_percent == 0) {
+        log.global.info("developer fee: off (--donate-level=0); nothing is mined for anyone but your wallet", .{});
+    } else if (opts.version or opts.benchmark or opts.report or opts.self_test or opts.check) {
+        // These paths never mine to a pool, and main prints the fee line in
+        // --check. Saying it twice in a 3-second benchmark is noise.
+    } else {
+        log.global.info("developer fee: {d}% of Monero (rx/0) mining time, {s}", .{
+            opts.donate_percent,
+            fee.wallet,
+        });
+        log.global.info("             at {d}% that is {d} s every {d} min; --donate-level=0 turns it off", .{
+            opts.donate_percent,
+            @divTrunc(@as(i64, fee.start_ms), 1000),
+            @divTrunc(@as(i64, fee.start_ms) * 100, @as(i64, opts.donate_percent) * 60 * 1000),
+        });
     }
     if (opts.log_file) |path| {
         log.global.openFile(path) catch |e| {
@@ -276,7 +291,11 @@ pub fn main() !void {
     installSignalHandlers();
 
     const logger = &log.global;
-    logger.info("ZMRIG {s} by @nggkhaiz - 0% developer fee", .{version});
+    if (opts.donate_percent == 0) {
+        logger.info("ZMRIG {s} by @nggkhaiz - developer fee off", .{version});
+    } else {
+        logger.info("ZMRIG {s} by @nggkhaiz - {d}% developer fee (Monero time only)", .{ version, opts.donate_percent });
+    }
     logger.info("engine: {s}", .{api.xmo_engine_name()});
 
     // The workers set their own nice value; this covers the main thread.
@@ -303,8 +322,13 @@ pub fn main() !void {
         opts.pools.items[0].port,
     }) catch opts.pools.items[0].host;
 
+    // Developer fee clock. Declared outside the monitor because the mining loop
+    // below reads `due()` before every connection.
+    var fee_clock = fee.Clock.init(opts.donate_percent);
+
     var monitor = Monitor{
         .miner = &miner,
+        .fee_clock = &fee_clock,
         .logger = logger,
         .report_file = opts.report_file,
         .report_interval_ms = @as(i64, @intCast(@max(opts.report_interval, 1))) * 1000,
@@ -353,6 +377,7 @@ pub fn main() !void {
                 .worker_id = first_pool.rig_id orelse "zmrig",
                 .miner = &miner,
                 .threads = miner.threadCount(),
+                .donate_percent = opts.donate_percent,
                 .started_ms = std.time.milliTimestamp(),
                 .accepted = &miner.submitter.accepted,
                 .rejected = &miner.submitter.rejected,
@@ -415,18 +440,35 @@ pub fn main() !void {
         pool_index = chosen.?;
         const pool = opts.pools.items[pool_index];
 
-        logger.info("connecting to {s}://{s}:{d}{s}", .{
-            pool.transport.label(),
-            pool.host,
-            pool.port,
-            if (pool.transport.usesWs()) (pool.ws_path orelse "/") else "",
-        });
+        const donating = fee_clock.due(std.time.milliTimestamp());
+        const session_pool = feeSessionPool(pool, donating);
+        const active_pool = if (donating) &session_pool else &pool;
+
+        if (donating) {
+            logger.info("developer fee: {d} s owed, mining for the developer wallet for a moment", .{
+                @divTrunc(fee_clock.owed(), 1000),
+            });
+        } else {
+            logger.info("connecting to {s}://{s}:{d}{s}", .{
+                pool.transport.label(),
+                pool.host,
+                pool.port,
+                if (pool.transport.usesWs()) (pool.ws_path orelse "/") else "",
+            });
+        }
 
         // What this rig tells the pool it can hash: one pinned algorithm, the
         // whole RandomX family with `--algo=auto`, or nothing at all.
         var algo_buf: [api.auto_algos.len]api.Algo = undefined;
-        const algos = opts.loginAlgos(&pool, &algo_buf);
-        var session = stratum.Session.open(allocator, pool, logger) catch {
+        const algos = opts.loginAlgos(active_pool, &algo_buf);
+        var session = stratum.Session.open(allocator, active_pool.*, logger) catch |e| {
+            if (donating) {
+                // A socket that will not open is not the user's problem: keep
+                // their mining going and owe the fee for later.
+                logger.warn("developer fee: cannot reach {s} ({s}); fee deferred", .{ pool.host, @errorName(e) });
+                fee_clock.fail(std.time.milliTimestamp());
+                continue;
+            }
             failures += 1;
             if (failures >= opts.retries) {
                 failures = 0;
@@ -447,6 +489,19 @@ pub fn main() !void {
 
         var first_job = job_mod.Job.init();
         session.login(algos, &first_job) catch |e| {
+            if (donating) {
+                // The developer wallet can be refused where the user's is not:
+                // unknown address on that pool, a different network, a ban on
+                // that login. None of it may cost the user their mining, so no
+                // cooldown is written and no pool is marked bad.
+                logger.warn("developer fee: {s} refused it ({s}); fee deferred, your mining continues", .{
+                    pool.host,
+                    session.last_failure.label(),
+                });
+                fee_clock.fail(std.time.milliTimestamp());
+                continue;
+            }
+
             logger.err("login failed: {s}", .{@errorName(e)});
 
             const base_ms: i64 = @as(i64, opts.ban_cooldown) * 1000;
@@ -495,10 +550,15 @@ pub fn main() !void {
         failures = 0;
         attempts = 0;
 
-        logger.info("login ok, job {s}, difficulty {d:.3}", .{
-            first_job.idSlice(),
-            first_job.diff(),
-        });
+        if (donating) {
+            fee_clock.begin(std.time.milliTimestamp());
+            logger.info("developer fee: login ok, mining job {s} for the developer wallet", .{first_job.idSlice()});
+        } else {
+            logger.info("login ok, job {s}, difficulty {d:.3}", .{
+                first_job.idSlice(),
+                first_job.diff(),
+            });
+        }
 
         miner.submitter.attach(&session);
         monitor.last_message.store(std.time.milliTimestamp(), .release);
@@ -515,7 +575,9 @@ pub fn main() !void {
         // `opts.poolAlgo` -- not the advertised list: this is the default used
         // for a job that names no algorithm, and `--algo=auto` deliberately pins
         // nothing so the pool stays free to switch.
-        const result = runSession(allocator, &session, &miner, &opts, &monitor, opts.poolAlgo(&pool), logger);
+        fee_clock.noteMonero(first_job.algo == .rx_0);
+
+        const result = runSession(allocator, &session, &miner, &opts, &monitor, opts.poolAlgo(active_pool), &fee_clock, logger);
         monitor.view.markDisconnected();
 
         if (session.conn.skipped > 0) {
@@ -526,6 +588,36 @@ pub fn main() !void {
         // Keep the workers running on the last job while we reconnect: a pool
         // that drops a socket for a second must not cost a minute of hashing.
         // Shares found in the gap are dropped by the submitter with a warning.
+
+        if (donating) {
+            // The debt was paid down by the monitor (which kicked the socket)
+            // or the pool dropped us. Either way the next connection is the
+            // user's wallet again, with no retry pause: the fee must never
+            // cost the user a minute of hashing.
+            const started_ms = fee_clock.session_start_ms;
+            const spent_s = if (started_ms == 0) 0 else @divTrunc(std.time.milliTimestamp() - started_ms, 1000);
+
+            fee_clock.finish();
+
+            switch (result) {
+                .banned => {
+                    logger.warn("developer fee: {s} banned the developer login; fee paused for a while", .{pool.host});
+                    fee_clock.fail(std.time.milliTimestamp());
+                },
+                .disconnected => |e| logger.warn("developer fee: session ended after {d} s ({s}); {d} s left owed", .{
+                    spent_s,
+                    @errorName(e),
+                    @divTrunc(fee_clock.owed(), 1000),
+                }),
+                else => logger.info("developer fee: session ended after {d} s; {d} s left owed", .{
+                    spent_s,
+                    @divTrunc(fee_clock.owed(), 1000),
+                }),
+            }
+
+            if (!running.load(.acquire)) break;
+            continue;
+        }
 
         switch (result) {
             .disconnected => |e| logger.warn("connection lost: {s}", .{@errorName(e)}),
@@ -578,6 +670,7 @@ fn runSession(
     opts: *const options.Options,
     monitor: *Monitor,
     algo: ?api.Algo,
+    clock: *fee.Clock,
     logger: *log.Logger,
 ) SessionEnd {
     _ = opts;
@@ -607,6 +700,10 @@ fn runSession(
                 miner.applyJob(&next_job) catch |e| {
                     logger.err("cannot apply job: {s}", .{@errorName(e)});
                 };
+
+                // The fee accrues on Monero only, so the clock has to know
+                // what is actually in the engine, not what the config said.
+                clock.noteMonero(next_job.algo == .rx_0);
             },
             .reply => |reply| {
                 if (reply.ok) {
@@ -676,6 +773,9 @@ const Monitor = struct {
     health_logged: bool = false,
     /// Hashrates published to the HTTP API once a second.
     view: api_http.View = .{},
+    /// The developer-fee clock, ticked once a second from this thread because
+    /// this is the only place that knows how much wall clock actually passed.
+    fee_clock: ?*fee.Clock = null,
     socket: std.atomic.Value(i32) = std.atomic.Value(i32).init(-1),
     stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     thread: ?std.Thread = null,
@@ -738,6 +838,28 @@ const Monitor = struct {
             // A SIGTERM must not wait for the pool to say something: the main
             // thread is parked in a blocking read, so nudge it here.
             if (!running.load(.acquire)) self.kick();
+
+            // Developer fee. The debt is accrued here, and a session that has
+            // paid it off is ended from here too -- the main thread is parked
+            // in a socket read and would not notice until the next job.
+            if (self.fee_clock) |clock| {
+                // Only time that is actually hashing counts: the 21 s dataset
+                // build at startup is not mining.
+                clock.tick(1000, total > 0 and clock.moneroNow());
+
+                if (clock.expired(now)) {
+                    self.logger.info("developer fee: session paid, back to your wallet", .{});
+                    self.kick();
+                } else if (!clock.isDonating() and clock.due(now)) {
+                    // A pool connection lives for hours; the only way to hand
+                    // the wallet over is to end it. The mining loop sees a
+                    // closed socket, reconnects, and finds `due()` true.
+                    self.logger.info("developer fee: {d} s owed, reconnecting to pay it", .{
+                        @divTrunc(clock.owed(), 1000),
+                    });
+                    self.kick();
+                }
+            }
 
             // A Cloudflare-fronted WebSocket (and any NAT/firewall in between)
             // drops a connection that carries no traffic. Sending keepalived
@@ -1024,6 +1146,49 @@ fn applyMsr(opts: *const options.Options, logger: *log.Logger) bool {
     }
 }
 
+test "a fee session mines to the developer wallet on the user's own pool" {
+    const pool = options.Pool{
+        .host = "pool.example.com",
+        .port = 3333,
+        .user = "user-wallet",
+        .rig_id = "rig-1",
+    };
+
+    // The user's own session is left exactly as configured.
+    const mine = feeSessionPool(pool, false);
+    try std.testing.expectEqualStrings("user-wallet", mine.user);
+    try std.testing.expectEqualStrings("rig-1", mine.rig_id.?);
+    try std.testing.expectEqual(@as(?api.Algo, null), mine.algo);
+
+    // The fee session keeps host, port and transport, swaps the wallet, and
+    // pins Monero: the developer address is a Monero address.
+    const dev = feeSessionPool(pool, true);
+    try std.testing.expectEqualStrings(fee.wallet, dev.user);
+    try std.testing.expectEqualStrings("pool.example.com", dev.host);
+    try std.testing.expectEqual(@as(u16, 3333), dev.port);
+    try std.testing.expectEqualStrings("zmrig-fee", dev.rig_id.?);
+    try std.testing.expectEqual(@as(?api.Algo, .rx_0), dev.algo);
+
+    // And the user's copy is untouched by the swap.
+    try std.testing.expectEqualStrings("user-wallet", pool.user);
+}
+
+/// The connection a fee session uses: the same pool and the same transport as
+/// the user's, with the developer's Monero address in the login. A second
+/// hardcoded pool would be one more thing that can be down when the fee is due,
+/// and the coin has to be Monero -- that address cannot be paid on the ArQmA,
+/// Wownero, Graft, Safex, Yada or Scala networks, so the login is pinned.
+fn feeSessionPool(pool: options.Pool, donating: bool) options.Pool {
+    if (!donating) return pool;
+
+    var dev = pool;
+    dev.user = fee.wallet;
+    dev.rig_id = "zmrig-fee";
+    dev.algo = .rx_0;
+
+    return dev;
+}
+
 fn printConfigSummary(opts: *const options.Options) !void {
     var out = std.io.getStdOut().writer();
 
@@ -1135,6 +1300,19 @@ fn printConfigSummary(opts: *const options.Options) !void {
         // user has. Saying which one is in play turns "huge pages: 0" from a
         // scare into an answer.
         try out.print("  thp     {s}\n", .{thpStatus()});
+    }
+
+    // The fee belongs in the summary: it is the one line of config that costs
+    // money if the operator did not read it.
+    if (opts.donate_percent == 0) {
+        try out.print("  donate  off: 0% of mining time, nothing mined for the developer\n", .{});
+    } else {
+        try out.print("  donate  {d}% of Monero (rx/0) mining time to {s}, {d} s every {d} min (--donate-level=0 turns it off)\n", .{
+            opts.donate_percent,
+            fee.wallet,
+            @divTrunc(@as(i64, fee.start_ms), 1000),
+            @divTrunc(@as(i64, fee.start_ms) * 100, @as(i64, opts.donate_percent) * 60 * 1000),
+        });
     }
 
     // MSR is read-only here: probe the first CPU, never write during --check.

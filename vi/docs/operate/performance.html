@@ -7,9 +7,9 @@
 <link rel="icon" type="image/png" sizes="32x32" href="/ZMRIG/img/favicon-32.png">
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.b9407fd1.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.d6294630.js" defer="defer"></script>
-<script src="/ZMRIG/vi/assets/js/main.18b2f40c.js" defer="defer"></script>
+<meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.e1cb14c0.css">
+<script src="/ZMRIG/vi/assets/js/runtime~main.1b352c2b.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/main.568335f0.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -73,6 +73,9 @@ dataset hay số thread thì nên được đo trước khi tin.</p>
 <p>2 vCPU Xeon 2.60 GHz, 3.9 GiB RAM, 1234 × 2 MiB huge pages, thuật toán <code>rx/0</code>,
 mỗi cấu hình một lần chạy.</p>
 <table><thead><tr><th>Cấu hình</th><th style="text-align:right">Hashrate</th><th style="text-align:right">Tỉ lệ</th></tr></thead><tbody><tr><td>mặc định: 2 thread, đặt trước 1168 trang, prefetch 1</td><td style="text-align:right">800–841 H/s</td><td style="text-align:right">100 %</td></tr><tr><td>như trên, không đặt trang nào (THP gộp mapping)</td><td style="text-align:right">786 H/s</td><td style="text-align:right">95 %</td></tr><tr><td>như trên, không đặt trang và THP tắt (4 KiB)</td><td style="text-align:right">615–626 H/s</td><td style="text-align:right">76 %</td></tr><tr><td><code>--mode light</code></td><td style="text-align:right">82 H/s</td><td style="text-align:right">10 %</td></tr><tr><td><code>-t 1</code></td><td style="text-align:right">408 H/s</td><td style="text-align:right">50 %</td></tr><tr><td><code>-t 4</code> trên hai core</td><td style="text-align:right">798–801 H/s</td><td style="text-align:right">98 % (nhiễu)</td></tr><tr><td><code>--scratchpad-prefetch=0/2/3</code></td><td style="text-align:right">1208–1302 kH/s trên <code>panthera</code></td><td style="text-align:right">nhiễu</td></tr><tr><td><code>--no-affinity</code></td><td style="text-align:right">814 H/s</td><td style="text-align:right">100 % (nhiễu)</td></tr></tbody></table>
+<p>Đo lại cho 6.33.0 ngày 2026-11-01 (ba lần <code>--bench=3000</code>, THP, hai thread):
+<strong>889 / 956 / 886 H/s</strong> — đúng cấu hình của dòng 786 H/s, chỉ khác ngày. Hãy dùng
+tỷ lệ, đừng dùng số tuyệt đối.</p>
 <p>Cùng binary, cùng host, ở một phiên ít tải hơn: <strong>1008–1103 H/s</strong>. Độ tản 20–25 %
 đó là lý do con số tuyệt đối trong tài liệu gần như vô dụng, và tỉ lệ ở trên mới
 là phần dùng được.</p>

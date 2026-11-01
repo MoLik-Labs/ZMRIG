@@ -87,10 +87,12 @@ fails, read that case's log first (`cloudflare.log`, `shim-cf.log`, `pool.log`).
 sudo ./oneclick.sh verify
 ```
 
-With the Zig engine it runs the self-test and then `strings` over the binary
-looking for known donation endpoints and addresses. With the C++ engine it runs
-`scripts/verify-fee-free.sh`, which additionally checks that the binary prints
-`DONATE 0%` when handed `--donate-level=9`.
+With the Zig engine it runs the self-test and then `scripts/verify-fee.sh`,
+which reads the rate, the wallet and the `--donate-level=0` off switch out of
+the binary and fails if a second address or an upstream donation endpoint
+appears. With the C++ engine it runs `scripts/verify-fee-free.sh`, which
+additionally checks that the binary prints `DONATE 0%` when handed
+`--donate-level=9`.
 
 The check greps for **endpoints and addresses**, not for the word `donate`: the
 monitoring API legitimately returns `"donate_level": 0`, and a naive grep raises

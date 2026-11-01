@@ -99,10 +99,10 @@ case "$profile" in
     *)         fail "profile in config is '${profile}', expected free or watt" ;;
 esac
 
-if [ "$(json_get "${DIR1}/config.json" "donate-level")" = "0" ]; then
-    pass "donate-level stays 0 (0% developer fee)"
+if [ "$(json_get "${DIR1}/config.json" "donate-level")" = "1" ]; then
+    pass "donate-level is written as 1 (the documented developer fee)"
 else
-    fail "donate-level is not 0"
+    fail "donate-level is $(json_get "${DIR1}/config.json" "donate-level"), expected 1"
 fi
 
 # A thread count is written only when the search produced one.

@@ -7,9 +7,9 @@
 <link rel="icon" type="image/png" sizes="32x32" href="/ZMRIG/img/favicon-32.png">
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.b9407fd1.css">
-<script src="/ZMRIG/assets/js/runtime~main.6e12f229.js" defer="defer"></script>
-<script src="/ZMRIG/assets/js/main.9a13e464.js" defer="defer"></script>
+<meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.e1cb14c0.css">
+<script src="/ZMRIG/assets/js/runtime~main.2cc2df5b.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/main.703ef795.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -74,6 +74,9 @@ thread count should be measured before it is believed.</p>
 <p>2 vCPU Xeon at 2.60 GHz, 3.9 GiB RAM, 1234 × 2 MiB huge pages, algorithm <code>rx/0</code>,
 one run per configuration.</p>
 <table><thead><tr><th>Configuration</th><th style="text-align:right">Hashrate</th><th style="text-align:right">Ratio</th></tr></thead><tbody><tr><td>default: 2 threads, 1168 pages reserved, prefetch 1</td><td style="text-align:right">800–841 H/s</td><td style="text-align:right">100 %</td></tr><tr><td>same, no pages reserved (THP backs the mapping)</td><td style="text-align:right">786 H/s</td><td style="text-align:right">95 %</td></tr><tr><td>same, no pages reserved and THP off (4 KiB)</td><td style="text-align:right">615–626 H/s</td><td style="text-align:right">76 %</td></tr><tr><td><code>--mode light</code></td><td style="text-align:right">82 H/s</td><td style="text-align:right">10 %</td></tr><tr><td><code>-t 1</code></td><td style="text-align:right">408 H/s</td><td style="text-align:right">50 %</td></tr><tr><td><code>-t 4</code> on two cores</td><td style="text-align:right">798–801 H/s</td><td style="text-align:right">98 % (noise)</td></tr><tr><td><code>--scratchpad-prefetch=0/2/3</code></td><td style="text-align:right">1208–1302 kH/s on <code>panthera</code></td><td style="text-align:right">noise</td></tr><tr><td><code>--no-affinity</code></td><td style="text-align:right">814 H/s</td><td style="text-align:right">100 % (noise)</td></tr></tbody></table>
+<p>Re-checked for 6.33.0 on 2026-11-01 (three <code>--bench=3000</code> runs, THP, two
+threads): <strong>889 / 956 / 886 H/s</strong> — the same configuration as the 786 H/s row,
+different day. Treat the ratios, not the absolute numbers.</p>
 <p>The same binary on the same host in a quieter session measured <strong>1008–1103 H/s</strong>.
 That 20–25 % spread is why absolute numbers in documentation are close to
 useless, and why the ratios above are the useful part.</p>

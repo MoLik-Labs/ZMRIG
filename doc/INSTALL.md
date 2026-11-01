@@ -1,7 +1,7 @@
 # One-click install
 
-`oneclick.sh` turns a bare Linux machine into a tuned, supervised, fee-free
-RandomX miner. One command, no manual steps, safe to re-run.
+`oneclick.sh` turns a bare Linux machine into a tuned, supervised RandomX miner.
+One command, no manual steps, safe to re-run.
 
 ```bash
 # on a fresh machine (clones the repository for you)
@@ -25,14 +25,14 @@ That single command:
    measured thread count;
 6. installs the binary and a `systemd` service that restarts on failure and a
    oneshot unit that re-applies the tuning on every boot;
-7. starts it, waits for the first real hashrate, runs the 0 %-fee audit and
+7. starts it, waits for the first real hashrate, audits the developer fee and
    prints a summary card.
 
 Only the wallet is required. The engine is `zmrig` unless the hardware cannot
 run it or `--algo` names a non-RandomX algorithm: on a pool that switches coins
 (MoneroOcean and its clones) the config advertises the whole RandomX family
 (`"algo": "auto"`), so the pool can still move the rig to whichever coin pays
-best while the rig keeps the fee-free engine. A non-RandomX `--algo` (cn/2, …)
+best while the rig keeps the Zig engine. A non-RandomX `--algo` (cn/2, …)
 or `--engine=xmrig` selects the C++ engine, which speaks all 34 algorithms. The
 profile comes from the battery state. `./oneclick.sh plan` prints every decision
 with its reason and touches nothing.
@@ -44,7 +44,7 @@ End state:
 | `/usr/local/bin/zmrig` | the miner (the C++ engine installs as `xmrig`) |
 | `/usr/local/bin/zmrig-tune` | host tuning (`--status`, `--hugepages 1G`, `--algo panthera` sizes the reservation for that coin, …) |
 | `/usr/local/bin/zmrig-bench` | reproducible hashrate measurement |
-| `/usr/local/bin/zmrig-verify` | proves the binary has no developer fee |
+| `/usr/local/bin/zmrig-verify` | audits the developer fee: rate, address, off switch |
 | `/etc/zmrig/config.json` | configuration (rewritten by autosave) |
 | `zmrig.service` | supervised miner, `Restart=always`, `Nice=-10` |
 | `zmrig-tune.service` | oneshot tuner, runs before the miner at boot |
@@ -137,8 +137,8 @@ One thread per physical core, no governor forcing, mining paused on battery, and
 hashes per watt in the report code. The full reasoning, including what could not
 be measured here, is in [doc/PERFORMANCE.md](PERFORMANCE.md) §2c.
 
-Both profiles are 0 % fee and both are auditable with
-`sudo ./oneclick.sh verify`.
+Both profiles take the same 1 % developer fee on Monero time, both are
+auditable with `sudo ./oneclick.sh verify`, and `--donate-level=0` removes it.
 
 ### Health
 

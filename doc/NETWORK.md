@@ -188,7 +188,7 @@ legitimately go quiet for long stretches.
 ## Verifying
 
 ```sh
-sudo ./oneclick.sh verify     # engine conformance + 0% fee
+sudo ./oneclick.sh verify     # engine conformance + the fee audit
 sudo ./oneclick.sh status     # transport, hashrate, shares
 sudo journalctl -u zmrig -f
 ```

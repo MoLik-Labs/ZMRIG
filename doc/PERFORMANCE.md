@@ -27,8 +27,8 @@ sudo ./scripts/tune-linux.sh
 # 3. measure before/after on the same host
 ./scripts/bench.sh --seconds 300 --hashes 200000
 
-# 4. prove there is no dev fee
-./scripts/verify-fee-free.sh
+# 4. audit the developer fee (1% of Monero time, switchable off)
+./scripts/verify-fee.sh --binary zmrig/out/zmrig
 ```
 
 Startup log must show, in this order:
@@ -170,6 +170,11 @@ on top. So `zmrig` now:
 Reproduce by running the same command with `nr_hugepages` at 1200 and at 0; the
 4 KiB row needs THP switched off, which is the one case that needs root.
 
+Re-checked for 6.33.0 on 2026-11-01, same host, `--bench=3000`, three runs:
+**889 / 956 / 886 H/s**. That is the same binary and the same configuration as
+the 785.9 / 786.1 row — the difference is the host, not the code. Which is the
+point of the table above: measure ratios inside one session, never across days.
+
 ### Dataset build: 42.9 s or 21.1 s
 
 The seed-to-dataset step is pure memory bandwidth and it was being run with the
@@ -272,6 +277,7 @@ honest zeroes and one is a correctness fix.
 | Change | What it is | Measured on this box |
 |---|---|---|
 | Per-thread hash counters padded to 64 B | The old array put eight `u64` counters in one cache line, so every increment invalidated the line for the other threads (false sharing) | **Below the noise floor here** (2 vCPU, ~1000 increments/s). Kept because it is free and the effect is real on ≥ 8 cores; not claimed as a speedup. |
+| `MADV_COLLAPSE` after the dataset is built (Linux 6.1) | Collapses the mapping synchronously instead of waiting for khugepaged, so the dataset does not spend its first minute half on 4 KiB pages | **Nothing to gain here, so it is not in the code.** `madvise(MADV_HUGEPAGE)` already makes the dataset fault in as 2 MiB pages: the kernel reported 93–99 % coverage the instant the seed finished, with or without the collapse call, and the hashrate stayed inside ±4 %. Worth revisiting if a host ever reports low coverage at startup. |
 | Benchmark stop condition checked every 64 hashes | `totalHashes()` sums one atomic per thread, and it ran once per hash — 32 cross-line atomic loads per hash on a 32-core box, inside the benchmark that produces the numbers everyone compares | **Not measurable on 2 vCPU** (2 atomics per hash out of ~1 ms of work). Kept for the same reason: it cannot help here, it cannot hurt, and it removes a scaling trap. |
 | Ring buffer 512 → 1024 samples | One sample per second, so 512 samples was 8.5 minutes. `rate(900)` — the 15-minute column in `ZMRIG1.` — was silently an 8-minute average, which reads as a very stable hashrate that never existed | **Correctness**, not speed. The 15-minute figure is now a real 15-minute figure after 15 minutes of mining. |
 | Thread search (`--autotune`) | One measured trial per candidate on the real dataset | Reproduces the known curve: **499.625 H/s at 1 thread, 999.750 H/s at 2**. The tool is validated where it agrees with the heuristic, which is the only way to trust it where it disagrees. |

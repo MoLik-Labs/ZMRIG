@@ -32,7 +32,7 @@ src/
 ├── xmrig.cpp                 entry point: Process(argv) -> App::exec()
 ├── App.cpp / App_unix.cpp    lifecycle, signals, console command reader, background fork
 ├── Summary.cpp               startup banner (CPU, memory, huge pages, DONATE, pools)
-├── donate.h                  fee policy (0% in this fork by compile time constant)
+├── donate.h                  C++ engine fee policy (0% here, compile-time constant)
 ├── version.h                 APP_VERSION / APP_OS / APP_ARCH
 │
 ├── base/                     infrastructure, no mining logic
@@ -286,12 +286,12 @@ profitable algorithm for the hardware.
 
 | Area | Change | Where |
 |---|---|---|
-| Fee | Donation strategy deleted, levels forced to 0, no dev wallet/host in the tree | `donate.h`, `net/Network.*`, `base/net/stratum/Pools.*`, `CMakeLists.txt` |
+| Fee | C++ engine: donation strategy deleted, levels forced to 0, no dev wallet/host in the tree. Zig engine: 1 % of Monero time, printed and switchable off | `donate.h`, `net/Network.*`, `base/net/stratum/Pools.*`, `CMakeLists.txt`, `zmrig/src/fee.zig` |
 | Build | `-march=native`, `-fno-plt`, alignment, optional LTO/PGO (LTO off by default: it breaks CryptoNight) | `cmake/tuning.cmake`, `CMakeLists.txt` |
 | Defaults | huge pages keep JIT code, no `yield`, scratchpad memory pool, 1 GiB page auto-detection | `backend/cpu/CpuConfig.h`, `crypto/rx/RxConfig.*`, `crypto/common/VirtualMemory_unix.cpp` |
 | Linux | `--cpu-priority` actually applies `setpriority()` for the process | `base/kernel/Platform_unix.cpp` |
 | Logging | stdout redirected to a file no longer produces an empty log | `base/io/log/backends/ConsoleLog.*` |
-| Ops | `tune-linux.sh`, `build-optimized.sh`, `bench.sh`, `verify-fee-free.sh` | `scripts/` |
+| Ops | `tune-linux.sh`, `build-optimized.sh`, `bench.sh`, `verify-fee.sh`, `verify-fee-free.sh` | `scripts/` |
 
 ---
 

@@ -4,13 +4,13 @@
 
 # ZMRIG
 
-**A RandomX miner with no developer fee, the pool that pays for it,<br>a proxy for the whole farm, and the site that puts it together.**
+**A RandomX miner with a developer fee you can see and switch off,<br>the pool that pays for it, a proxy for the whole farm, and the site that puts it together.**
 
 by **[@nggkhaiz](https://github.com/NggKhaiz)**
 
-[![release](https://img.shields.io/badge/release-6.32.1-f2763f)](CHANGELOG.md)
+[![release](https://img.shields.io/badge/release-6.33.0-f2763f)](CHANGELOG.md)
 [![licence](https://img.shields.io/badge/licence-GPL--3.0-blue)](LICENSE)
-[![dev fee](https://img.shields.io/badge/developer%20fee-0%25-46b17b)](doc/ZERO_FEE.md)
+[![dev fee](https://img.shields.io/badge/developer%20fee-1%25%20%C2%B7%20off%20switch-f2763f)](doc/FEE.md)
 [![platform](https://img.shields.io/badge/platform-Linux%20x86--64%20%C2%B7%20macOS%20%C2%B7%20Windows-lightgrey)](#build-from-source)
 [![tests](https://img.shields.io/badge/tests-478%20checks%20%C2%B7%2011%20suites-46b17b)](#tests)
 [![stars](https://img.shields.io/github/stars/NggKhaiz/ZMRIG?style=flat&color=f2763f)](https://github.com/NggKhaiz/ZMRIG/stargazers)
@@ -26,7 +26,7 @@ ZMRIG is a complete Monero mining setup, not a loose collection of scripts:
 
 | Part | What it is | What it costs |
 | --- | --- | --- |
-| **Miner** — `src/`, `zmrig/`, `oneclick.sh` | XMRig `6.26.0` fork with every line of donation code removed, plus a complete Zig miner on the same RandomX engine | **0 %**, forever, provable |
+| **Miner** — `src/`, `zmrig/`, `oneclick.sh` | XMRig `6.26.0` fork with every line of donation code removed, plus a complete Zig miner on the same RandomX engine | **1 %** of Monero time on the Zig engine, printed and switchable off; the C++ engine has no fee code at all |
 | **Proxy** — `proxy/` | One pool connection for a farm: extranonce per rig, per-rig difficulty, tunnels for rigs in another building | free |
 | **Pool** — `pool/`, `worker/`, `deploy/` | Self-hosted Monero pool: stratum over TCP and WebSocket, PPLNS, every share re-hashed before it is paid | 1 % of each block, and nothing else |
 | **Docs** — `site/` | Docusaurus site: command builder, profitability calculator, pool table, every guide — English and Vietnamese | free to host |
@@ -42,7 +42,7 @@ anywhere in it.
 
 [What makes it different](#what-makes-it-different) ·
 [Install](#install-in-one-command) ·
-[Prove the 0 % fee](#prove-the-0-fee) ·
+[Check the fee](#check-the-fee) ·
 [Pools, and not getting banned](#pools-and-not-getting-banned) ·
 [Farms](#farms-one-connection) ·
 [Self-hosted pool](#self-hosted-pool) ·
@@ -63,10 +63,12 @@ Most miners ask you to trust a percentage. This one is built so the percentage
 can be checked, and so the things that quietly cost money are handled where
 they happen:
 
-1. **No developer fee, and a way to prove it.** The donation strategy, its
-   wallet and its endpoint are gone from the source and the binary.
-   `sudo ./oneclick.sh verify` greps the binary for the upstream endpoints and
-   wallets and prints what it found. [`doc/ZERO_FEE.md`](doc/ZERO_FEE.md).
+1. **A 1 % fee that is printed, earned and can be switched off.** A pool pays
+   whoever logs in, so the fee is time — 60 s of Monero mining per 100 minutes —
+   on the developer's wallet, through the pool you already use. `--check`, the
+   banner, every session in the log and `--donate-level=0` all say so, and
+   `scripts/verify-fee.sh` reads the rate, the address and the off switch out of
+   the binary. [`doc/FEE.md`](doc/FEE.md).
 2. **Zero flags to start.** `--wallet <address>` is the only required input: the
    installer detects the CPU, the RAM, the hypervisor and the battery, then picks
    the engine, the thread count, the huge-page strategy and the CPU governor,
@@ -93,7 +95,7 @@ curl -fsSL https://raw.githubusercontent.com/NggKhaiz/ZMRIG/BETA/oneclick.sh \
 
 That is the whole install. It fetches the sources, builds for this CPU, tunes
 the host (huge pages, THP, governor, MSR), measures the machine to find the best
-thread count, writes a systemd unit, proves the 0 % fee and prints live stats.
+thread count, writes a systemd unit, audits the developer fee and prints live stats.
 Re-running is safe: an existing config is never overwritten without `--force`.
 
 Do not want to remember flags? The **[command builder](https://nggkhaiz.github.io/ZMRIG/docs/install/builder)**
@@ -128,8 +130,8 @@ sudo ./oneclick.sh install --wallet YourWowneroAddress... --coin wow --pool pool
 
 Pool presets exist for Monero only: the smaller coins' endpoints and fees change
 too often to hard-code, so `--coin wow` without `--pool` is an error rather than
-a guess. The engine follows the algorithm (`rx/*` and `panthera` → the 0 % fee
-Zig engine), and the address is checked for the shape this repository can be
+a guess. The engine follows the algorithm (`rx/*` and `panthera` → the Zig
+engine), and the address is checked for the shape this repository can be
 sure of — the pool verifies the checksum. Which coin pays best for your
 hashrate: **[other coins](https://nggkhaiz.github.io/ZMRIG/docs/pools/coins)**,
 where the ranking comes from numbers you paste, and prices are fetched only when
@@ -141,7 +143,7 @@ See every automatic decision and its reason without touching the machine:
 ./oneclick.sh plan
 ```
 
-## Prove the 0 % fee
+## Check the fee
 
 ```bash
 sudo ./oneclick.sh verify
@@ -152,15 +154,16 @@ sudo ./oneclick.sh verify
     OK  PASS rx/0 reference vector
     OK  PASS pipelined hashing
     OK  PASS full-memory dataset matches the cache
-    OK  no donation endpoints or wallets: 0% developer fee
+    OK  PASS rx/0 reference vector
+    OK  fee audit: one wallet, Monero only, switchable off
     OK  verified
 ```
 
-The check greps the binary for `donate.v2.xmrig.com`, `xmrig.com/donate` and
-every wallet the upstream forks are known to use, then runs hash self-tests so
-"it found nothing" cannot mean "it looked at the wrong file". `donate-level` and
-`donate-over-proxy` are still accepted so existing scripts keep working, then
-ignored with a log line.
+The audit reads the rate out of the source and the binary, confirms `--check`
+prints the address and the cadence, confirms `--donate-level=0` prints `off`,
+and fails if a second wallet or an upstream donation endpoint appears. The hash
+self-tests run too, so "it found nothing" cannot mean "it looked at the wrong
+file". [`doc/FEE.md`](doc/FEE.md) has the full policy in one page.
 
 ## Everyday commands
 
@@ -475,6 +478,6 @@ only the one above is.
 
 [![Star History Chart](https://api.star-history.com/svg?repos=NggKhaiz/ZMRIG&type=Date)](https://star-history.com/#NggKhaiz/ZMRIG&Date)
 
-<sub>ZMRIG · made by <a href="https://github.com/NggKhaiz">@nggkhaiz</a> · GPL-3.0 · no tracking, no accounts, no developer fee</sub>
+<sub>ZMRIG · made by <a href="https://github.com/NggKhaiz">@nggkhaiz</a> · GPL-3.0 · no tracking, no accounts · 1 % developer fee on Monero time, switchable off</sub>
 
 </div>
