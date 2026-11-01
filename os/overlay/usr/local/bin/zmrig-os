@@ -20,7 +20,10 @@
 #   ZMRIG_OS_DRYRUN=1            # print privileged changes instead of making them
 #
 # POSIX sh on purpose: the image has busybox ash, and the same script has to run
-# under dash in the test suite.
+# under dash in the test suite. `local` is the one extension used, and all three
+# of those shells accept it.
+#
+# shellcheck shell=sh disable=SC3043
 
 set -eu
 
@@ -33,7 +36,6 @@ MANIFEST_OVERRIDE="${ZMRIG_OS_MANIFEST_URL:-}"
 ROOT="${ZMRIG_OS_ROOT:-}"
 ETC="${ROOT}/etc/zmrig"
 CONF="${ETC}/os.conf"
-EXAMPLE="${ETC}/os.conf.example"
 RUN="${ROOT}/run/zmrig"
 LOG="${ROOT}/var/log/zmrig.log"
 OSLOG="${ROOT}/var/log/zmrig-os.log"

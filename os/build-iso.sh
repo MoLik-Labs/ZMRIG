@@ -428,8 +428,8 @@ changes.
 Everything here is @nggkhaiz's build of ZMRIG: https://github.com/NggKhaiz/ZMRIG
 EOF
 
-printf 'ZMRIG OS %s %s\n' "$VERSION" "$ARCH_LEVEL" > "${ISODIR}/.disk/info" 2>/dev/null || {
-    mkdir -p "${ISODIR}/.disk"; printf 'ZMRIG OS %s %s\n' "$VERSION" "$ARCH_LEVEL" > "${ISODIR}/.disk/info"; }
+mkdir -p "${ISODIR}/.disk"
+printf 'ZMRIG OS %s %s\n' "$VERSION" "$ARCH_LEVEL" > "${ISODIR}/.disk/info"
 
 rm -f "$ISO_PATH"
 grub-mkrescue -o "$ISO_PATH" "$ISODIR" \

@@ -93,16 +93,32 @@ rc-update add hwclock boot  >/dev/null 2>&1 || true
 
 # SSH: keys only. A rig that accepts passwords is a rig that ends up in a
 # botnet, and the console is already available to whoever can touch the machine.
+mkdir -p /etc/ssh/sshd_config.d
 cat > /etc/ssh/sshd_config.d/zmrig.conf <<'EOF'
 PermitRootLogin prohibit-password
 PasswordAuthentication no
 KbdInteractiveAuthentication no
+UsePAM no
 PubkeyAuthentication yes
 X11Forwarding no
 AllowAgentForwarding no
 ClientAliveInterval 60
 ClientAliveCountMax 3
 EOF
+
+# And again at the end of the main file: whether sshd reads the drop-in
+# directory depends on the OpenSSH build, and "it depends" is not a security
+# policy. sshd uses the *first* value it sees, so these lines must come first.
+if ! grep -q '^# ZMRIG appliance policy' /etc/ssh/sshd_config 2>/dev/null; then
+    {
+        printf '# ZMRIG appliance policy\n'
+        cat /etc/ssh/sshd_config.d/zmrig.conf
+        printf '\n'
+        cat /etc/ssh/sshd_config
+    } > /tmp/sshd_config.new
+    mv /tmp/sshd_config.new /etc/ssh/sshd_config
+    chmod 600 /etc/ssh/sshd_config
+fi
 
 ssh-keygen -A >/dev/null 2>&1 || true
 
@@ -117,7 +133,9 @@ EOF
 
 # Console autologin on tty1 only; tty2..6 stay a normal login prompt.
 if grep -q '^tty1::' /etc/inittab 2>/dev/null; then
-    sed -i 's|^tty1::.*|tty1::respawn:/sbin/getty -n -l /bin/sh -L tty1 38400 vt100|' /etc/inittab
+    # busybox getty: [options] BAUD_RATE TTY [TERMTYPE] -- the tty goes after the
+    # baud rate, not before it.
+    sed -i 's|^tty1::.*|tty1::respawn:/sbin/getty -n -l /bin/sh -L 38400 tty1 vt100|' /etc/inittab
 fi
 
 # ---------------------------------------------------------------- accounts
@@ -132,6 +150,7 @@ passwd -l root >/dev/null 2>&1 || true
 rm -rf /var/cache/apk/* /tmp/* 2>/dev/null || true
 mkdir -p /var/cache/apk
 
+mkdir -p /etc/zmrig
 printf 'channel=%s\n' "$CHANNEL" > /etc/zmrig/channel
 
 say "chroot setup done"
