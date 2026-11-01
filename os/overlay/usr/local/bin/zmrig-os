@@ -1,0 +1,934 @@
+#!/bin/sh
+# zmrig-os - the control tool of the ZMRIG appliance image.
+#
+# Everything a rig needs lives here: the wallet wizard, the mining modes, the
+# supervisor, the health check and the updater. The image itself is read-only
+# (a squashfs mounted under a tmpfs overlay), so this file and the config it
+# writes are the only things that decide what the machine does.
+#
+#   zmrig-os setup               # the wizard: wallet, pool, mode, start
+#   zmrig-os setup --wallet 4... --pool host:port --mode max --start
+#   zmrig-os mode balanced       # max | balanced | eco | light
+#   zmrig-os status | logs 40 | bench 30 | doctor | autotune 8
+#   zmrig-os update --check | update --apply | update --iso --write /dev/sdX
+#   zmrig-os persist /dev/sdb1   # keep the config on a USB stick across boots
+#   zmrig-os ssh-key add         # paste an authorized_keys line
+#
+# Environment (used by the tests and by the boot scripts):
+#   ZMRIG_OS_ROOT=/tmp/x         # pretend the image root is /tmp/x
+#   ZMRIG_OS_BIN=/path/zmrig     # binary to run (default <root>/usr/local/bin/zmrig)
+#   ZMRIG_OS_DRYRUN=1            # print privileged changes instead of making them
+#
+# POSIX sh on purpose: the image has busybox ash, and the same script has to run
+# under dash in the test suite. `local` is the one extension used, and all three
+# of those shells accept it.
+#
+# shellcheck shell=sh disable=SC3043
+
+set -eu
+
+VERSION="6.34.0"
+MANIFEST_URL="https://github.com/NggKhaiz/ZMRIG/releases/latest/download"
+# A full URL wins over the derived one, so the test suite can serve a manifest
+# from a file:// path and a fleet can pin an exact release.
+MANIFEST_OVERRIDE="${ZMRIG_OS_MANIFEST_URL:-}"
+
+ROOT="${ZMRIG_OS_ROOT:-}"
+ETC="${ROOT}/etc/zmrig"
+CONF="${ETC}/os.conf"
+RUN="${ROOT}/run/zmrig"
+LOG="${ROOT}/var/log/zmrig.log"
+OSLOG="${ROOT}/var/log/zmrig-os.log"
+PIDFILE="${RUN}/zmrig.pid"
+ARGSFILE="${RUN}/args"
+DRYRUN="${ZMRIG_OS_DRYRUN:-0}"
+
+# Image defaults. src/config.zig of the installer is not involved here: an
+# appliance boots with no disk, so these are the values the wizard edits.
+POOL_DEFAULT="gulf.moneroocean.stream:10001"
+MODE_DEFAULT="max"
+DONATE_DEFAULT="1"
+
+say()  { printf '%s\n' "$*"; }
+
+# The image writes /etc/zmrig/version at build time; when it is there it wins, so
+# the tool and the ISO it shipped on can never disagree about the release.
+image_version() {
+    local v=""
+    [ -r "$ETC/version" ] && v=$(cat "$ETC/version" 2>/dev/null || true)
+    printf '%s' "${v:-$VERSION}"
+}
+warn() { printf 'warning: %s\n' "$*" >&2; }
+die()  { printf '%s\n' "$*" >&2; exit 1; }
+
+is_root() { [ "$(id -u)" = "0" ]; }
+
+# Path helper: empty ROOT means "the real filesystem", so `P /etc/x` is /etc/x.
+P() { printf '%s%s' "$ROOT" "$1"; }
+
+run() {
+    if [ "$DRYRUN" = "1" ]; then
+        printf 'dry-run: %s\n' "$*"
+        return 0
+    fi
+    "$@"
+}
+
+# ---------------------------------------------------------------- config
+
+conf_get() {
+    # Read one KEY=VALUE out of os.conf without sourcing it: a config file that
+    # can run shell code as root on boot is a config file that will eventually
+    # run the wrong shell code.
+    [ -f "$CONF" ] || { printf '%s' ""; return 0; }
+    sed -n "s/^$1=\"\{0,1\}\([^\"]*\)\"\{0,1\}$/\1/p" "$CONF" | tail -1
+}
+
+conf_default() {
+    local value
+    value=$(conf_get "$1")
+
+    if [ -z "$value" ]; then
+        printf '%s' "$2"
+    else
+        printf '%s' "$value"
+    fi
+}
+
+# Values from the kernel command line win over the file: a fleet is re-pointed by
+# editing one GRUB line, and a rig that boots from read-only media cannot be
+# edited at all.
+load_conf() {
+    local kc="${ETC}/kernel.conf"
+
+    WALLET=$(conf_default WALLET "")
+    POOL=$(conf_default POOL "$POOL_DEFAULT")
+    WORKER=$(conf_default WORKER "$(hostname 2>/dev/null || echo rig)")
+    MODE=$(conf_default MODE "$MODE_DEFAULT")
+    ALGO=$(conf_default ALGO "auto")
+    THREADS=$(conf_default THREADS "auto")
+    DONATE=$(conf_default DONATE "$DONATE_DEFAULT")
+    MSR=$(conf_default MSR "auto")
+    API_PORT=$(conf_default API_PORT "0")
+    API_HOST=$(conf_default API_HOST "127.0.0.1")
+    API_TOKEN=$(conf_default API_TOKEN "")
+    AUTO_REBOOT=$(conf_default AUTO_REBOOT "1")
+    CHANNEL=$(conf_default CHANNEL "stable")
+    EXTRA_ARGS=$(conf_default EXTRA_ARGS "")
+
+    if [ -f "$kc" ]; then
+        local v
+        v=$(_kc "$kc" WALLET);   [ -n "$v" ] && WALLET="$v"
+        v=$(_kc "$kc" POOL);     [ -n "$v" ] && POOL="$v"
+        v=$(_kc "$kc" WORKER);   [ -n "$v" ] && WORKER="$v"
+        v=$(_kc "$kc" MODE);     [ -n "$v" ] && MODE="$v"
+    fi
+}
+
+_kc() {
+    awk -F= -v k="$2" '$1 == k { v = substr($0, index($0, "=") + 1); gsub(/^"|"$/, "", v); out = v } END { print out }' "$1"
+}
+
+save_conf() {
+    mkdir -p "$ETC" 2>/dev/null || true
+    local tmp="${CONF}.new"
+
+    cat > "$tmp" <<EOF
+# ZMRIG OS configuration. Edited by \`zmrig-os setup\` and \`zmrig-os mode\`;
+# everything here survives a reboot only when a ZMRIGDATA partition is present
+# (\`zmrig-os persist /dev/sdX\`), because the image itself is read-only.
+WALLET="${WALLET}"
+POOL="${POOL}"
+WORKER="${WORKER}"
+MODE="${MODE}"
+ALGO="${ALGO}"
+THREADS="${THREADS}"
+DONATE="${DONATE}"
+MSR="${MSR}"
+API_PORT="${API_PORT}"
+API_HOST="${API_HOST}"
+API_TOKEN="${API_TOKEN}"
+AUTO_REBOOT="${AUTO_REBOOT}"
+CHANNEL="${CHANNEL}"
+EXTRA_ARGS="${EXTRA_ARGS}"
+EOF
+
+    # Deliberately not wrapped in `run`: ZMRIG_OS_DRYRUN exists to preview
+    # privileged system changes (mounts, dd, reboot), and writing the config is
+    # the one thing the wizard is *for*.
+    mv "$tmp" "$CONF"
+}
+
+# --------------------------------------------------------------- wallet
+
+# Monero addresses are 95 characters (4... standard, 8... subaddress) or 106
+# (integrated). Base58 as used by CryptoNote drops 0 O I l to survive being read
+# off a screen, so a typo like "0" or "l" is caught before it becomes a lost
+# share. Other coins in the matrix use the same alphabet with their own lengths,
+# and those are not checked beyond the alphabet: claiming to validate them would
+# be a lie the first time a Wownero address changed length.
+validate_wallet() {
+    local wallet="$1" algo="$2" len
+    len=${#wallet}
+
+    [ "$len" -ge 90 ] || return 1
+    case "$wallet" in
+        *[0OIl]*|*[!1-9A-HJ-NP-Za-km-z]*) return 1 ;;
+    esac
+
+    case "$algo" in
+        auto|rx/0|randomx|xmr|monero|"")
+            case "$len" in
+                95)
+                    case "$wallet" in 4*|8*) return 0 ;; *) return 1 ;; esac ;;
+                106)
+                    case "$wallet" in 4*|8*) return 0 ;; *) return 1 ;; esac ;;
+                *) return 1 ;;
+            esac ;;
+        *) return 0 ;;
+    esac
+}
+
+# ------------------------------------------------------------------ modes
+
+# What each mode means, in one place, because the docs quote this table:
+#
+#   max       every core the cache heuristic allows, high priority, MSR when the
+#             hardware allows it, full huge pages. The default.
+#   balanced  leaves one core for ssh and the log tail. On 2 cores that is not
+#             worth it, so it falls back to max until there are 4.
+#   eco       half the cores, watt profile: less power, less heat, most of the
+#             hashrate per watt.
+#   light     256 MiB cache mode, for boxes without 2.5 GiB of free RAM.
+mode_threads() {
+    local cores="$1"
+    case "$MODE" in
+        max)      printf '%s' "" ;;
+        balanced) if [ "$cores" -ge 4 ]; then printf '%s' "$((cores - 1))"; else printf '%s' ""; fi ;;
+        eco)      printf '%s' "$(( cores / 2 > 0 ? cores / 2 : 1 ))" ;;
+        light)    printf '%s' "" ;;
+        *)        printf '%s' "" ;;
+    esac
+}
+
+mode_priority() {
+    case "$MODE" in
+        max)      printf '%s' "5" ;;
+        balanced) printf '%s' "3" ;;
+        eco)      printf '%s' "1" ;;
+        *)        printf '%s' "2" ;;
+    esac
+}
+
+is_virtual() {
+    local product=""
+    [ -r /sys/class/dmi/id/product_name ] && product=$(cat /sys/class/dmi/id/product_name 2>/dev/null || true)
+    case "$product" in
+        *KVM*|*VirtualBox*|*VMware*|*QEMU*|*"Virtual Machine"*|*Bochs*|*Xen*|*Google*|*Amazon*|*Microsoft*|*Hetzner*|*OpenStack*) return 0 ;;
+    esac
+    return 1
+}
+
+msr_usable() {
+    is_root || return 1
+    is_virtual && return 1
+    [ -e /dev/cpu/0/msr ] || return 1
+    return 0
+}
+
+# The flags handed to the miner. Printed by `zmrig-os args` so the exact command
+# line can be copied into a bug report, and written to run/zmrig/args so the
+# supervisor and the doctor never disagree about it.
+build_args() {
+    local cores threads prio args=""
+
+    cores=$(nproc 2>/dev/null || echo 1)
+    threads="$THREADS"
+    [ "$threads" = "auto" ] && threads=$(mode_threads "$cores")
+    prio=$(mode_priority)
+
+    [ -n "$WALLET" ] || die "no wallet configured: run 'zmrig-os setup'"
+
+    args="-o $POOL -u $WALLET -p ${WORKER:-x} --donate-level ${DONATE:-$DONATE_DEFAULT}"
+    [ -n "$threads" ] && args="$args -t $threads"
+    [ "$ALGO" != "auto" ] && args="$args -a $ALGO"
+
+    case "$MODE" in
+        light) args="$args --mode light" ;;
+        eco)   args="$args --profile watt" ;;
+        *)     args="$args --profile free" ;;
+    esac
+
+    args="$args --priority $prio --health-restart 900 --print-time 60 --log-file $LOG"
+    [ -t 1 ] || args="$args --no-color"
+    if [ "${API_PORT:-0}" != "0" ]; then
+        args="$args --http-port $API_PORT --http-host $API_HOST"
+        [ -n "${API_TOKEN:-}" ] && args="$args --http-access-token $API_TOKEN"
+    fi
+
+    case "$MSR" in
+        on)  args="$args --msr" ;;
+        off) args="$args --no-msr" ;;
+        auto) msr_usable && args="$args --msr" || args="$args --no-msr" ;;
+    esac
+
+    [ -n "$EXTRA_ARGS" ] && args="$args $EXTRA_ARGS"
+
+    printf '%s' "$args"
+}
+
+# ------------------------------------------------------------------- run
+
+zmrig_bin() {
+    if [ -n "${ZMRIG_OS_BIN:-}" ]; then
+        printf '%s' "$ZMRIG_OS_BIN"
+    else
+        printf '%s' "$(P /usr/local/bin/zmrig)"
+    fi
+}
+
+running() {
+    [ -f "$PIDFILE" ] || return 1
+    local pid
+    pid=$(cat "$PIDFILE" 2>/dev/null || echo "")
+    [ -n "$pid" ] || return 1
+    kill -0 "$pid" 2>/dev/null
+}
+
+log_os() {
+    mkdir -p "$(dirname "$OSLOG")" 2>/dev/null || true
+    printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$OSLOG" 2>/dev/null || true
+    printf '%s\n' "$*"
+}
+
+rotate_logs() {
+    for f in "$LOG" "$OSLOG"; do
+        [ -f "$f" ] || continue
+        local size
+        size=$(wc -c < "$f" 2>/dev/null || echo 0)
+        if [ "$size" -gt 8388608 ]; then
+            run mv "$f" "$f.1"
+        fi
+    done
+}
+
+supervise() {
+    local bin args rc fails=0 started
+    bin=$(zmrig_bin)
+    [ -x "$bin" ] || die "miner binary not found: $bin"
+
+    mkdir -p "$RUN" "$(dirname "$LOG")" 2>/dev/null || true
+
+    if [ -e "$RUN/nostart" ]; then
+        log_os "not starting: zmrig.os.nostart=1 was on the kernel command line"
+        return 0
+    fi
+
+    while :; do
+        # Re-read the config on every restart: the wizard writes it while this
+        # loop is already running, and a fleet may rewrite it over ssh. Waiting
+        # for a wallet instead of exiting is what makes a headless first boot
+        # possible -- the service stays up until somebody configures it.
+        load_conf
+        if [ -z "$WALLET" ]; then
+            log_os "no wallet configured; waiting 30 s (zmrig-os setup, or zmrig.os.wallet= on the cmdline)"
+            sleep 30
+            continue
+        fi
+
+        rotate_logs
+        args=$(build_args)
+        printf '%s\n' "$args" > "$ARGSFILE"
+        started=$(date +%s)
+        log_os "start: $bin $args"
+        # shellcheck disable=SC2086
+        "$bin" $args &
+        child=$!
+        printf '%s\n' "$child" > "$PIDFILE"
+
+        set +e
+        wait "$child"
+        rc=$?
+        set -e
+
+        rm -f "$PIDFILE"
+        log_os "exit $rc after $(( $(date +%s) - started ))s"
+
+        # A clean 0 is the user stopping us. Anything else is a crash, a pool
+        # that stayed refused, or the health restart deciding the miner was
+        # wedged; all of those are worth retrying, and none of them are worth
+        # rebooting over until they happen five times in a row.
+        [ "$rc" = "0" ] && exit 0
+
+        fails=$((fails + 1))
+        if [ "$fails" -ge 5 ] && [ "${AUTO_REBOOT:-1}" = "1" ] && is_root; then
+            log_os "5 failed starts in a row; rebooting so the rig comes back unattended"
+            run sync
+            run reboot
+            exit 1
+        fi
+
+        log_os "restarting in 10 s (failure $fails)"
+        sleep 10
+    done
+}
+
+# --------------------------------------------------------------- commands
+
+cmd_setup() {
+    local wallet="" pool="" mode="" threads="" worker="" donate="" start=0 interactive=1
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --wallet)  wallet="${2:?}"; shift ;;
+            --wallet=*) wallet="${1#*=}" ;;
+            --pool)    pool="${2:?}"; shift ;;
+            --pool=*)  pool="${1#*=}" ;;
+            --mode)    mode="${2:?}"; shift ;;
+            --mode=*)  mode="${1#*=}" ;;
+            --threads|--threads=*) threads="${1#*=}"; [ "$threads" = "$1" ] && { threads="${2:?}"; shift; } ;;
+            --worker)  worker="${2:?}"; shift ;;
+            --worker=*) worker="${1#*=}" ;;
+            --donate|--donate=*)
+                # Parsed into a local, not into $DONATE: load_conf() runs after
+                # this loop and would put the old file value back.
+                donate="${1#*=}"
+                if [ "$donate" = "$1" ]; then donate="${2:?}"; shift; fi ;;
+            --start)   start=1 ;;
+            --yes|-y)  interactive=0 ;;
+            *) die "unknown option: $1" ;;
+        esac
+        shift
+    done
+
+    load_conf
+
+    # Non-interactive when any value was given on the command line, or when the
+    # caller asked for it. A fleet boot passes everything through the kernel
+    # command line, so it must never end up waiting at a prompt.
+    if [ -z "$wallet" ] && [ -z "$pool" ] && [ -z "$mode" ] && [ "$interactive" = "1" ] && [ -c /dev/tty ]; then
+        printf '\n ZMRIG OS setup\n ---------------\n\n'
+        printf 'Monero wallet address: '
+        read -r wallet < /dev/tty
+        printf 'Pool host:port [%s]: ' "$POOL_DEFAULT"
+        read -r pool < /dev/tty
+        printf 'Worker name [%s]: ' "$(hostname 2>/dev/null || echo rig)"
+        read -r worker < /dev/tty
+        printf 'Mode - max (all cores), balanced, eco, light [%s]: ' "$MODE_DEFAULT"
+        read -r mode < /dev/tty
+    fi
+
+    [ -n "$wallet" ] || die "a wallet address is required (--wallet)"
+    if ! validate_wallet "$wallet" "${ALGO:-auto}"; then
+        die "that is not a valid Monero address: 95 characters, base58, starting with 4 or 8"
+    fi
+
+    WALLET="$wallet"
+    [ -n "$pool" ] && POOL="$pool"
+    [ -n "$worker" ] && WORKER="$worker"
+    [ -n "$mode" ] && MODE="$mode"
+    [ -n "$threads" ] && THREADS="$threads"
+    [ -n "$donate" ] && DONATE="$donate"
+
+    case "$MODE" in
+        max|balanced|eco|light) ;;
+        *) die "unknown mode: $MODE (max, balanced, eco, light)" ;;
+    esac
+
+    save_conf
+    say "wallet  $WALLET"
+    say "pool    $POOL"
+    say "worker  $WORKER"
+    say "mode    $MODE"
+    say "saved to $CONF"
+
+    if [ "$start" = "1" ]; then
+        cmd_boot
+    fi
+}
+
+cmd_mode() {
+    local mode="${1:-}"
+    [ -n "$mode" ] || die "usage: zmrig-os mode max|balanced|eco|light"
+    load_conf
+
+    case "$mode" in
+        max|balanced|eco|light) ;;
+        *) die "unknown mode: $mode" ;;
+    esac
+
+    MODE="$mode"
+    save_conf
+    say "mode $MODE; $(build_args)"
+
+    if running; then
+        cmd_restart
+    fi
+}
+
+cmd_boot() {
+    # Everything the boot needs, in the order the kernel allows it: pages first
+    # while memory is still unfragmented, then the clock, then the miner.
+    load_conf
+    cmd_tune || warn "tuning reported a problem; mining anyway"
+
+    if [ -z "$WALLET" ]; then
+        if [ -c /dev/tty ] && [ -t 1 ]; then
+            cmd_setup || die "setup did not complete"
+        else
+            die "no wallet: pass zmrig.os.wallet=4... on the kernel command line or run 'zmrig-os setup'"
+        fi
+    fi
+
+    cmd_start
+}
+
+cmd_tune() {
+    local tune
+    tune=$(P /usr/local/lib/zmrig/tune-linux.sh)
+
+    if [ ! -x "$tune" ]; then
+        warn "no tuner at $tune"
+        return 1
+    fi
+
+    case "$MODE" in
+        eco)   run "$tune" --profile watt --thp madvise --swappiness 10 ;;
+        light) run "$tune" --hugepages off --thp always --swappiness 10 ;;
+        *)     run "$tune" --profile free --thp madvise --swappiness 1 ;;
+    esac
+}
+
+cmd_start() {
+    load_conf
+    if running; then
+        say "already mining (pid $(cat "$PIDFILE"))"
+        return 0
+    fi
+    mkdir -p "$RUN"
+    # Detached from the terminal so the command returns; the supervisor keeps
+    # its own log.
+    nohup "$0" run >>"$OSLOG" 2>&1 &
+    sleep 1
+    if running; then
+        say "started (pid $(cat "$PIDFILE"))"
+    else
+        say "start requested; see $OSLOG"
+    fi
+}
+
+cmd_stop() {
+    if running; then
+        local pid
+        pid=$(cat "$PIDFILE")
+        kill "$pid" 2>/dev/null || true
+        sleep 1
+        kill -9 "$pid" 2>/dev/null || true
+        rm -f "$PIDFILE"
+        say "stopped"
+    else
+        say "not running"
+    fi
+}
+
+cmd_restart() {
+    cmd_stop
+    sleep 1
+    cmd_start
+}
+
+last_rate() {
+    [ -f "$LOG" ] || { printf '?'; return 0; }
+    # "speed 10s/60s/15m 901.6 900.1 899.0 H/s max 950.0 H/s"
+    grep -a 'speed 10s/60s/15m' "$LOG" 2>/dev/null | tail -1 |
+        awk '{ for (i = 1; i <= NF; i++) if ($i == "H/s") { print $(i - 1); exit } }' |
+        { read -r rate || true; printf '%s' "${rate:-?}"; }
+}
+
+cmd_status() {
+    load_conf
+    local state="stopped" pid="-" rate
+    if running; then
+        state="mining"
+        pid=$(cat "$PIDFILE")
+    fi
+    rate=$(last_rate)
+
+    printf '%-14s %s\n' "state"    "$state"
+    printf '%-14s %s\n' "pid"      "$pid"
+    printf '%-14s %s\n' "hashrate" "$rate H/s"
+    printf '%-14s %s\n' "wallet"   "$(wallet_short)"
+    printf '%-14s %s\n' "pool"     "$POOL"
+    printf '%-14s %s\n' "worker"   "$WORKER"
+    printf '%-14s %s\n' "mode"     "$MODE"
+    printf '%-14s %s\n' "fee"      "${DONATE}% of Monero time (--donate-level=0 to turn off)"
+    printf '%-14s %s\n' "version"  "$(image_version) ($( "$(zmrig_bin)" --version 2>/dev/null | head -1 || echo 'miner not installed'))"
+}
+
+wallet_short() {
+    if [ -n "$WALLET" ]; then
+        printf '%s...%s' "$(printf '%s' "$WALLET" | cut -c1-8)" "$(printf '%s' "$WALLET" | tail -c 6)"
+    else
+        printf '(unset)'
+    fi
+}
+
+cmd_args() {
+    load_conf
+    printf '%s\n' "$(build_args)"
+}
+
+cmd_logs() {
+    local lines="${1:-40}"
+    [ -f "$LOG" ] || die "no log at $LOG yet"
+    tail -n "$lines" "$LOG"
+}
+
+cmd_bench() {
+    local seconds="${1:-30}" bin args
+    load_conf
+    bin=$(zmrig_bin)
+    args=$(build_args)
+    # A benchmark has to measure the same configuration the rig would mine, so
+    # it reuses the mode flags and only swaps the target for --bench.
+    args=$(printf '%s' "$args" | sed 's/ --health-restart [0-9]*//; s/ --print-time [0-9]*//')
+    # shellcheck disable=SC2086
+    exec "$bin" $args --bench=$(( seconds * 1000 ))
+}
+
+# Threads are the one setting where the best answer is machine-specific: the
+# cache heuristic assumes 2 MiB of L3 per thread, which is right for a stock
+# Ryzen and wrong for a machine with a small or uneven L3. zmrig can measure it
+# (`--autotune`), so the image offers that instead of asking the operator to
+# guess; the winning count is written to the config and survives restarts.
+cmd_autotune() {
+    local seconds="${1:-8}" bin args out best
+
+    load_conf
+    bin=$(zmrig_bin)
+    [ -x "$bin" ] || die "miner binary not found: $bin"
+
+    args=$(build_args)
+    # Drop the flags that make no sense for a benchmark, including -t: this
+    # command exists to choose it.
+    args=$(printf '%s' "$args" | sed 's/ -t [0-9]*//; s/ --health-restart [0-9]*//; s/ --print-time [0-9]*//')
+    args=$(printf '%s' "$args" | sed 's| --log-file [^ ]*||')
+
+    say "measuring this machine, ${seconds}s per candidate (this builds the dataset each time)"
+    # shellcheck disable=SC2086
+    out=$("$bin" $args --autotune="$seconds" 2>&1) || die "the autotune run failed"
+
+    printf '%s\n' "$out" | grep -E '^ *[0-9]+ |^best:|^autotune-best' || true
+    best=$(printf '%s\n' "$out" | sed -n 's/^autotune-best-threads=\([0-9]*\)$/\1/p' | tail -1)
+    [ -n "$best" ] || die "autotune printed no thread count"
+
+    THREADS="$best"
+    save_conf
+    say "pinned ${best} thread(s) in $CONF (THREADS=\"auto\" goes back to the heuristic)"
+}
+
+cmd_doctor() {
+    load_conf
+    local fails=0 warns=0 need_mb=2400 free_mb pages_need pages_have thp gov bin
+
+    check() { # status, name, detail
+        case "$1" in
+            ok)   printf '  PASS  %-22s %s\n' "$2" "$3" ;;
+            warn) printf '  WARN  %-22s %s\n' "$2" "$3"; warns=$((warns + 1)) ;;
+            *)    printf '  FAIL  %-22s %s\n' "$2" "$3"; fails=$((fails + 1)) ;;
+        esac
+    }
+
+    bin=$(zmrig_bin)
+    if [ -x "$bin" ]; then check ok binary "$($bin --version 2>/dev/null | head -1)"; else check fail binary "missing: $bin"; fi
+
+    if [ -n "$WALLET" ]; then
+        if validate_wallet "$WALLET" "$ALGO"; then check ok wallet "$(wallet_short)"; else check fail wallet "invalid for $ALGO"; fi
+    else
+        check fail wallet "not configured (zmrig-os setup)"
+    fi
+
+    free_mb=$(awk '/^MemTotal:/ { printf "%d", $2 / 1024 }' /proc/meminfo 2>/dev/null || echo 0)
+    [ "$MODE" = "light" ] && need_mb=400
+    if [ "$free_mb" -ge "$need_mb" ]; then
+        check ok memory "${free_mb} MB total, need ${need_mb} MB"
+    else
+        check fail memory "${free_mb} MB total, need ${need_mb} MB: use --mode light or a bigger box"
+    fi
+
+    pages_need=$(( need_mb / 2 + $(nproc 2>/dev/null || echo 1) * 2 + 8 ))
+    pages_have=$(awk '/^HugePages_Total:/ { print $2 }' /proc/meminfo 2>/dev/null || echo 0)
+    if [ "$MODE" = "light" ]; then
+        check ok hugepages "not needed in light mode"
+    elif [ "${pages_have:-0}" -ge "$pages_need" ]; then
+        check ok hugepages "${pages_have} x 2 MB reserved"
+    else
+        check warn hugepages "${pages_have:-0} of ${pages_need} x 2 MB reserved (THP will back the rest)"
+    fi
+
+    thp=$(cat /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null | sed 's/.*\[\(.*\)\].*/\1/' || echo unknown)
+    case "$thp" in
+        never) check fail thp "never: ~28% of the hashrate is lost (tune sets madvise)" ;;
+        always|madvise) check ok thp "$thp" ;;
+        *)     check warn thp "unknown policy: $thp" ;;
+    esac
+
+    gov=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo none)
+    case "$gov" in
+        performance) check ok governor "$gov" ;;
+        none)        check warn governor "no cpufreq driver (fixed-frequency CPU or a VM)" ;;
+        *)           check warn governor "$gov: 'zmrig-os tune' sets performance" ;;
+    esac
+
+    if msr_usable; then check ok msr "/dev/cpu/0/msr present"; else check warn msr "not applied (VM, or no msr module)"; fi
+
+    if [ -e /proc/swaps ] && [ "$(awk 'NR>1' /proc/swaps | wc -l)" -gt 0 ]; then
+        check warn swap "swap is active; mining memory should never be swapped"
+    else
+        check ok swap "off"
+    fi
+
+    # DNS is where a pool failure usually starts, and a rig that reports it here
+    # is a rig that does not need a site visit.
+    host=$(printf '%s' "$POOL" | sed 's|^[a-z]*://||; s|[:/].*||')
+    if [ -n "$host" ]; then
+        if command -v nslookup >/dev/null 2>&1 && nslookup "$host" >/dev/null 2>&1; then
+            check ok dns "$host resolves"
+        elif command -v getent >/dev/null 2>&1 && getent hosts "$host" >/dev/null 2>&1; then
+            check ok dns "$host resolves"
+        else
+            check warn dns "$host did not resolve (offline is fine; a rig that never resolves is not)"
+        fi
+    fi
+
+    if [ -x "$bin" ] && [ -n "$WALLET" ]; then
+        # shellcheck disable=SC2086
+        if out=$("$bin" $(build_args) --check 2>&1); then
+            check ok config "miner --check passed"
+        else
+            check fail config "$(printf '%s' "$out" | tail -1)"
+        fi
+        fee=$(printf '%s' "$out" 2>/dev/null | grep -a 'donate' | head -1 | sed 's/^ *//')
+        [ -n "${fee:-}" ] && check ok fee "$fee"
+    fi
+
+    printf '\n  %d failed, %d warnings\n' "$fails" "$warns"
+    [ "$fails" = "0" ]
+}
+
+# --------------------------------------------------------------- updater
+
+fetch() { # url -> stdout
+    local url="$1"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --max-time 30 "$url"
+    else
+        wget -q -T 30 -O - "$url"
+    fi
+}
+
+# The image was compiled for one instruction level, and a binary built for
+# x86-64-v3 faults on a v2 CPU. The updater therefore asks for the manifest that
+# matches this image, not for a generic one.
+image_arch() {
+    local a=""
+    [ -r "$ETC/arch" ] && a=$(cat "$ETC/arch" 2>/dev/null || true)
+    printf '%s' "${a:-x86-64-v3}"
+}
+
+manifest_url() {
+    if [ -n "$MANIFEST_OVERRIDE" ]; then
+        printf '%s' "$MANIFEST_OVERRIDE"
+        return 0
+    fi
+    printf '%s/zmrig-os-%s-%s.json' "$MANIFEST_URL" "$CHANNEL" "$(image_arch)"
+}
+
+version_gt() { # a b -> 0 when a is newer
+    [ "$1" = "$2" ] && return 1
+    [ "$(printf '%s\n%s\n' "$1" "$2" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" = "$1" ]
+}
+
+manifest_field() { # json key
+    grep -o "\"$1\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" | sed 's/.*:[[:space:]]*"//; s/"$//' | head -1
+}
+
+cmd_update() {
+    local mode="check" target="" write="" manifest latest current tmp url sha
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --check)  mode="check" ;;
+            --apply)  mode="apply" ;;
+            --binary) mode="binary" ;;
+            --iso)    mode="iso" ;;
+            --write)  write="${2:?}"; shift ;;
+            --write=*) write="${1#*=}" ;;
+            --channel) CHANNEL="${2:?}"; shift ;;
+            --channel=*) CHANNEL="${1#*=}" ;;
+            *) die "unknown option: $1" ;;
+        esac
+        shift
+    done
+
+    load_conf
+    CHANNEL=${CHANNEL:-stable}
+
+    manifest=$(fetch "$(manifest_url)") || die "cannot reach the update server ($(manifest_url))"
+    latest=$(printf '%s' "$manifest" | manifest_field version)
+    [ -n "$latest" ] || die "the update manifest is not readable"
+
+    current=$(image_version)
+    say "installed  $current"
+    say "available  $latest ($CHANNEL)"
+
+    if [ "$mode" = "check" ]; then
+        if version_gt "$latest" "$current"; then say "run 'zmrig-os update --apply' to install it"; fi
+        return 0
+    fi
+
+    case "$mode" in
+        binary|apply)
+            url=$(printf '%s' "$manifest" | manifest_field binary_url)
+            sha=$(printf '%s' "$manifest" | manifest_field binary_sha256)
+            [ -n "$url" ] || die "the manifest has no binary for this channel"
+            tmp="${RUN}/zmrig.new"
+            mkdir -p "$RUN"
+            say "downloading $url"
+            fetch "$url" > "$tmp" || die "download failed"
+            verify_sha "$tmp" "$sha" || die "checksum mismatch: refusing to install"
+            chmod +x "$tmp"
+            # The image is read-only; the running binary lives on the tmpfs
+            # overlay. Replacing it here means the fix applies now and is lost at
+            # the next reboot, which is exactly what "reboot to roll back" means.
+            run mv "$tmp" "$(P /usr/local/bin/zmrig)"
+            say "installed $(P /usr/local/bin/zmrig)"
+            if running; then cmd_restart; fi
+            ;;
+    esac
+
+    if [ "$mode" = "iso" ] || [ -n "$write" ]; then
+        [ -n "$write" ] || die "--write /dev/sdX is required to flash an image"
+        url=$(printf '%s' "$manifest" | manifest_field iso_url)
+        sha=$(printf '%s' "$manifest" | manifest_field iso_sha256)
+        target="${ROOT}/var/tmp/zmrig-os.iso"
+        mkdir -p "$(dirname "$target")"
+        say "downloading $url"
+        fetch "$url" > "$target" || die "download failed"
+        verify_sha "$target" "$sha" || die "checksum mismatch: refusing to write"
+
+        # Writing the stick you booted from turns a running rig into a brick.
+        case "$write" in
+            /dev/sr*|/dev/loop*) die "refusing to write to $write" ;;
+        esac
+        if [ -r "$ETC/bootdev" ] && [ "$(cat "$ETC/bootdev")" = "$write" ]; then
+            die "refusing to overwrite the device this machine booted from"
+        fi
+
+        say "writing $target to $write (this destroys it)"
+        run dd if="$target" of="$write" bs=4M status=none conv=fsync
+        run sync
+        say "done: reboot from $write"
+    fi
+}
+
+verify_sha() { # file expected
+    local file="$1" expected="$2" actual
+    [ -n "$expected" ] || return 0
+    actual=$(sha256sum "$file" | cut -d' ' -f1)
+    [ "$actual" = "$expected" ]
+}
+
+# --------------------------------------------------------------- helpers
+
+cmd_persist() {
+    local device="${1:-}"
+    [ -n "$device" ] || die "usage: zmrig-os persist /dev/sdX1"
+    is_root || die "run as root"
+    case "$device" in /dev/*) ;; *) die "not a device path: $device" ;; esac
+
+    load_conf
+    say "formatting $device as ext4, label ZMRIGDATA"
+    run mkfs.ext4 -q -L ZMRIGDATA "$device" || die "mkfs failed (is it mounted?)"
+
+    local mnt="${ROOT}/mnt/persist"
+    run mkdir -p "$mnt"
+    run mount "$device" "$mnt" || die "mount failed"
+    run mkdir -p "${mnt}/etc/zmrig"
+    run cp "$CONF" "${mnt}/etc/zmrig/os.conf" 2>/dev/null || true
+    run umount "$mnt"
+    say "config copied; the image will mount it at /etc/zmrig on the next boot"
+}
+
+cmd_ssh_key() {
+    # sshd reads /root/.ssh/authorized_keys, not a file of our invention.
+    local action="${1:-list}" key_dir="${ROOT}/root/.ssh" key_file="${ROOT}/root/.ssh/authorized_keys"
+
+    case "$action" in
+        add)
+            mkdir -p "$key_dir"
+            if [ -t 0 ]; then
+                say "paste the public key (ssh-ed25519 AAAA... comment), then Enter:"
+                read -r key
+            else
+                read -r key
+            fi
+            case "$key" in
+                ssh-*|ecdsa-*) ;;
+                *) die "that does not look like a public key" ;;
+            esac
+            printf '%s\n' "$key" >> "$key_file"
+            chmod 600 "$key_file"
+            say "added; 'rc-service sshd start' enables the server"
+            ;;
+        list)
+            [ -f "$key_file" ] && cat "$key_file" || say "no keys configured"
+            ;;
+        *) die "usage: zmrig-os ssh-key add|list" ;;
+    esac
+}
+
+cmd_export() {
+    load_conf
+    cat "$CONF"
+}
+
+cmd_version() {
+    printf 'ZMRIG OS %s\n' "$(image_version)"
+    if [ -x "$(zmrig_bin)" ]; then "$(zmrig_bin)" --version 2>/dev/null | head -1; fi
+}
+
+usage() {
+    sed -n '3,26p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+main() {
+    local cmd="${1:-status}"
+    [ $# -gt 0 ] && shift
+
+    case "$cmd" in
+        setup)    cmd_setup "$@" ;;
+        mode)     cmd_mode "$@" ;;
+        boot)     cmd_boot "$@" ;;
+        tune)     cmd_tune "$@" ;;
+        start)    cmd_start "$@" ;;
+        stop)     cmd_stop "$@" ;;
+        restart)  cmd_restart "$@" ;;
+        run)      supervise "$@" ;;
+        args)     cmd_args "$@" ;;
+        status)   cmd_status "$@" ;;
+        logs)     cmd_logs "$@" ;;
+        bench)    cmd_bench "$@" ;;
+        doctor)   cmd_doctor "$@" ;;
+        autotune) cmd_autotune "$@" ;;
+        update)   cmd_update "$@" ;;
+        persist)  cmd_persist "$@" ;;
+        ssh-key)  cmd_ssh_key "$@" ;;
+        export)   cmd_export "$@" ;;
+        version|-V|--version) cmd_version ;;
+        help|-h|--help) usage ;;
+        *) die "unknown command: $cmd (try 'zmrig-os help')" ;;
+    esac
+}
+
+main "$@"

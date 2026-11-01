@@ -25,6 +25,12 @@ const sidebars = {
     },
     {
       type: "category",
+      label: "Appliance",
+      collapsible: true,
+      items: ["appliance/iso"],
+    },
+    {
+      type: "category",
       label: "Configure",
       collapsible: true,
       items: ["configure/config-file", "configure/cli"],

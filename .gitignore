@@ -24,6 +24,10 @@ __pycache__/
 /proxy/wg
 /wg
 
+# appliance image: build output and the scratch tree (root-only, tens of GB)
+/os/out
+/os/.build
+
 # docs site: dependencies and build output (the published copy lives at the root)
 /site/node_modules
 /site/build

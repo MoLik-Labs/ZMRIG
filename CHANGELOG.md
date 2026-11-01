@@ -1,3 +1,63 @@
+# Unreleased — ZMRIG OS: a miner you boot instead of install
+
+A rig should not be a general-purpose computer. `os/` now builds a bootable
+image — GRUB (BIOS and UEFI), a kernel, a 10 MB initramfs and a read-only Alpine
+root filesystem with `zmrig` in it — and `os/ci/appliance.yml` rebuilds it
+on every change, boots it in QEMU, and publishes every version. The workflow sits
+outside `.github/workflows/` on purpose: installing a workflow file needs a token
+with the `workflows` scope, and the automation account that writes this
+repository does not have it. `cp os/ci/appliance.yml .github/workflows/os.yml` is
+the whole installation.
+
+### The image
+- **Live, not an installer.** The initramfs finds `rootfs.squashfs` on the media,
+  stacks a tmpfs over it and hands over to OpenRC. Nothing is written to any
+  disk and nothing on the stick is modified.
+- **Huge pages are reserved before userspace starts.** On a rig that has been up
+  for a week the kernel cannot find 1168 contiguous 2 MiB pages, and the miner
+  silently drops to transparent huge pages; reserving in the initramfs is the
+  +4–6 % that `doc/PERFORMANCE.md` measures, and it costs nothing.
+- **The rest of the system is tuned the same way**, line by line, in
+  `/etc/sysctl.d/99-zmrig.conf`: `swappiness=1` (never page out a 2.3 GiB
+  dataset), write-back throttled, 64 MiB kept free, `zone_reclaim_mode=0`, NMI
+  watchdog off, TCP keepalive shortened so a dead pool is noticed in a minute.
+- **Static miner**: `zmrig/build.sh --static` cross-compiles the whole engine with
+  `zig cc` against musl (`--arch x86-64-v3|v2`), producing one 19 MB file with no
+  libc dependency. Verified: `--self-test` passes and `--bench=3000` gives
+  889–902 H/s against 886–957 for the native build on the same host, i.e. static
+  costs nothing measurable.
+- **A control tool instead of a hundred instructions** (`zmrig-os`, POSIX sh):
+  `setup`, `mode`, `status`, `logs`, `bench`, `doctor`, `update`, `persist`,
+  `ssh-key`, `boot`, `args`. 53 tests, no root, no miner, no network.
+- **Four modes** — `max`, `balanced`, `eco`, `light` — as config, as a command
+  (`zmrig-os mode eco`), and as separate GRUB entries so a headless rig can be
+  switched with a keyboard and no network.
+- **Fleet without a fleet tool**: `zmrig.os.wallet=`, `zmrig.os.pool=`,
+  `zmrig.os.worker=`, `zmrig.os.mode=` and `zmrig.os.data=` on the kernel command
+  line; a wallet there skips the wizard entirely.
+- **Persistence** where you want it: a partition labelled `ZMRIGDATA` keeps
+  `os.conf` and the ssh key across boots; without one, the image stays read-only
+  and RAM-only.
+- **Verified updates**: `zmrig-os update --apply` downloads the static binary for
+  this image's instruction level, checks sha256, and moves it into the running
+  overlay (reboot = rollback). `--iso --write /dev/sdX` flashes a new image and
+  refuses the device it booted from.
+- **Security stated plainly**: console autologin (the wizard needs a console),
+  ssh key-only with no password auth, no package manager at runtime, no
+  telemetry, fee printed everywhere and switchable off.
+
+### Build and CI
+- `os/build-iso.sh` (`--plan`, `--self-check`, `--smoke`, `--arch`, `--kernel`,
+  `--clean`), `os/deps.sh`, `os/smoke-qemu.sh`, `os/tests/control.sh`.
+- `build.sh` grew `--static` and `--arch=`, and its object cache now keys on the
+  real compiler flags and mode. It used to hash three arrays that were still
+  empty at that point, so `--static` in an existing output directory reused the
+  native objects and failed at link time with `__gxx_personality_v0`.
+- The workflow boots the finished ISO in QEMU and requires
+  `ZMRIG-OS: ready` on the serial console, then publishes the ISO, its checksum
+  and a per-architecture manifest for the updater. Releases keep every past
+  version; `BETA` publishes a rolling pre-release.
+
 # Unreleased — the fee is real, visible, and switchable off
 
 The miner was fee-free by construction, which was easy to verify and impossible

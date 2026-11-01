@@ -8,11 +8,11 @@
 
 by **[@nggkhaiz](https://github.com/NggKhaiz)**
 
-[![release](https://img.shields.io/badge/release-6.33.0-f2763f)](CHANGELOG.md)
+[![release](https://img.shields.io/badge/release-6.34.0-f2763f)](CHANGELOG.md)
 [![licence](https://img.shields.io/badge/licence-GPL--3.0-blue)](LICENSE)
 [![dev fee](https://img.shields.io/badge/developer%20fee-1%25%20%C2%B7%20off%20switch-f2763f)](doc/FEE.md)
 [![platform](https://img.shields.io/badge/platform-Linux%20x86--64%20%C2%B7%20macOS%20%C2%B7%20Windows-lightgrey)](#build-from-source)
-[![tests](https://img.shields.io/badge/tests-478%20checks%20%C2%B7%2011%20suites-46b17b)](#tests)
+[![tests](https://img.shields.io/badge/tests-538%20checks%20%C2%B7%2012%20suites-46b17b)](#tests)
 [![stars](https://img.shields.io/github/stars/NggKhaiz/ZMRIG?style=flat&color=f2763f)](https://github.com/NggKhaiz/ZMRIG/stargazers)
 [![last commit](https://img.shields.io/github/last-commit/NggKhaiz/ZMRIG)](https://github.com/NggKhaiz/ZMRIG/commits/BETA)
 
@@ -29,6 +29,7 @@ ZMRIG is a complete Monero mining setup, not a loose collection of scripts:
 | **Miner** — `src/`, `zmrig/`, `oneclick.sh` | XMRig `6.26.0` fork with every line of donation code removed, plus a complete Zig miner on the same RandomX engine | **1 %** of Monero time on the Zig engine, printed and switchable off; the C++ engine has no fee code at all |
 | **Proxy** — `proxy/` | One pool connection for a farm: extranonce per rig, per-rig difficulty, tunnels for rigs in another building | free |
 | **Pool** — `pool/`, `worker/`, `deploy/` | Self-hosted Monero pool: stratum over TCP and WebSocket, PPLNS, every share re-hashed before it is paid | 1 % of each block, and nothing else |
+| **Image** — `os/` | A bootable ZMRIG OS: kernel, read-only Alpine root, `zmrig`, a wallet wizard, four hashrate modes, verified updates, and CI that rebuilds the ISO on every change | free |
 | **Docs** — `site/` | Docusaurus site: command builder, profitability calculator, pool table, every guide — English and Vietnamese | free to host |
 
 Point the miner at any pool. If you point it at the pool in this repository,
@@ -42,6 +43,7 @@ anywhere in it.
 
 [What makes it different](#what-makes-it-different) ·
 [Install](#install-in-one-command) ·
+[Bootable image](#bootable-image) ·
 [Check the fee](#check-the-fee) ·
 [Pools, and not getting banned](#pools-and-not-getting-banned) ·
 [Farms](#farms-one-connection) ·
@@ -142,6 +144,43 @@ See every automatic decision and its reason without touching the machine:
 ```bash
 ./oneclick.sh plan
 ```
+
+## Bootable image
+
+A machine you only mine on should not be a general-purpose computer. Write this
+image to a USB stick, boot the rig, paste your wallet:
+
+```bash
+sudo dd if=zmrig-os-<version>-x86-64-v3.iso of=/dev/sdX bs=4M status=progress conv=fsync
+```
+
+It is a live image, not an installer: nothing is written to any disk, the stick
+is never modified, and pulling it out leaves the machine exactly as it was.
+
+- **Tuned by construction.** 2 MiB pages are reserved by the initramfs before any
+  userspace program has fragmented memory (+4–6 % over transparent huge pages),
+  THP stays on, the governor is `performance`, `swappiness=1`, write-back
+  throttled, NMI watchdog off — and nothing else runs on the box.
+- **Four modes**, changeable without a reboot: `max`, `balanced`, `eco`, `light`.
+  Each one also has its own GRUB entry, so a machine with no keyboard and no
+  network can still be switched.
+- **Stable on purpose:** the miner exits on a stall, the supervisor restarts it,
+  five failed starts reboot the box, logs rotate, chrony keeps the clock.
+- **Updates are verified:** `zmrig-os update --apply` swaps in a sha256-checked
+  static binary inside the running image; reboot and you are back on the version
+  burned into the stick, which is the entire rollback story.
+- **Two builds** — `x86-64-v3` (AVX2) and `x86-64-v2` (everything since Nehalem) —
+  rebuilt by CI whenever `os/`, `zmrig/` or the tuner changes, with every past
+  version kept. The workflow is `os/ci/appliance.yml`; install it with
+  `cp os/ci/appliance.yml .github/workflows/os.yml` (see [`doc/OS.md`](doc/OS.md#ci)). `os/smoke-qemu.sh` boots the finished ISO in QEMU and fails
+  unless it reaches userspace, so the claim is "it boots", not "it builds".
+
+`zmrig-os status`, `mode`, `logs`, `bench 30`, `doctor`, `update`, `ssh-key` and
+`autotune`, `persist` are the whole interface; `doc/OS.md` is the operator manual and
+[docs/appliance/iso](https://nggkhaiz.github.io/ZMRIG/docs/appliance/iso) is the
+guide.
+
+---
 
 ## Check the fee
 
@@ -321,6 +360,7 @@ downclock. `./oneclick.sh install` does all four.
 ```
 oneclick.sh            installer: build, tune, config, service, verify, purge
 zmrig/                 the Zig miner (build.sh, src/, tests/, capi/ bindings)
+os/                    the bootable image (initramfs init, Alpine chroot, zmrig-os, CI)
 src/                   the C++ miner (XMRig 6.26.0, donation code removed)
 proxy/                 one pool connection for a farm (node, no dependencies)
 pool/                  self-hosted Monero pool (node, no dependencies)
@@ -337,13 +377,14 @@ NOTICE                 attribution and upstream lineage
 
 ## Tests
 
-Eleven suites, no mocks where a socket will do. Run them all:
+Twelve suites, no mocks where a socket will do. Run them all:
 
 ```bash
 sudo apt install -y build-essential cmake nodejs python3   # once
 ./zmrig/build.sh --jobs 2
 cd site && npm install && cd ..          # once, for the docs site tests
 npm install --no-save jsdom                # once, for the archived site's tests
+./os/tests/control.sh                      # the appliance tool (no root)
 npm run test:web && npm run test:pool && npm run test:oneclick
 npm run test:site && npm run test:docs && npm run test:pages
 cd proxy && npm test
@@ -356,14 +397,15 @@ cd .. && ./zmrig/tests/unit.sh && ./zmrig/tests/cli.sh && ./zmrig/tests/health.s
 | `web` `node --test legacy/tests/` | 57 | the archived site: wizard and builder produced the same command, pool table matched `oneclick.sh`, branch names, donation address |
 | `proxy` `npm test` | 60 | extranonce allocation, vardiff, real sockets, WebSocket rig, banned pool left alone |
 | `pool` `npm test` | 29 | PPLNS in BigInt, share verification, payouts, audit log, end-to-end with a real miner |
-| `zmrig/tests/unit.sh` | 17 modules | options, hashing, health, report codes, stratum parsing, proxy handshakes, and the per-algorithm memory rule |
-| `zmrig/tests/cli.sh` | 43 | flags, exit codes, `--help` covers the parser, `--check` reports the memory of the coin it was asked about and which huge-page mechanism backs it |
+| `zmrig/tests/unit.sh` | 18 modules | options, hashing, health, report codes, stratum parsing, proxy handshakes, and the per-algorithm memory rule |
+| `zmrig/tests/cli.sh` | 49 | flags, exit codes, `--help` covers the parser, `--check` reports the memory of the coin it was asked about and which huge-page mechanism backs it |
 | `zmrig/tests/net.sh` | 29 | TCP/TLS/WS/WSS against a fake pool, ban and refusal handling, failover, seed change |
 | `zmrig/tests/health.sh` | 7 | the watchdog, both directions: an honest pool is not a fault, an all-reject pool is |
 | `tests/oneclick/*.sh` | 63 | plan, config, governor, purge (removes only its own paths), branch switching, `--coin` mapping and the algorithm-name guard |
-| `tests/docs/links.sh` | 84 | every relative link and every `#anchor` in the documentation resolves, including `/docs/…` site routes |
+| `tests/docs/links.sh` | 89 | every relative link and every `#anchor` in the documentation resolves, including `/docs/…` site routes |
 | `site` `npm test` | 67 | command builder and its blocked states, calculator arithmetic against hand-computed numbers including break-even, pool table vs `oneclick.sh` and `doc/POOLS.md`, coin matrix and ranking (a missing number is never a zero, no invented pool or price), en/vi key parity and no dead or duplicated message |
-| `tests/docs/pages.sh` | 22 | the published site as Pages serves it: Docusaurus entry point, 22 pages in both locales, all 2146 local `href`/`src`, both sitemaps, language and theme controls, one localised social card per page, a title/description/lang on every page with no leaked placeholder, old-URL redirects, committed build not stale |
+| `tests/docs/pages.sh` | 22 | the published site as Pages serves it: Docusaurus entry point, 23 sidebar pages in both locales, all 2494 local `href`/`src`, both sitemaps, language and theme controls, one localised social card per page, a title/description/lang on every page with no leaked placeholder, old-URL redirects, committed build not stale |
+| `os/tests/control.sh` | 66 | the appliance tool: wallet validation (length, base58 alphabet, prefix), a command line per mode, kernel-command-line overrides, the supervisor waiting for a wallet, and an updater that refuses a checksum mismatch — all with no root, no miner and no network |
 
 ## Documentation
 
@@ -378,6 +420,9 @@ cd .. && ./zmrig/tests/unit.sh && ./zmrig/tests/cli.sh && ./zmrig/tests/health.s
   [Tiếng Việt](https://nggkhaiz.github.io/ZMRIG/vi/docs/intro): install guide,
   command builder, [profitability calculator](https://nggkhaiz.github.io/ZMRIG/docs/economics/profitability),
   pools, fleet, benchmarks, architecture, testing.
+* [`doc/OS.md`](doc/OS.md) — the bootable image: boot sequence, modes, the
+  sysctl lines and why each one is there, persistence, updates, CI, and the
+  troubleshooting table.
 * [`doc/PERFORMANCE.md`](doc/PERFORMANCE.md) · [`doc/BENCHMARKS.md`](doc/BENCHMARKS.md)
   — every lever that affects hashrate, with the measurements.
 * [`doc/POOLS.md`](doc/POOLS.md) — pool fees and policies, and how to keep

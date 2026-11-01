@@ -1,0 +1,19 @@
+# Copy to /etc/zmrig/os.conf, or run `zmrig-os setup`, which writes this file.
+#
+# The image is read-only, so this file lives on the tmpfs overlay and is lost on
+# reboot unless a ZMRIGDATA partition exists (`zmrig-os persist /dev/sdX1`) or the
+# values come from the kernel command line (zmrig.os.wallet=4...).
+WALLET=""
+POOL="gulf.moneroocean.stream:10001"
+WORKER="rig"
+MODE="max"
+ALGO="auto"
+THREADS="auto"
+DONATE="1"
+MSR="auto"
+API_PORT="0"
+API_HOST="127.0.0.1"
+API_TOKEN=""
+AUTO_REBOOT="1"
+CHANNEL="stable"
+EXTRA_ARGS=""

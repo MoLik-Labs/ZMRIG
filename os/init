@@ -1,0 +1,213 @@
+#!/bin/sh
+# ZMRIG OS init - PID 1 of the initramfs.
+#
+# The image has no installer and no disk. This script finds the root filesystem
+# on whatever media the machine booted from (CD, DVD or USB), puts a tmpfs over
+# it so the running system can be written to without touching the stick, and
+# hands control to OpenRC. Everything it decides is printed with a
+# "ZMRIG-OS:" prefix so a serial console, a screenshot or a CI log can all be
+# read without guessing where boot stopped.
+#
+# Kernel command line (all optional):
+#   zmrig.os.mode=max|balanced|eco|light   mining mode for the first boot
+#   zmrig.os.wallet=4...                   wallet, skips the wizard
+#   zmrig.os.pool=host:port                pool override
+#   zmrig.os.worker=name                   worker name
+#   zmrig.os.hugepages=N                   0 disables the reservation
+#   zmrig.os.data=/dev/sdX1                partition that keeps the config
+#   zmrig.os.debug=1                       shell instead of the miner
+#   zmrig.os.nostart=1                     boot, but do not mine
+#
+# The same values are read by `zmrig-os` once the system is up, so a fleet can
+# be pointed at a new pool by editing one GRUB line.
+
+set -eu
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+export HOME=/
+
+LOGDEV=/dev/console
+log() { printf 'ZMRIG-OS: %s\n' "$*" > "$LOGDEV" 2>/dev/null || true; }
+fatal() { log "FATAL: $*"; exec /bin/sh; }
+
+CMDLINE=$(cat /proc/cmdline)
+
+getarg() { # key -> value, empty when absent
+    for word in $CMDLINE; do
+        case "$word" in
+            "$1"=*) printf '%s' "${word#*=}"; return 0 ;;
+        esac
+    done
+    printf '%s' ""
+}
+
+MODE=$(getarg zmrig.os.mode)
+WALLET=$(getarg zmrig.os.wallet)
+POOL=$(getarg zmrig.os.pool)
+WORKER=$(getarg zmrig.os.worker)
+HUGEPAGES=$(getarg zmrig.os.hugepages)
+DATA=$(getarg zmrig.os.data)
+DEBUG=$(getarg zmrig.os.debug)
+NOSTART=$(getarg zmrig.os.nostart)
+
+# ------------------------------------------------------------ early mounts
+mount -t proc     proc /proc     2>/dev/null || true
+mount -t sysfs    sys  /sys      2>/dev/null || true
+mount -t devtmpfs dev  /dev      2>/dev/null || devtmpfs_missing=1
+if [ "${devtmpfs_missing:-0}" = "1" ]; then
+    mount -t tmpfs tmpfs /dev
+    mdev -s 2>/dev/null || true
+fi
+mkdir -p /run /tmp /media /newroot /root-ro /overlay
+mount -t tmpfs -o mode=0755 tmpfs /run
+mkdir -p /run/zmrig
+
+# ------------------------------------------------------------ modules
+# The initramfs carries the modules needed to reach the media. Everything else
+# lives in the squashfs and is available once the real root is mounted.
+for mod in loop squashfs overlay isofs sr_mod sd_mod usb-storage ahci libahci \
+           nvme virtio_blk virtio_pci virtio_scsi xhci-pci ehci-pci uhci-hcd; do
+    modprobe -q "$mod" 2>/dev/null || true
+done
+
+# Devices that only have a modalias (a NIC, a USB-to-SATA bridge) are matched
+# against the kernel's own alias table instead of a hand-written list.
+if [ -d /sys/bus/pci/devices ]; then
+    for uevent in /sys/bus/pci/devices/*/uevent; do
+        [ -r "$uevent" ] || continue
+        alias=$(sed -n 's/^MODALIAS=//p' "$uevent" 2>/dev/null | head -1)
+        [ -n "${alias:-}" ] && modprobe -q "$alias" 2>/dev/null || true
+    done
+fi
+
+# ------------------------------------------------------------ find the media
+find_rootfs() {
+    local dev name mounted
+
+    for sysdev in /sys/class/block/*; do
+        name=$(basename "$sysdev")
+        case "$name" in loop*|ram*|zram*|dm-*|md*) continue ;; esac
+        dev="/dev/$name"
+        [ -e "$dev" ] || continue
+
+        for fs in iso9660 vfat ext4; do
+            if mount -t "$fs" -o ro "$dev" /media 2>/dev/null; then
+                if [ -f /media/zmrig/rootfs.squashfs ]; then
+                    log "root filesystem on $dev ($fs)"
+                    MEDIA_DEV="$dev"
+                    return 0
+                fi
+                umount /media
+            fi
+        done
+    done
+
+    return 1
+}
+
+MEDIA_DEV=""
+find_rootfs || fatal "no ZMRIG root filesystem found on any disk, CD or USB device"
+
+# ------------------------------------------------------------ memory pages
+# Reserved before anything else runs: the kernel hands out 2 MiB pages while the
+# free memory is still one contiguous block, which is the cheapest moment to ask
+# and the moment that actually succeeds on a rig that has been up for a week.
+reserve_pages() {
+    local mem_mb need_mb pages existing want
+
+    [ "$(cat /proc/sys/vm/nr_hugepages 2>/dev/null || echo 0)" != "0" ] && return 0
+    mem_mb=$(awk '/^MemTotal:/ { printf "%d", $2 / 1024 }' /proc/meminfo)
+    need_mb=2400
+    [ "$MODE" = "light" ] && need_mb=400
+
+    if [ "$mem_mb" -lt $(( need_mb + 512 )) ]; then
+        log "memory: ${mem_mb} MB, not reserving pages for ${need_mb} MB (light mode keeps the rig usable)"
+        return 0
+    fi
+
+    if [ -n "$HUGEPAGES" ]; then
+        want="$HUGEPAGES"
+    else
+        # chunk = cache + dataset + one scratchpad per thread + a little slack
+        want=$(( (need_mb + 64) / 2 ))
+    fi
+
+    [ "$want" = "0" ] && { log "huge pages: reservation disabled by cmdline"; return 0; }
+
+    printf '%s' "$want" > /proc/sys/vm/nr_hugepages 2>/dev/null || true
+    existing=$(awk '/^HugePages_Total:/ { print $2 }' /proc/meminfo)
+    log "huge pages: ${existing:-0} x 2 MB reserved before userspace started"
+
+    if [ "${existing:-0}" -lt "$want" ]; then
+        log "warning: wanted $want pages, kernel reserved ${existing:-0}: memory is fragmented or too small"
+    fi
+}
+
+[ "$MODE" = "light" ] || reserve_pages
+
+# ------------------------------------------------------------ root + overlay
+mount -t squashfs -o ro "/media/zmrig/rootfs.squashfs" /root-ro || fatal "cannot mount the squashfs"
+
+# The upper layer is where the running system writes: logs, the wallet file, a
+# binary installed by `zmrig-os update`. A tmpfs costs nothing until it is used,
+# and it means a full root filesystem cannot fill the USB stick it booted from.
+mount -t tmpfs -o mode=0755 tmpfs /overlay
+mkdir -p /overlay/upper /overlay/work
+mount -t overlay overlay \
+      -o "lowerdir=/root-ro,upperdir=/overlay/upper,workdir=/overlay/work" \
+      /newroot || fatal "cannot stack the overlay"
+
+mkdir -p /newroot/run/zmrig /newroot/etc/zmrig /newroot/var/log
+
+# Where the updater refuses to write. It lives in /etc, not /run: OpenRC mounts a
+# fresh tmpfs over /run once it starts, and the marker would disappear with it.
+printf '%s' "$MEDIA_DEV" > /newroot/etc/zmrig/bootdev 2>/dev/null || true
+
+# ------------------------------------------------------------ configuration
+# Order of precedence, lowest to highest: the copy baked into the image, the
+# copy next to the rootfs on the stick, a ZMRIGDATA partition, the cmdline.
+if [ -f /media/zmrig/os.conf ]; then
+    cp /media/zmrig/os.conf /newroot/etc/zmrig/os.conf
+    log "config: os.conf from the boot media"
+fi
+
+if [ -n "$DATA" ]; then
+    if mount -t ext4 -o rw "$DATA" /media 2>/dev/null; then
+        if [ -f /media/etc/zmrig/os.conf ]; then
+            cp /media/etc/zmrig/os.conf /newroot/etc/zmrig/os.conf
+            log "config: os.conf from $DATA (persistent)"
+        fi
+        umount /media
+    else
+        log "warning: $DATA could not be mounted; the config will not persist"
+    fi
+fi
+
+if [ -n "$WALLET$POOL$WORKER$MODE" ]; then
+    {
+        [ -n "$WALLET" ] && printf 'WALLET="%s"\n' "$WALLET"
+        [ -n "$POOL" ] && printf 'POOL="%s"\n' "$POOL"
+        [ -n "$WORKER" ] && printf 'WORKER="%s"\n' "$WORKER"
+        [ -n "$MODE" ] && printf 'MODE="%s"\n' "$MODE"
+    } > /newroot/etc/zmrig/kernel.conf
+    log "config: overrides from the kernel command line"
+fi
+
+# The command line, so `zmrig-os doctor` can show what the machine was told.
+cp /proc/cmdline /newroot/etc/zmrig/cmdline 2>/dev/null || true
+
+# ------------------------------------------------------------ hand over
+if [ "$DEBUG" = "1" ]; then
+    log "debug=1: dropping to a shell before switch_root"
+    exec /bin/sh
+fi
+
+if [ "$NOSTART" = "1" ]; then
+    printf '1' > /newroot/run/zmrig/nostart
+fi
+
+log "ready: switching to the root filesystem"
+
+# The media mount does not survive switch_root, and nothing after boot needs it:
+# the squashfs below it stays referenced by the overlay, and `zmrig-os update
+# --iso` writes to a *different* device.
+exec switch_root /newroot /sbin/init
