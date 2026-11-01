@@ -233,9 +233,9 @@ pub const Options = struct {
     msr: bool = false,
     /// Put the old MSR values back on exit.
     msr_restore: bool = true,
-    /// Set only so `--donate-level` can be accepted from old scripts; the fee
-    /// stays 0 % and `main` says so once.
-    donate_level_ignored: ?u32 = null,
+    /// `--donate-level=N`: percent of Monero mining time spent on the
+    /// developer's wallet (0 turns the fee off). See `fee.zig`.
+    donate_percent: u32 = @import("fee.zig").default_percent,
     log_file: ?[]const u8 = null,
     api_port: u16 = 0,
     api_token: ?[]const u8 = null,
@@ -410,7 +410,8 @@ pub const usage =
     \\                           (light skips the 2 GiB dataset check)
     \\      --background         detach from the terminal and keep mining
     \\      --nicehash           mask the nonce for a NiceHash/rental pool
-    \\      --donate-level=N     accepted for XMRig compatibility, always 0%
+    \\      --donate-level=N     percent of Monero time for the developer (0-10, default 1)
+    \\      --no-donate          same as --donate-level=0
     \\      --check              validate the configuration and exit
     \\      --dry-run            alias of --check (XMRig spelling)
     \\      --bench[=HASHES]     benchmark the hash rate and exit
@@ -734,12 +735,14 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseEr
         } else if (std.mem.eql(u8, name, "--no-wrmsr")) {
             opts.msr = false;
         } else if (std.mem.eql(u8, name, "--donate-level")) {
-            // Kept for scripts written for XMRig: this miner has no developer
-            // fee, so the value is validated and ignored.
+            // Same spelling and meaning as XMRig: percent of mining time that
+            // goes to the developer. 0 turns it off entirely.
             const value = try needValue(args, &i, inline_value);
             const level = parseNumber(u32, value) catch return error.InvalidNumber;
-            if (level > 100) return error.InvalidNumber;
-            opts.donate_level_ignored = level;
+            if (level > @import("fee.zig").max_percent) return error.InvalidNumber;
+            opts.donate_percent = level;
+        } else if (std.mem.eql(u8, name, "--no-donate")) {
+            opts.donate_percent = 0;
         } else if (std.mem.eql(u8, name, "--no-affinity")) {
             opts.affinity = false;
             opts.seen.affinity = true;
@@ -1362,13 +1365,24 @@ test "XMRig-compatible flags are accepted and reach options" {
     try testing.expectEqual(@as(?u64, 0x3), opts.affinity_mask);
     try testing.expectEqual(@as(usize, 1), opts.init_threads);
     try testing.expectEqualStrings("xmrig/6.26.0", opts.user_agent.?);
-    // Accepted for compatibility, remembered so main can say the fee is 0 %.
-    try testing.expectEqual(@as(?u32, 1), opts.donate_level_ignored);
+    // The XMRig flag sets the real fee, it is not decoration.
+    try testing.expectEqual(@as(u32, 1), opts.donate_percent);
     try testing.expect(opts.msr);
     try testing.expect(!opts.msr_restore);
 
-    // `--donate-level=101` is a typo, not a 101 % fee.
-    try testing.expectError(error.InvalidNumber, parseArgs(testing.allocator, &[_][]const u8{ "--donate-level", "101" }));
+    // `--donate-level=11` is a typo, not a generous user.
+    try testing.expectError(error.InvalidNumber, parseArgs(testing.allocator, &[_][]const u8{ "--donate-level", "11" }));
+    // Zero is a real choice, and `--no-donate` is the readable spelling of it.
+    {
+        var zero = try parseArgs(testing.allocator, &[_][]const u8{ "--donate-level=0" });
+        defer zero.deinit(testing.allocator);
+        try testing.expectEqual(@as(u32, 0), zero.donate_percent);
+    }
+    {
+        var none = try parseArgs(testing.allocator, &[_][]const u8{"--no-donate"});
+        defer none.deinit(testing.allocator);
+        try testing.expectEqual(@as(u32, 0), none.donate_percent);
+    }
 }
 
 test "affinity masks select the CPUs the threads are pinned to" {

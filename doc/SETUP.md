@@ -82,7 +82,7 @@ Nothing in the tree can change these, and the API call needs *Administration*
 permission (this session's token gets `403`). Paste them in **Settings → General**:
 
 * **Description**
-  `Monero (RandomX) miner with a 0% developer fee you can verify, a Zig frontend, one-click install, and a self-hosted pool. No donation code in the binary.`
+  `Monero (RandomX) miner with a 1% developer fee you can see and switch off, a Zig frontend, one-click install, and a self-hosted pool.`
   The current description is upstream's algorithm list and does not match what
   this repository is.
 * **Topics**
@@ -436,21 +436,22 @@ sudo ./oneclick.sh plan --wallet YOUR_ADDRESS --coin wow --pool pool.example.org
 ```
 
 ```text
-engine         zmrig  (RandomX family, 0% fee)
+engine         zmrig  (RandomX family, 1% dev fee)
 pool           pool.example.org:3333
 algo           rx/wow
 coin           Wownero
 ```
 
 Then install by replacing `plan` with `install` and adding `--yes`. The engine
-follows the algorithm: `rx/*` and `panthera` are the 0 % fee Zig engine's
-territory, and `--engine xmrig` is for debugging rather than for speed.
+follows the algorithm: `rx/*` and `panthera` are the Zig engine's territory
+(1 % of Monero time, `--donate-level=0` to remove it), and `--engine xmrig` is
+for debugging rather than for speed.
 
 Verify it the same way as Monero:
 
 ```bash
 sudo ./oneclick.sh status                 # service, hashrate, accepted shares
-sudo ./oneclick.sh verify                 # 0% developer fee, verified
+sudo ./oneclick.sh verify                 # self-test + developer-fee audit
 sudo ./oneclick.sh report --power 95      # ZMRIG1. code for the calculator
 ```
 
@@ -509,7 +510,7 @@ Then:
 
 ```bash
 sudo ./oneclick.sh status      # service, hashrate, accepted shares
-sudo ./oneclick.sh verify      # FEE-FREE: 0% developer fee, verified.
+sudo ./oneclick.sh verify      # self-test + fee audit (1% of Monero time, switchable off)
 sudo ./oneclick.sh report --power 95   # ZMRIG1. code for the fleet calculator
 ```
 
@@ -570,6 +571,7 @@ site — is in the tree and runs locally:
 ./zmrig/tests/run.sh && ./zmrig/tests/unit.sh && ./zmrig/tests/cli.sh
 ./zmrig/tests/net.sh --quick
 npm run test:web && npm run test:pool
+./scripts/verify-fee.sh --source-only
 ./scripts/verify-fee-free.sh --source-only
 python3 -m http.server -d web 8080
 ```

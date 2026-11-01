@@ -7,9 +7,9 @@
 <link rel="icon" type="image/png" sizes="32x32" href="/ZMRIG/img/favicon-32.png">
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.b9407fd1.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.d6294630.js" defer="defer"></script>
-<script src="/ZMRIG/vi/assets/js/main.18b2f40c.js" defer="defer"></script>
+<meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.e1cb14c0.css">
+<script src="/ZMRIG/vi/assets/js/runtime~main.1b352c2b.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/main.568335f0.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -49,9 +49,11 @@ thường, không phải thoái hoá.</li>
 </ul>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="kiểm-tra-phí">Kiểm tra phí<a href="#kiểm-tra-phí" class="hash-link" aria-label="Đường dẫn trực tiếp đến Kiểm tra phí" title="Đường dẫn trực tiếp đến Kiểm tra phí" translate="no">​</a></h2>
 <div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token function" style="color:rgb(130, 170, 255)">sudo</span><span class="token plain"> ./oneclick.sh verify</span><br></div></code></pre></div></div>
-<p>Với engine Zig, nó chạy self-test rồi <code>strings</code> binary để tìm endpoint và địa chỉ
-donate đã biết. Với engine C++, nó chạy <code>scripts/verify-fee-free.sh</code>, script này
-kiểm tra thêm việc binary in <code>DONATE 0%</code> khi bị truyền <code>--donate-level=9</code>.</p>
+<p>Với engine Zig, nó chạy self-test rồi <code>scripts/verify-fee.sh</code>: đọc mức phí, địa
+chỉ ví và công tắc <code>--donate-level=0</code> từ binary, fail nếu xuất hiện ví thứ hai
+hay endpoint donate của upstream. Với engine C++, nó chạy
+<code>scripts/verify-fee-free.sh</code>, script này kiểm tra thêm việc binary in <code>DONATE 0%</code>
+khi bị truyền <code>--donate-level=9</code>.</p>
 <p>Phần kiểm tra grep <strong>endpoint và địa chỉ</strong>, không grep chữ <code>donate</code>: API giám sát
 trả <code>&quot;donate_level&quot;: 0</code> một cách hợp pháp, và một lệnh grep ngây thơ sẽ báo động
 giả. Chuyện đó đã từng xảy ra, và đã sửa.</p>

@@ -1,7 +1,14 @@
-# Zero fee (0 %) — what was removed and how to verify it
+# The C++ engine has no fee — what was removed and how to verify it
 
-This build mines **100 % for the configured pool and wallet**. There is no
-developer fee, no time slicing, no second stratum session and no hidden wallet.
+This page is about `src/`, the XMRig tree: it mines **100 % for the configured
+pool and wallet**, with no developer fee, no time slicing, no second stratum
+session and no hidden wallet.
+
+The Zig miner (`zmrig/`, the default engine) is a different program and does
+take **1 % of Monero mining time** for the developer. That policy, its log
+lines, its clock and its off switch are documented in `doc/FEE.md`. The two are
+not in conflict: the fee belongs to the Zig front end, and the C++ engine the
+installer keeps for non-RandomX algorithms has no donation code at all.
 
 ## How the upstream fee works
 

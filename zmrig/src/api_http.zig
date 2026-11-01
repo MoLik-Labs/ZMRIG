@@ -90,6 +90,9 @@ pub const Info = struct {
     /// in use (a pool can switch it at any time).
     miner: *const miner_mod.Miner,
     threads: usize,
+    /// Developer fee in percent, so a dashboard shows what the binary is
+    /// actually configured to take rather than a hardcoded zero.
+    donate_percent: u32,
     started_ms: i64,
     /// Result counters, owned by the submitter.
     accepted: *const std.atomic.Value(u64),
@@ -352,7 +355,7 @@ fn summaryV2(server: *Server, buffer: []u8) ![]const u8 {
         \\  "ua": "zmrig/{s}",
         \\  "algo": "{s}",
         \\  "paused": {s},
-        \\  "donate_level": 0,
+        \\  "donate_level": {d},
         \\  "connection": {{
         \\    "pool": "{s}",
         \\    "uptime": {d},
@@ -385,6 +388,7 @@ fn summaryV2(server: *Server, buffer: []u8) ![]const u8 {
         info.version,
         algo,
         if (paused) "true" else "false",
+        info.donate_percent,
         info.pool_url,
         info.view.connectionUptime(),
         failed,
@@ -415,7 +419,7 @@ fn summary(server: *Server, buffer: []u8) ![]const u8 {
 
     return std.fmt.bufPrint(buffer,
         \\{{"id":"zmrig","worker_id":"{s}","uptime":{d},"version":"{s}","kind":"miner","ua":"zmrig/{s}",
-        \\"algo":"{s}","paused":{s},"donate_level":0,
+        \\"algo":"{s}","paused":{s},"donate_level":{d},
         \\"connection":{{"pool":"{s}","uptime":{d},"failures":{d},"tls":{s}}},
         \\"hashrate":{{"total":[{d:.1},{d:.1},{d:.1}],"highest":{d:.1}}},
         \\"hugepages":[{d},{d}],
@@ -429,6 +433,7 @@ fn summary(server: *Server, buffer: []u8) ![]const u8 {
         info.version,
         algo,
         if (paused) "true" else "false",
+        info.donate_percent,
         info.pool_url,
         info.view.connectionUptime(),
         failed,

@@ -28,7 +28,7 @@ newer than the sources.
 
 | Decision | How the installer chooses |
 | --- | --- |
-| Engine | `zmrig` (0 % fee). It advertises the whole RandomX family, so a switching pool can still move the rig to whichever coin pays best. `--algo` outside RandomX, or `--engine=xmrig`, selects the C++ engine. |
+| Engine | `zmrig` (1 % of Monero time, `--donate-level=0` to remove it). It advertises the whole RandomX family, so a switching pool can still move the rig to whichever coin pays best. `--algo` outside RandomX, or `--engine=xmrig`, selects the C++ engine, which takes nothing. |
 | Profile | `free` (maximum hashrate) everywhere, except a laptop on battery → `watt` (maximum hashes per watt). |
 | Threads | Measured after the build: each candidate runs 8 s on the real dataset, the winner is written to the config. |
 | Huge pages | Sized from the dataset. If the kernel grants fewer, it falls back to transparent huge pages and says so. |
@@ -42,7 +42,7 @@ See the same list without touching the machine:
 
 ```text
 ==> plan
-    engine         zmrig  (RandomX family, 0% fee)
+    engine         zmrig  (RandomX family, 1% dev fee)
     pool           gulf.moneroocean.stream:10001
     algo           auto  (RandomX family: rx/0, rx/wow, rx/arq, …)
     profile        free  (auto: no battery, electricity is treated as free)
@@ -56,7 +56,7 @@ See the same list without touching the machine:
 
 ```bash
 sudo ./oneclick.sh status      # service, hashrate 10s/60s/15m, shares, huge pages
-sudo ./oneclick.sh verify      # prove the 0 % fee
+sudo ./oneclick.sh verify      # self-test + developer-fee audit
 sudo ./oneclick.sh logs 50     # last 50 log lines
 ```
 
@@ -65,7 +65,7 @@ sudo ./oneclick.sh logs 50     # last 50 log lines
     OK  PASS rx/0 reference vector
     OK  PASS pipelined hashing
     OK  PASS full-memory dataset matches the cache
-    OK  no donation endpoints or wallets: 0% developer fee
+    OK  fee audit: one wallet, Monero only, switchable off
     OK  verified
 ```
 

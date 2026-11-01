@@ -1,3 +1,40 @@
+# Unreleased — the fee is real, visible, and switchable off
+
+The miner was fee-free by construction, which was easy to verify and impossible
+to fund. `zmrig` now mines **1 % of its Monero time** to the developer wallet on
+the pool the operator already configured: 60 s every 100 minutes, Monero only,
+and `--donate-level=0` removes it entirely.
+
+### The fee
+- **`zmrig/src/fee.zig`** is the whole implementation: a debt clock. Every second
+  of `rx/0` hashing adds 10 ms of debt at 1 %; at 60 s owed the monitor closes
+  the pool socket, the miner reconnects on the same pool with the developer
+  wallet and `algo=rx/0`, spends the debt down, and reconnects back to your
+  wallet with no retry pause.
+- **Monero only.** The wallet is a Monero address; mining ArQmA, Wownero, Graft,
+  Safex, Yada or Scala to it would burn the coins, so those algorithms accrue
+  nothing.
+- **Refusals postpone, they do not punish.** A pool that rejects the developer
+  wallet costs the fee two minutes, then thirty after three refusals. Your
+  connection is never marked bad because of a fee attempt, and the debt is
+  capped at one hour so it cannot grow into a two-hour session later.
+- **`--donate-level=N`** now sets the rate (0–10, default 1) instead of being
+  accepted and ignored; `--no-donate` is the readable spelling of `0`. The
+  generated `config.json` writes `"donate-level": 1` so the value is in the file,
+  not implied.
+- **It is printed.** The banner, `--check` (`donate  1% of Monero (rx/0) mining
+  time to 46SQLW7D…, 60 s every 100 min`), the startup log, every session in the
+  log, and `"donate_level": 1` in the HTTP API. `doc/FEE.md` is the one-page
+  policy; `scripts/verify-fee.sh` reads the rate, the wallet and the off switch
+  out of the binary and fails if a second address or an upstream donation
+  endpoint appears. `oneclick.sh verify` runs it on the installed binary.
+- **The C++ engine still takes nothing** (`doc/ZERO_FEE.md`,
+  `scripts/verify-fee-free.sh`): the fee belongs to the Zig front end, and
+  `--engine=xmrig` remains available for the algorithms Zig does not speak.
+- Measured live against the test pool: `login … user=4AdUnd…` (user),
+  `login … user=46SQLW7D…` (fee), `login … user=4AdUnd…` (back), with the debt
+  spent exactly.
+
 # Unreleased — huge pages, measured instead of assumed
 
 The miner used to treat "no reserved huge pages" as "4 KiB pages", and tell
@@ -106,16 +143,16 @@ light mode on that coin crash.
   `--self-test --algo=panthera` verified Monero and reported success).
 
 ### Brand
-- **A new mark**: a bold Z — bar, diagonal, bar — on a 32 unit grid, one tone,
-  nothing else. The diagonal is cut thinner than the bars because an equal-weight
-  diagonal reads heavier, the two corners on its axis are chamfered at the same
-  angle, and the outline is symmetric under a 180° rotation, so it sits straight
-  in a tab, a tile or a circle. ZMRIG and Zig share the shape, and a letter
-  survives 16 px without a caption; the earlier ring-and-core concept read as a
-  generic chip logo at that size. `site/tools/make-logo.py` writes `logo.svg`,
-  `logo-dark.svg`, an adaptive `favicon.svg` and the three PNG icons; the social
-  cards paste the same render. Light pages get black, dark pages get white, the
-  favicon follows `prefers-color-scheme`.
+- **A new mark**: a bold Z sitting on a water line — bar, diagonal, bar, with the
+  lower edge of the bottom bar rising and falling like the sea. One tone, one
+  outline, nothing beside it: the wave is sampled into the letter's own polygon,
+  so it cannot leave a seam, and the straight parts stay on the 32 unit grid so
+  16 px still reads as a Z. The name is ZMRIG, the engine is Zig, and the rig
+  swims in a pool — the letter carries all three without a caption.
+  `site/tools/make-logo.py` writes `logo.svg`, `logo-dark.svg`, an adaptive
+  `favicon.svg` and the three PNG icons; the social cards paste the same render.
+  Light pages get black, dark pages get white, the favicon follows
+  `prefers-color-scheme`.
 
 # Unreleased — seven coins, one installer
 

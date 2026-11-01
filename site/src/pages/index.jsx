@@ -12,8 +12,8 @@ const COMMAND = `curl -fsSL ${RAW} \\
 
 const COPY = {
   en: {
-    eyebrow: "RandomX miner · 0 % developer fee",
-    lede: "One command installs a miner that needs a wallet address and nothing else: it detects the CPU, reserves huge pages, measures the real thread count, writes a systemd unit and proves it takes no cut. The documentation below is the whole manual — installation, pools, networks that only allow 443, measured benchmarks and a calculator that costs nothing to run.",
+    eyebrow: "RandomX miner · 1 % developer fee, switchable off",
+    lede: "One command installs a miner that needs a wallet address and nothing else: it detects the CPU, reserves huge pages, measures the real thread count, writes a systemd unit, and prints the 1 % developer fee it takes — with the flag that removes it. The documentation below is the whole manual — installation, pools, networks that only allow 443, measured benchmarks and a calculator that costs nothing to run.",
     cta: "Read the documentation",
     cta2: "Build a command",
     copy: "Copy",
@@ -28,7 +28,7 @@ const COPY = {
       ],
       [
         "Installer",
-        "One flag. Detects the machine, tunes the host, writes the service, proves the zero fee, and can be removed without leaving anything behind.",
+        "One flag. Detects the machine, tunes the host, writes the service, audits the fee, and can be removed without leaving anything behind.",
         "Install",
         "/docs/install/quickstart",
       ],
@@ -52,8 +52,8 @@ const COPY = {
     moneyCta: "Open the calculator",
   },
   vi: {
-    eyebrow: "Miner RandomX · 0 % phí developer",
-    lede: "Một lệnh cài xong miner chỉ cần địa chỉ ví: nó tự nhận CPU, tự đặt huge pages, tự đo số thread thật, viết systemd unit và chứng minh mình không lấy phần trăm nào. Phần tài liệu bên dưới là toàn bộ sách hướng dẫn — cài đặt, pool, mạng chỉ mở 443, benchmark đo được, và bảng tính chạy miễn phí ngay trong trình duyệt.",
+    eyebrow: "Miner RandomX · phí 1 %, tắt được",
+    lede: "Một lệnh cài xong miner chỉ cần địa chỉ ví: nó tự nhận CPU, tự đặt huge pages, tự đo số thread thật, viết systemd unit, và in ra khoản phí 1 % nó lấy kèm cờ để bỏ. Phần tài liệu bên dưới là toàn bộ sách hướng dẫn — cài đặt, pool, mạng chỉ mở 443, benchmark đo được, và bảng tính chạy miễn phí ngay trong trình duyệt.",
     cta: "Đọc tài liệu",
     cta2: "Tự ghép lệnh",
     copy: "Copy",
@@ -62,13 +62,13 @@ const COPY = {
     parts: [
       [
         "Miner",
-        "XMRig 6.26.0 đã bỏ toàn bộ code donate, cộng thêm miner Zig hoàn chỉnh trên cùng engine RandomX. Không bao giờ lấy phần trăm.",
+        "XMRig 6.26.0 đã bỏ toàn bộ code donate, cộng thêm miner Zig hoàn chỉnh trên cùng engine RandomX. Phí 1 % thời gian Monero ở engine Zig, in ra rõ và tắt được; engine C++ không có mã phí.",
         "Đọc về hai engine",
         "/docs/install/engines",
       ],
       [
         "Installer",
-        "Một cờ. Tự nhận máy, chỉnh hệ thống, viết service, chứng minh phí 0 %, và gỡ được mà không để lại gì.",
+        "Một cờ. Tự nhận máy, chỉnh hệ thống, viết service, kiểm tra phí, và gỡ được mà không để lại gì.",
         "Cài đặt",
         "/docs/install/quickstart",
       ],

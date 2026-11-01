@@ -6,8 +6,9 @@ image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
 
 # Hỗ trợ và donate
 
-Miner không có phí developer và sẽ không có. Trang này tồn tại cho những người
-vẫn hỏi muốn gửi gì đó. Không phần mềm nào đọc địa chỉ bên dưới.
+Miner Zig đã lấy 1 % thời gian đào Monero làm phí
+([chi tiết](/docs/reference/fee)); engine C++ thì không lấy gì. Trang này tồn
+tại cho những người vẫn muốn gửi thêm. Không phần mềm nào đọc địa chỉ bên dưới.
 
 ## Địa chỉ
 
@@ -58,9 +59,9 @@ Checksum sai nghĩa là gõ nhầm, chép thiếu, hoặc đó chưa từng là 
 
 ## Một khoản donate không mua gì
 
-- **Không ảnh hưởng gì tới miner.** Địa chỉ không có trong `src/`, `zmrig/`,
-  `pool/` hay `oneclick.sh`, nên `sudo ./oneclick.sh verify` vẫn báo phí 0 % dù
-  địa chỉ có được công bố hay không.
+- **Không ảnh hưởng gì tới miner.** Không gì đọc trang này lúc build hay lúc
+  chạy, và `sudo ./oneclick.sh verify` báo đúng mức phí binary đang lấy, công bố
+  địa chỉ hay không.
 - **Không có bản supporter.** Chỉ có một binary và nó đào hết tốc lực cho tất cả
   mọi người. Ai bán "bản nhanh hơn" thì không phải dự án này.
 - **Không ưu tiên hỗ trợ, không vote roadmap, không huy hiệu.** Issue được trả lời

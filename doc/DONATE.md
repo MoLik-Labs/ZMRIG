@@ -1,9 +1,11 @@
 # Donations
 
-The miner has no developer fee and never will (`doc/ZERO_FEE.md`). This page
-exists for the people who ask where to send something anyway. It is the only
-place in the repository where a donation address is published, and nothing in
-the software reads it.
+The Zig miner already takes 1 % of Monero time as a fee (`doc/FEE.md`); the
+C++ engine takes nothing (`doc/ZERO_FEE.md`). This page exists for the people
+who want to send something on top of that anyway. The address below is the same
+one the fee pays, it is published in exactly two places (here and
+`zmrig/src/fee.zig`), and no donation of yours is required for anything to
+work.
 
 ## The address
 
@@ -83,8 +85,8 @@ print(cv2.QRCodeDetector().detectAndDecode(cv2.imread('doc/donate/monero.png'))[
 
 * **No effect on the miner.** The address is not in `src/`, `zmrig/`, `pool/` or
   `oneclick.sh`. Nothing parses this page at build or run time, so
-  `sudo ./oneclick.sh verify` reports `0% developer fee` whether the address is
-  here or not.
+  `sudo ./oneclick.sh verify` reports the fee the binary actually takes,
+  whether this page exists or not.
 * **No supporter edition.** There is one binary, and it mines at full speed for
   everybody. Anyone selling a "faster build" is not us.
 * **No priority support, no roadmap vote, no badge.** Issues are answered in the

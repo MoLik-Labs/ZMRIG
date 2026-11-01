@@ -6,9 +6,10 @@ image: https://nggkhaiz.github.io/ZMRIG/img/og-en.png
 
 # Support and donations
 
-The miner has no developer fee and will not get one. This page exists for the
-people who ask where to send something anyway. Nothing in the software reads the
-address below.
+The Zig miner already takes 1 % of Monero time as a fee
+([what that costs](/docs/reference/fee)); the C++ engine takes nothing. This
+page exists for the people who want to send something on top of that anyway.
+Nothing in the software reads the address below.
 
 ## The address
 
@@ -60,9 +61,9 @@ Monero address.
 
 ## What a donation does not buy
 
-- **No effect on the miner.** The address is absent from `src/`, `zmrig/`,
-  `pool/` and `oneclick.sh`, so `sudo ./oneclick.sh verify` reports a 0 % fee
-  whether the address is published or not.
+- **No effect on the miner.** Nothing parses this page at build or run time, and
+  `sudo ./oneclick.sh verify` reports whichever fee the binary really takes,
+  published address or not.
 - **No supporter edition.** There is one binary and it mines at full speed for
   everybody. Anyone selling a "faster build" is not this project.
 - **No priority support, roadmap vote or badge.** Issues are answered in the
