@@ -84,9 +84,11 @@ fail, đọc log của case đó trước (`cloudflare.log`, `shim-cf.log`, `poo
 sudo ./oneclick.sh verify
 ```
 
-Với engine Zig, nó chạy self-test rồi `strings` binary để tìm endpoint và địa chỉ
-donate đã biết. Với engine C++, nó chạy `scripts/verify-fee-free.sh`, script này
-kiểm tra thêm việc binary in `DONATE 0%` khi bị truyền `--donate-level=9`.
+Với engine Zig, nó chạy self-test rồi `scripts/verify-fee.sh`: đọc mức phí, địa
+chỉ ví và công tắc `--donate-level=0` từ binary, fail nếu xuất hiện ví thứ hai
+hay endpoint donate của upstream. Với engine C++, nó chạy
+`scripts/verify-fee-free.sh`, script này kiểm tra thêm việc binary in `DONATE 0%`
+khi bị truyền `--donate-level=9`.
 
 Phần kiểm tra grep **endpoint và địa chỉ**, không grep chữ `donate`: API giám sát
 trả `"donate_level": 0` một cách hợp pháp, và một lệnh grep ngây thơ sẽ báo động

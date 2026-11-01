@@ -102,6 +102,10 @@ mỗi cấu hình một lần chạy.
 | `--scratchpad-prefetch=0/2/3` | 1208–1302 kH/s trên `panthera` | nhiễu |
 | `--no-affinity` | 814 H/s | 100 % (nhiễu) |
 
+Đo lại cho 6.33.0 ngày 2026-11-01 (ba lần `--bench=3000`, THP, hai thread):
+**889 / 956 / 886 H/s** — đúng cấu hình của dòng 786 H/s, chỉ khác ngày. Hãy dùng
+tỷ lệ, đừng dùng số tuyệt đối.
+
 Cùng binary, cùng host, ở một phiên ít tải hơn: **1008–1103 H/s**. Độ tản 20–25 %
 đó là lý do con số tuyệt đối trong tài liệu gần như vô dụng, và tỉ lệ ở trên mới
 là phần dùng được.

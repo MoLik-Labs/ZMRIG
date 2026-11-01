@@ -17,7 +17,7 @@ miners point at it exactly as they would at any other pool.
 | --- | --- |
 | Pool fee | **1.0 %** of each block, taken before splitting, rounded **down** |
 | Hidden fees | none |
-| Miner developer fee | 0 % |
+| Miner developer fee | 1 % of Monero mining time on the Zig engine (`--donate-level=0` turns it off); the C++ engine takes nothing |
 | Payout threshold | 0.01 XMR, plus the network fee |
 
 The fee appears in the `login` reply the miner prints, in `/api/config`, and on

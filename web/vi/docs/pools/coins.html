@@ -7,9 +7,9 @@
 <link rel="icon" type="image/png" sizes="32x32" href="/ZMRIG/img/favicon-32.png">
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.b9407fd1.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.d6294630.js" defer="defer"></script>
-<script src="/ZMRIG/vi/assets/js/main.18b2f40c.js" defer="defer"></script>
+<meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.e1cb14c0.css">
+<script src="/ZMRIG/vi/assets/js/runtime~main.1b352c2b.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/main.568335f0.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -32,10 +32,10 @@ khi có gì được ghi lên máy.</p>
 <p>Xem plan trước — nó in ra coin, thuật toán, engine và profile đã phân giải, không
 ghi gì:</p>
 <div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token function" style="color:rgb(130, 170, 255)">sudo</span><span class="token plain"> ./oneclick.sh plan </span><span class="token parameter variable" style="color:rgb(191, 199, 213)">--wallet</span><span class="token plain"> YOUR_ADDRESS </span><span class="token parameter variable" style="color:rgb(191, 199, 213)">--coin</span><span class="token plain"> wow </span><span class="token parameter variable" style="color:rgb(191, 199, 213)">--pool</span><span class="token plain"> pool.example.org:3333</span><br></div></code></pre></div></div>
-<div class="language-text codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-text codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token plain">engine         zmrig  (RandomX family, 0% fee)</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">pool           pool.example.org:3333</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">algo           rx/wow</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">coin           Wownero</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">profile        free  (auto: no battery, electricity is treated as free)</span><br></div></code></pre></div></div>
-<p>Engine tự chọn: <code>rx/*</code> và <code>panthera</code> thuộc về engine Zig — engine phí 0 %. Ép
-engine C++ bằng <code>--engine xmrig</code> chỉ khi cần debug, không phải vì nó nhanh hơn —
-nó không nhanh hơn.</p>
+<div class="language-text codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-text codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token plain">engine         zmrig  (RandomX family, 1% dev fee)</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">pool           pool.example.org:3333</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">algo           rx/wow</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">coin           Wownero</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">profile        free  (auto: no battery, electricity is treated as free)</span><br></div></code></pre></div></div>
+<p>Engine tự chọn: <code>rx/*</code> và <code>panthera</code> thuộc về engine Zig (1 % thời gian
+Monero, <code>--donate-level=0</code> để bỏ). Ép engine C++ bằng <code>--engine xmrig</code> chỉ khi
+cần debug, không phải vì nó nhanh hơn — nó không nhanh hơn.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="endpoint-do-bạn-cung-cấp">Endpoint do bạn cung cấp<a href="#endpoint-do-bạn-cung-cấp" class="hash-link" aria-label="Đường dẫn trực tiếp đến Endpoint do bạn cung cấp" title="Đường dẫn trực tiếp đến Endpoint do bạn cung cấp" translate="no">​</a></h2>
 <p>Bảy preset pool trong bộ dựng lệnh đều là pool Monero. Phí và endpoint của các
 đồng nhỏ đổi quá nhanh để repo giữ đúng, nên nó không giữ gì cả: <code>--coin wow</code>

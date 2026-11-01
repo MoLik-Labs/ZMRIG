@@ -11,7 +11,7 @@ ZMRIG là một bộ đào Monero hoàn chỉnh, không phải mớ script rời
 
 | Phần | Là gì | Tốn gì |
 | --- | --- | --- |
-| **Miner** | XMRig 6.26.0 đã xoá sạch mọi dòng mã donate, cộng thêm miner Zig hoàn chỉnh trên cùng engine RandomX | **0 %**, và con số đó kiểm tra được |
+| **Miner** | XMRig 6.26.0 đã xoá sạch mọi dòng mã donate, cộng thêm miner Zig hoàn chỉnh trên cùng engine RandomX | **1 %** thời gian Monero ở engine Zig, in ra và tắt được; engine C++ không có mã phí |
 | **Installer** | `oneclick.sh`: một cờ, tinh chỉnh host, unit systemd, tự kiểm tra, gỡ cài đặt | miễn phí |
 | **Proxy** | một kết nối pool cho cả farm: extranonce riêng từng rig, độ khó riêng, tunnel | miễn phí |
 | **Pool** | pool Monero tự dựng: stratum qua TCP và WebSocket, PPLNS, mọi share đều được kiểm lại | 1 % mỗi block, không gì khác |
@@ -25,7 +25,7 @@ telemetry ở bất kỳ đâu trong đó.
 **Phí phải chứng minh được, nên nó được kiểm tra.** `sudo ./oneclick.sh verify`
 grep binary để tìm endpoint donate của bản gốc và các ví đã biết, rồi chạy
 self-test hash — để "không tìm thấy gì" không thể có nghĩa là "nó đọc sai file".
-Chi tiết ở [trang zero-fee](/docs/reference/zero-fee).
+Chi tiết ở [trang phí](/docs/reference/fee): mức phí, các dòng log và cách tắt.
 
 **Không có cờ nào bắt buộc phải nhớ.** `--wallet` là đầu vào duy nhất. Installer
 đọc CPU, RAM, hypervisor và pin, rồi chọn engine, số thread, chiến lược huge page

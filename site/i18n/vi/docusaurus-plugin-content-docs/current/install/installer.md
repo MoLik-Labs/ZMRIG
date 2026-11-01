@@ -23,7 +23,7 @@ Lệnh con mặc định là `install` khi có ví và `status` khi không có.
 | `start`, `stop`, `restart`, `status`, `logs` | điều khiển service |
 | `bench` | đo RandomX lặp lại được (`--bench=20000`) |
 | `report` | đo và in mã `ZMRIG1.` cho máy tính |
-| `verify` | chứng minh không có phí developer |
+| `verify` | self-test, rồi kiểm tra phí developer (mức, địa chỉ, công tắc tắt) |
 | `plan` | in mọi quyết định tự động, không thay đổi gì |
 | `update` | lấy nhánh đã cấu hình, build lại, khởi động lại |
 | `uninstall` | dừng, xoá service và binary, giữ config |
@@ -92,7 +92,7 @@ Lệnh con mặc định là `install` khi có ví và `status` khi không có.
 | `/usr/local/bin/xmrig` | miner C++, khi chọn engine đó |
 | `/usr/local/bin/zmrig-tune` | tinh chỉnh host (`--status`, `--hugepages 1G`, `--algo panthera` đặt mức theo coin đó, …) |
 | `/usr/local/bin/zmrig-bench` | đo hashrate lặp lại được |
-| `/usr/local/bin/zmrig-verify` | kiểm tra phí 0 % |
+| `/usr/local/bin/zmrig-verify` | kiểm tra phí developer |
 | `/etc/zmrig/config.json` | cấu hình, quyền 600 |
 | `/var/lib/zmrig/` | trạng thái và file báo cáo |
 | `zmrig.service` | miner: `Restart=always`, `RestartSec=5`, `Nice=-10`, `LimitMEMLOCK=infinity`, `PrivateTmp=true` |

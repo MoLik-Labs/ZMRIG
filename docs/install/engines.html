@@ -7,9 +7,9 @@
 <link rel="icon" type="image/png" sizes="32x32" href="/ZMRIG/img/favicon-32.png">
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.b9407fd1.css">
-<script src="/ZMRIG/assets/js/runtime~main.6e12f229.js" defer="defer"></script>
-<script src="/ZMRIG/assets/js/main.9a13e464.js" defer="defer"></script>
+<meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.e1cb14c0.css">
+<script src="/ZMRIG/assets/js/runtime~main.2cc2df5b.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/main.703ef795.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -33,7 +33,7 @@ advertises the whole RandomX family and the pool moves the rig between coins.
 It cannot mine the non-RandomX algorithms those pools also pay for, so a
 pool that values breadth more than depth is better served by <code>xmrig</code>. The
 installer&#x27;s <code>auto</code> setting chooses <code>xmrig</code> for a switching pool for this
-reason; <code>zmrig</code> remains the 0 %-fee option either way.</li>
+reason; <code>zmrig</code> stays the default either way (1 % of Monero time, switchable off).</li>
 <li class=""><strong>Any other algorithm (cn/heavy, ghostrider, KawPow):</strong> <code>xmrig</code>. <code>zmrig</code>
 refuses at argument-parse time rather than starting and failing to connect.</li>
 <li class=""><strong>A network that only allows 443, or a proxy:</strong> <code>zmrig</code>. See

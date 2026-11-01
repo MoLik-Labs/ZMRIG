@@ -103,6 +103,10 @@ one run per configuration.
 | `--scratchpad-prefetch=0/2/3` | 1208–1302 kH/s on `panthera` | noise |
 | `--no-affinity` | 814 H/s | 100 % (noise) |
 
+Re-checked for 6.33.0 on 2026-11-01 (three `--bench=3000` runs, THP, two
+threads): **889 / 956 / 886 H/s** — the same configuration as the 786 H/s row,
+different day. Treat the ratios, not the absolute numbers.
+
 The same binary on the same host in a quieter session measured **1008–1103 H/s**.
 That 20–25 % spread is why absolute numbers in documentation are close to
 useless, and why the ratios above are the useful part.

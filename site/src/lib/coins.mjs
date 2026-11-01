@@ -1,7 +1,7 @@
 // The coins the two engines in this repository can actually mine.
 //
 // The list is short on purpose. Both miners speak the RandomX family, and the
-// C++ engine speaks 34 algorithms, but the Zig engine (the 0 % fee one) speaks
+// C++ engine speaks 34 algorithms, but the Zig engine (the default one) speaks
 // these seven. A coin outside this list would mean "use the C++ engine and hope",
 // so it is not offered in the builder or the wizard at all.
 //

@@ -50,7 +50,7 @@ expect_exit 1 "no pool" -- "$BIN" --check
 expect_exit 1 "no wallet" -- "$BIN" -o pool.example.com:3333 --check
 expect_exit 0 "valid config" -- "$BIN" -o pool.example.com:3333 -u "$WALLET" --check
 expect_exit 0 "--dry-run is --check" -- "$BIN" -o pool.example.com:3333 -u "$WALLET" --dry-run
-expect_exit 1 "donate-level > 100" -- "$BIN" -o pool.example.com:3333 -u "$WALLET" --donate-level 101
+expect_exit 1 "donate-level > 10" -- "$BIN" -o pool.example.com:3333 -u "$WALLET" --donate-level 11
 expect_exit 1 "unknown config file" -- "$BIN" -c /nonexistent/config.json --check
 
 # A rejected configuration must not print the "config ok" summary.
@@ -254,6 +254,38 @@ else
     record FAIL "pool-level algo=auto is honoured" "got: ${auto_line:-nothing}"
 fi
 rm -f "$auto_cfg"
+
+# -- the developer fee ----------------------------------------------------
+# It is 1 % of Monero mining time by default, it is stated in --check, it can be
+# set, and it can be turned off. A fee nobody can see is the thing users are
+# right to distrust, so all four are contractual.
+donate_line=$("$BIN" -o pool.example.com:3333 -u "$WALLET" --check 2>/dev/null | sed -n 's/^ *donate  //p' | head -1)
+case "$donate_line" in
+    1%*46SQLW7D*) record PASS "the default fee is 1% and names the wallet" "$donate_line" ;;
+    *)            record FAIL "the default fee is 1% and names the wallet" "got: ${donate_line:-nothing}" ;;
+esac
+
+expect_exit 0 "--donate-level=3 is accepted" -- \
+    "$BIN" -o pool.example.com:3333 -u "$WALLET" --donate-level 3 --check
+three=$("$BIN" -o pool.example.com:3333 -u "$WALLET" --donate-level 3 --check 2>/dev/null | sed -n 's/^ *donate  //p' | head -1)
+case "$three" in
+    3%*) record PASS "--donate-level=3 changes the fee" "$three" ;;
+    *)   record FAIL "--donate-level=3 changes the fee" "got: ${three:-nothing}" ;;
+esac
+
+expect_exit 0 "--donate-level=0 is accepted" -- \
+    "$BIN" -o pool.example.com:3333 -u "$WALLET" --donate-level 0 --check
+off=$("$BIN" -o pool.example.com:3333 -u "$WALLET" --no-donate --check 2>/dev/null | sed -n 's/^ *donate  //p' | head -1)
+case "$off" in
+    off:*) record PASS "the fee can be turned off completely" "$off" ;;
+    *)     record FAIL "the fee can be turned off completely" "got: ${off:-nothing}" ;;
+esac
+
+if "$BIN" --help | grep -qF -- "--donate-level=N"; then
+    record PASS "--donate-level is documented" ""
+else
+    record FAIL "--donate-level is documented" "not in --help"
+fi
 
 # --ban-cooldown is the anti-ban knob: it must be accepted, documented, and
 # visible in --help next to the other reconnect flags.

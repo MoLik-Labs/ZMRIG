@@ -15,7 +15,7 @@
 #   ./oneclick.sh status                   # is it mining? at what hashrate?
 #   ./oneclick.sh bench                    # reproducible hashrate measurement
 #   ./oneclick.sh report                   # machine report code for the web dashboard
-#   ./oneclick.sh verify                   # prove the 0% fee
+#   ./oneclick.sh verify                   # self-test + developer-fee audit
 #
 # Subcommands
 #   install (default)  deps + build + tune + config + service + self-check
@@ -25,7 +25,7 @@
 #   start|stop|restart|status|logs
 #   bench              RandomX benchmark
 #   report             machine report code (hashrate + power + shares)
-#   verify             fee-free audit
+#   verify             self-test + developer-fee audit
 #   update             git pull + rebuild + restart
 #   uninstall          stop, remove service, binary and (optionally) the config
 #
@@ -69,7 +69,7 @@ COIN=""
 # "auto" resolves in resolve_engine(): the pool decides. A pool that switches
 # algorithms to whatever pays best (MoneroOcean and its clones) needs the C++
 # engine, which speaks 34 algorithms; a plain Monero pool can only ever send
-# rx/0, and there zmrig is both faster and fee-free.
+# rx/0, and there zmrig is both faster and the default.
 ENGINE="${MINER_ENGINE:-auto}"
 # Set when the engine was named by the user, so a stale install marker does not
 # silently override the choice.
@@ -182,7 +182,7 @@ Options
   --algo NAME            force one algorithm instead of pool auto-selection
   --engine NAME          auto (default) | xmrig (all algorithms) | zmrig (Zig, rx/*).
                          auto reads the pool: switching pools need every algorithm,
-                         RandomX-only pools are faster and fee-free on zmrig
+                         RandomX-only pools are faster on zmrig (1% dev fee)
   --tls                  use TLS for the pool connection
   --cloudflare[=HOST[:PORT]]  WebSocket+TLS on 443 (works through CDNs and
                          firewalls that only allow HTTPS). Switches to the
@@ -721,12 +721,12 @@ resolve_engine() {
             # A switching pool used to mean the C++ engine, because zmrig could
             # not advertise more than one algorithm. It can now: the login sends
             # the whole RandomX family, the pool picks the best-paying variant,
-            # and the rig keeps the 0% fee and the faster engine.
+            # and the rig keeps the faster engine.
             ENGINE="zmrig"
-            info "auto: ${POOL%%:*} pays for several algorithms; zmrig advertises the RandomX family (0% fee)"
+            info "auto: ${POOL%%:*} pays for several algorithms; zmrig advertises the RandomX family (1% dev fee)"
         else
             ENGINE="zmrig"
-            info "auto: ${POOL%%:*} mines RandomX only, using the zmrig engine (0% fee)"
+            info "auto: ${POOL%%:*} mines RandomX only, using the zmrig engine (1% dev fee)"
         fi
     fi
 
@@ -736,8 +736,8 @@ resolve_engine() {
         zmrig)
             # No explicit pin: advertise the whole RandomX family. A pool that
             # pays for several coins then moves this rig to the variant that
-            # pays best per hash, with no reinstall and no fee. A pool with one
-            # coin simply picks rx/0.
+            # pays best per hash, with no reinstall. A pool with one coin simply
+            # picks rx/0.
             if [ -z "$ALGO" ]; then
                 ALGO="auto"
                 info "zmrig advertises the RandomX family; the pool picks the best-paying variant"
@@ -1174,7 +1174,7 @@ ${cpu_threads_json}
         "loader": null,
         "nvml": true
     },
-    "donate-level": 0,
+    "donate-level": 1,
     "log-file": null,
     "pools": [
         {
@@ -1339,7 +1339,7 @@ install_binary() {
     if [ -f "${CONFIGURED_ROOT}/scripts/tune-linux.sh" ]; then
         as_root install -m 0755 "${CONFIGURED_ROOT}/scripts/tune-linux.sh" "${BIN_DIR}/zmrig-tune"
         as_root install -m 0755 "${CONFIGURED_ROOT}/scripts/bench.sh" "${BIN_DIR}/zmrig-bench"
-        as_root install -m 0755 "${CONFIGURED_ROOT}/scripts/verify-fee-free.sh" "${BIN_DIR}/zmrig-verify"
+        as_root install -m 0755 "${CONFIGURED_ROOT}/scripts/verify-fee.sh" "${BIN_DIR}/zmrig-verify"
         ok "helpers: zmrig-tune, zmrig-bench, zmrig-verify"
     fi
 }
@@ -1376,7 +1376,7 @@ EOF
 
     as_root tee "$SERVICE_FILE" >/dev/null <<EOF
 [Unit]
-Description=ZMRIG - fee-free RandomX miner by @nggkhaiz
+Description=ZMRIG - RandomX miner by @nggkhaiz
 Documentation=file://${CONFIGURED_ROOT}/README.md
 After=network-online.target
 Wants=network-online.target
@@ -1737,16 +1737,26 @@ self_check() {
         fi
         rm -f /tmp/zmrig-selftest.$$
 
-        # zmrig has no donation code at all; prove it on the shipped binary.
-        if have strings; then
-            local dev_fee
-            dev_fee=$(strings "$BINARY" | grep -ci "donat" || true)
-            [ "${dev_fee:-0}" = 0 ] && ok "fee audit: no donation code in the binary (0%)" \
-                                    || warn "found ${dev_fee} donation related strings, inspect manually"
+        # The shipped binary takes 1 % of Monero time. Print what it says about
+        # itself, and fail loudly if it says something else than the docs.
+        local donate_line
+        donate_line=$("$BINARY" -o pool.example.com:3333 -u TEST --check 2>/dev/null | sed -n 's/^ *donate  //p' | head -1)
+        case "$donate_line" in
+            1%*46SQLW7D*) ok "developer fee: ${donate_line}" ;;
+            off*)         warn "the installed config disables the developer fee (${CONFIG_FILE})" ;;
+            *)            warn "developer fee line is not the documented one: ${donate_line:-missing}" ;;
+        esac
+        if [ -x "${CONFIGURED_ROOT}/scripts/verify-fee.sh" ] \
+           && "${CONFIGURED_ROOT}/scripts/verify-fee.sh" --binary "$BINARY" >/tmp/zmrig-fee.$$ 2>&1; then
+            ok "fee audit: one wallet, Monero only, switchable off"
+        else
+            warn "fee audit reported a problem:"
+            tail -5 /tmp/zmrig-fee.$$ 2>/dev/null || true
         fi
+        rm -f /tmp/zmrig-fee.$$
     elif [ -x "${CONFIGURED_ROOT}/scripts/verify-fee-free.sh" ]; then
         if "${CONFIGURED_ROOT}/scripts/verify-fee-free.sh" --binary "$BINARY" >/tmp/zmrig-verify.$$ 2>&1; then
-            ok "fee audit: 0% developer fee"
+            ok "fee audit: the C++ engine has no developer fee"
         else
             warn "fee audit reported a problem:"
             tail -5 /tmp/zmrig-verify.$$ || true
@@ -1779,6 +1789,15 @@ self_check() {
 }
 
 summary_card() {
+    # What the installed binary says about its own fee, so the card cannot drift
+    # from the code: `off` means the operator passed --donate-level=0.
+    local fee_line="1% of Monero time (--donate-level=0 turns it off)"
+    if [ -x "$BINARY" ]; then
+        case "$("$BINARY" -o pool.example.com:3333 -u TEST --check 2>/dev/null | sed -n 's/^ *donate  //p' | head -1)" in
+            off*) fee_line="off (--donate-level=0)" ;;
+        esac
+    fi
+
     cat <<EOF
 
 ${C_G}${C_B}  ZMRIG is ready${C_RESET}
@@ -1788,13 +1807,13 @@ ${C_G}${C_B}  ZMRIG is ready${C_RESET}
     service   ${SERVICE_NAME} ($(service_state))
     pool      ${POOL}
     wallet    ${WALLET:0:12}...${WALLET: -6}
-    fee       0% (no donation code in this build)
+    fee       ${fee_line}
 
     ${C_B}next${C_RESET}
       zmrig status      # or: ./oneclick.sh status
       zmrig logs        # or: journalctl -u ${SERVICE_NAME} -f
       zmrig-bench       # reproducible RandomX measurement
-      zmrig-verify      # prove the 0% fee
+      zmrig-verify      # the fee line, the address, and the off switch
 
 EOF
 }
@@ -2200,7 +2219,7 @@ cmd_plan() {
 
     local engine_note=""
     case "$ENGINE" in
-        zmrig) engine_note="RandomX family, 0% fee" ;;
+        zmrig) engine_note="RandomX family, 1% dev fee" ;;
         xmrig) engine_note="all algorithms, pool picks the coin" ;;
     esac
 
@@ -2326,15 +2345,22 @@ case "$COMMAND" in
         if [ "$ENGINE" = "zmrig" ]; then
             step "verifying zmrig"
             zmrig_self_test "$binary" || die "self-test failed"
+            # The fee is 1 % of Monero time, printed by --check and switchable
+            # off; the audit below reads the rate, the address and the switch.
+            if [ -x "${CONFIGURED_ROOT}/scripts/verify-fee.sh" ]; then
+                "${CONFIGURED_ROOT}/scripts/verify-fee.sh" --binary "$binary" \
+                    || die "developer-fee audit failed"
+            else
+                "$binary" -o pool.example.com:3333 -u TEST --check | sed -n 's/^ *donate  /    /p'
+            fi
             if have strings; then
-                # Look for the donation *endpoints and wallets*, not for the
-                # word "donate": the monitoring API legitimately reports
-                # "donate_level": 0 in its JSON, which is not donation code.
+                # No upstream donation endpoint: the fee goes through the pool
+                # the operator configured, not through xmrig.com.
                 zm_dev_fee=$(strings "$binary" \
                     | grep -Eci "donate\.v2\.xmrig\.com|xmrig\.com/donate|44tLjm|donate\.moneroocean" \
                     || true)
-                [ "${zm_dev_fee:-0}" = 0 ] && ok "no donation endpoints or wallets: 0% developer fee" \
-                                           || die "${zm_dev_fee} donation endpoint/wallet string(s) found in the binary"
+                [ "${zm_dev_fee:-0}" = 0 ] && ok "no upstream donation endpoint or wallet" \
+                                           || die "${zm_dev_fee} upstream donation string(s) found in the binary"
             fi
             ok "verified"
         else

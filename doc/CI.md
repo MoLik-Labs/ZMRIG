@@ -13,8 +13,10 @@ token needs the `workflows` scope to modify those files. Paste them into the
 Linux job after `Run safe test subset`:
 
 ```yaml
-      - name: Verify zero developer fee
-        run: ./scripts/verify-fee-free.sh --binary build/xmrig
+      - name: Audit the developer fee
+        run: |
+          ./scripts/verify-fee.sh --binary zmrig/out/zmrig
+          ./scripts/verify-fee-free.sh --binary build/xmrig
 
       - name: Run miner integration tests
         run: node run_tests.js --suite miner-integration --build-dir build
@@ -25,7 +27,8 @@ What they cover:
 | Check | What it proves |
 |---|---|
 | `tests/oneclick/branch-switch.sh` | the installer's branch switching works in a `--depth 1` single-branch clone, and an unknown branch is a hard error instead of a silent no-op |
-| `verify-fee-free.sh` | no donation strategy in the source or the binary, no developer wallet, keeps the fee at 0 % even when `--donate-level=9` is passed (C++ prints `DONATE 0%`, zmrig says the flag is ignored) |
+| `verify-fee.sh` | the Zig engine's fee is the documented 1 % of Monero time: one address, `--check` prints rate/address/cadence, `--donate-level=0` and `--no-donate` print `off`, `--donate-level=11` is rejected, no upstream donation endpoint in the binary |
+| `verify-fee-free.sh` | the C++ engine still has no donation strategy, no developer wallet, and prints `DONATE 0%` even with `--donate-level=9` |
 | `miner-integration` | the built binary talks stratum, accepts a job and submits a share for all 34 CPU algorithms (`tests/common/miner_harness.js` runs a fake pool) |
 
 The documentation site and the donation guard run as their own job — small
@@ -63,6 +66,7 @@ starts its own pools and TLS shims):
 Both run locally as well:
 
 ```bash
+./scripts/verify-fee.sh --binary zmrig/out/zmrig
 ./scripts/verify-fee-free.sh --binary build/xmrig
 node run_tests.js --suite miner-integration --build-dir build
 node run_tests.js --safe --build-dir build

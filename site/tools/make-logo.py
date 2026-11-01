@@ -1,25 +1,27 @@
 #!/usr/bin/env python3
 """Draws the ZMRIG mark, once, in every format the repository needs.
 
-The mark is a **Z**, and it is drawn rather than typed: one outline, one tone,
-no gradients, no shadow, no second element. Three strokes - bar, diagonal, bar -
-at a weight that stays the same as the letter turns, with the diagonal cut
-thinner than the bars because a diagonal at equal weight always reads heavier.
-The two corners that sit on the diagonal's axis are chamfered, so the terminals
-answer the direction of the stroke instead of being squared off against it.
+The mark is a **Z sitting on a wave**: three strokes - bar, diagonal, bar - with
+the bottom edge of the lower bar rising and falling like a water line. One
+outline, one tone, no gradients, no shadow, no second element.
+
+Why a Z with water under it:
+
+* the miner is ZMRIG and the miner is written in Zig; a bold zigzag is the shape
+  both names already share, and a letter needs no caption in a favicon;
+* the pool, the proxy and the site are the sea this rig swims in, so the base of
+  the letter is water rather than a straight rule - the one decoration the mark
+  allows itself, and it is part of the letter, not a bubble next to it;
+* the top bar, the diagonal and both verticals stay straight and on the grid, so
+  the mark still reads as a Z at 16 px, where a wave drawn *inside* the stroke
+  (a curved diagonal, a split stem, a ring) turns to mush.
 
 Two properties make it survive being an icon rather than a poster:
 
-* the outline is symmetric under a 180 degree rotation, so the mark cannot look
-  crooked inside a circle, a square tile or a browser tab;
-* every coordinate is a whole or half grid unit on a 32 unit grid, so the 16, 32
-  and 48 pixel versions land on pixels instead of on grey fringes.
-
-Why a letter: the miner is ZMRIG and the miner is written in Zig. A bold zigzag
-is the shape both names already share, and a mark that is unmistakably a letter
-needs no caption in a favicon. Anything built out of a ring, a core or a pair of
-memory layers was tried first and read as a generic chip logo at 16 px, which is
-where a logo spends its life.
+* the straight parts use whole and half grid units on a 32 unit grid, so the 16,
+  32 and 48 pixel versions land on pixels instead of on grey fringes;
+* the wave is sampled, not a second shape: a curve rendered as a separate path
+  leaves a hairline seam against the bar it is supposed to be part of.
 
     python3 site/tools/make-logo.py
 
@@ -45,29 +47,42 @@ OUT = Path(__file__).resolve().parent.parent / "static" / "img"
 
 # --- geometry, on a 32 unit grid -------------------------------------------
 #
-# One closed outline, clockwise from the chamfered top-left corner. Read it as
-# three strokes:
+# Read it as three strokes plus a water line:
 #
-#   top bar      (8,4)  -> (28,4)  -> (28,11)         7 units thick
-#   diagonal     28,11  -> (20.5,21) -> (28,21)       the thin stroke
-#   bottom bar   (4,21) -> (4,28)  -> (28,28)         7 units thick
+#   top bar      (4,4)   -> (28,4)  -> (28,11)        7 units thick
+#   diagonal     (28,11) -> (11,20.6)                 the letter's slant
+#   bottom bar   (4,20.6) -> (4,26.8) -> (28,26.8)    6 units thick
+#   water line   the bottom edge, y = 26.8 + 1.9 sin(2 pi x / 24)
 #
-# with the bottom-right and top-left corners chamfered by 4 units. The outline
-# is exactly symmetric under (x, y) -> (32 - x, 32 - y).
-Z = [
-    (8.0, 4.0),
-    (28.0, 4.0),
-    (28.0, 11.0),
-    (20.5, 21.0),
-    (28.0, 21.0),
-    (28.0, 24.0),
-    (24.0, 28.0),
-    (4.0, 28.0),
-    (4.0, 21.0),
-    (11.5, 11.0),
-    (4.0, 11.0),
-    (4.0, 8.0),
-]
+# The wave is sampled at a fixed step instead of being a second path: two shapes
+# that share an edge leave a hairline seam once an SVG renderer anti-aliases
+# them separately, and the seam shows at exactly the sizes this is used at.
+
+WAVE_BASE = 26.8
+WAVE_AMPLITUDE = 1.9
+WAVE_PERIODS = 1.0
+WAVE_STEPS = 180
+
+
+def _wave(x_from=28.0, x_to=4.0):
+    """The water line, right to left: crest under the diagonal, trough on the left."""
+    import math
+
+    points = []
+    width = x_from - x_to
+    for i in range(1, WAVE_STEPS):
+        x = x_from - width * i / WAVE_STEPS
+        y = WAVE_BASE + WAVE_AMPLITUDE * math.sin(2 * math.pi * WAVE_PERIODS * (x_from - x) / width)
+        points.append((round(x, 2), round(y, 2)))
+
+    return points
+
+
+Z = (
+    [(4.0, 4.0), (28.0, 4.0), (28.0, 11.0), (11.0, 20.6), (28.0, 20.6), (28.0, WAVE_BASE)]
+    + _wave()
+    + [(4.0, WAVE_BASE), (4.0, 20.6), (21.0, 11.0), (4.0, 11.0)]
+)
 
 # A single polygon rather than three: adjacent shapes with a shared edge leave a
 # hairline seam once an SVG renderer anti-aliases each one separately, and the
@@ -95,10 +110,10 @@ def svg_document(colour, note=""):
 
 NOTE = """
   <!--
-    ZMRIG. Ziggurat, Zig: one bold Z, bar / diagonal / bar, one tone.
-    The two chamfered corners follow the diagonal's axis, the outline is
-    symmetric under a 180 degree rotation, and every coordinate is on the 32
-    unit grid so the 16, 32 and 48 pixel versions stay sharp.
+    ZMRIG. One bold Z on a water line: bar / diagonal / bar, one tone, no
+    gradient, no second shape. The straight parts are on the 32 unit grid so the
+    16, 32 and 48 pixel versions stay sharp; the bottom edge is a sampled wave,
+    part of the same outline, so it cannot leave a seam.
     Regenerate with site/tools/make-logo.py - do not hand-edit.
   -->"""
 

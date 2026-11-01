@@ -7,9 +7,9 @@
 <link rel="icon" type="image/png" sizes="32x32" href="/ZMRIG/img/favicon-32.png">
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.b9407fd1.css">
-<script src="/ZMRIG/assets/js/runtime~main.6e12f229.js" defer="defer"></script>
-<script src="/ZMRIG/assets/js/main.9a13e464.js" defer="defer"></script>
+<meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.e1cb14c0.css">
+<script src="/ZMRIG/assets/js/runtime~main.2cc2df5b.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/main.703ef795.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -32,10 +32,11 @@ list, before anything is written to the machine.</p>
 <p>Look at the plan first — it prints the coin, the algorithm, the engine and the
 profile it resolved, and writes nothing:</p>
 <div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token function" style="color:rgb(130, 170, 255)">sudo</span><span class="token plain"> ./oneclick.sh plan </span><span class="token parameter variable" style="color:rgb(191, 199, 213)">--wallet</span><span class="token plain"> YOUR_ADDRESS </span><span class="token parameter variable" style="color:rgb(191, 199, 213)">--coin</span><span class="token plain"> wow </span><span class="token parameter variable" style="color:rgb(191, 199, 213)">--pool</span><span class="token plain"> pool.example.org:3333</span><br></div></code></pre></div></div>
-<div class="language-text codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-text codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token plain">engine         zmrig  (RandomX family, 0% fee)</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">pool           pool.example.org:3333</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">algo           rx/wow</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">coin           Wownero</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">profile        free  (auto: no battery, electricity is treated as free)</span><br></div></code></pre></div></div>
+<div class="language-text codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-text codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token plain">engine         zmrig  (RandomX family, 1% dev fee)</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">pool           pool.example.org:3333</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">algo           rx/wow</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">coin           Wownero</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">profile        free  (auto: no battery, electricity is treated as free)</span><br></div></code></pre></div></div>
 <p>The engine is chosen for you: <code>rx/*</code> and <code>panthera</code> are the Zig engine&#x27;s
-territory, which is the 0 % fee one. Force the C++ engine with <code>--engine xmrig</code>
-if you are debugging, not because it is faster — it is not.</p>
+territory (1 % of Monero time, <code>--donate-level=0</code> to remove it). Force the C++
+engine with <code>--engine xmrig</code> if you are debugging, not because it is faster — it
+is not.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="the-endpoint-is-yours-to-supply">The endpoint is yours to supply<a href="#the-endpoint-is-yours-to-supply" class="hash-link" aria-label="Direct link to The endpoint is yours to supply" title="Direct link to The endpoint is yours to supply" translate="no">​</a></h2>
 <p>The seven pool presets in the builder are Monero pools. Fees and endpoints for
 the smaller coins change too often for this repository to keep them accurate, so

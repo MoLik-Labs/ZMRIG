@@ -47,7 +47,7 @@ sudo ./oneclick.sh plan --wallet YOUR_ADDRESS --coin wow --pool pool.example.org
 ```
 
 ```text
-engine         zmrig  (RandomX family, 0% fee)
+engine         zmrig  (RandomX family, 1% dev fee)
 pool           pool.example.org:3333
 algo           rx/wow
 coin           Wownero
@@ -55,8 +55,9 @@ profile        free  (auto: no battery, electricity is treated as free)
 ```
 
 The engine is chosen for you: `rx/*` and `panthera` are the Zig engine's
-territory, which is the 0 % fee one. Force the C++ engine with `--engine xmrig`
-if you are debugging, not because it is faster — it is not.
+territory (1 % of Monero time, `--donate-level=0` to remove it). Force the C++
+engine with `--engine xmrig` if you are debugging, not because it is faster — it
+is not.
 
 ## The endpoint is yours to supply
 
