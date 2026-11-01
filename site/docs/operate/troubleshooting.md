@@ -11,7 +11,7 @@ image: https://nggkhaiz.github.io/ZMRIG/img/og-en.png
 | Symptom | Usual cause | What to do |
 | --- | --- | --- |
 | `dataset ready` takes 20–30 s | normal: building 2 GiB | not a fault; `--mode light` takes 0.6 s but keeps 9 % of the hashrate. `panthera` builds 64 MB and is ready in about 0.4 s |
-| 20–30 % below expected hashrate | huge pages were not granted | `grep HugePages /proc/meminfo`; the log must say `huge pages … (explicit)`, not `(THP fallback)` |
+| 20–30 % below expected hashrate | the mapping is on 4 KiB pages | `zmrig --check` prints the `thp` policy; the log must show 2 MiB pages, either `huge pages … (explicit)` or `huge pages: … MB via THP (…, measured by the kernel)` |
 | the process is killed, exit 137 | out of RAM while building the dataset (huge pages already hold the rest) | fix the huge-page reservation, or use `--mode light` |
 | `cannot read …: check the path or run as root` | the config is root-only | run with `sudo` |
 | `config ok` but nothing mines | no `-c`, or no pool given | `--check` only inspects the file it was given |
@@ -36,6 +36,13 @@ image: https://nggkhaiz.github.io/ZMRIG/img/og-en.png
   192 MB; a 512 MB VPS can mine it in fast mode. The reservation, the
   `--mode=auto` decision, the memory gate in front of `--bench` and
   `zmrig-tune --algo` all read the compiled configuration of the algorithm now.
+- **A bigger dataset was refused on a machine that had the memory.** The
+  pre-flight in front of `--bench` and `--report` compared the requirement
+  against the huge-page pool and against `MemAvailable` separately, so a host
+  that had followed the miner's own advice (`echo 1168 > nr_hugepages`) had
+  2336 MB in the pool and 1.2 GB of RAM, and the 2404 MB requirement matched
+  neither number. The two are added now — the allocator falls back per mapping,
+  so both are usable — and the message says which two figures it summed.
 - **Switching algorithm leaked 2.3 GiB.** The cache was allocated with
   `posix_memalign` and freed with `munmap`, so the pages stayed mapped. A pool
   that rotates coins (MoneroOcean does) would run the machine out of memory

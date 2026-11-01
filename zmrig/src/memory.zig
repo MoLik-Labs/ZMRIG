@@ -6,7 +6,9 @@
 // 128 MiB of cache and a 64 MiB dataset, so a 512 MiB VPS can mine it in fast
 // mode with 2 MiB pages while Monero would not even fit. Sizing the reservation
 // and the `--mode=auto` decision from Monero's numbers meant those machines fell
-// back to light mode — a 20-30 % hashrate loss — for no reason.
+// back to light mode for no reason: 82 H/s where fast mode does 857 H/s on the
+// same two cores, because light mode rebuilds every dataset line from the cache
+// on the fly. It is a fallback for boxes that cannot give 2 GiB, not a mode.
 //
 // The numbers come from the C engine (`xmo_algo_memory`), which reads the
 // compiled-in configuration; this module is the rule that turns them into a

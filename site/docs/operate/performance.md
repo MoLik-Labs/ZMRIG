@@ -12,7 +12,13 @@ random order. Almost everything that matters follows from that one sentence.
 ## The three levers that matter
 
 **Huge pages.** The largest and most obvious gain. A 4 KiB page size makes the
-dataset walk a TLB miss every few accesses.
+dataset walk a TLB miss every few accesses. There are two ways to get 2 MiB
+pages and the miner reports which one it got: `huge pages … MB (explicit)` means
+the reserved pool, and `huge pages: … MB via THP (…, measured by the kernel)`
+means transparent huge pages collapsed the mapping — read from
+`/proc/self/smaps_rollup`, not assumed. The second is what an unprivileged user
+gets on a stock Ubuntu kernel, and it is worth most of the gain: 786 H/s against
+615 H/s for 4 KiB pages on the test host, where the reserved pool gives 800–841.
 
 ```bash
 echo 1168 | sudo tee /proc/sys/vm/nr_hugepages    # ~2.3 GiB of 2 MiB pages, for Monero
@@ -38,9 +44,11 @@ and remember to put it back.
 :::
 
 **Fast or light mode.** `fast` builds one dataset shared by every thread. `light`
-keeps the cache and rebuilds the dataset per hash: 76 H/s against 814 H/s on the
-same machine (`rx/0`). Light mode exists for a VPS that cannot give the RAM, not
-as a power-saving option.
+keeps the cache and rebuilds every dataset line per hash: 82 H/s against 849 H/s
+on the same machine, same minute, `rx/0` — a factor of ten, not a power-saving
+option. A rig that falls back to light mode is not mining, it is idling at 10 %.
+The startup log says which one it chose and why, and `--check` prints the
+decision before you start.
 
 Which one you get in `--mode=auto` depends on the **coin**, because the coins are
 not the same size. This is measured, not estimated from a constant:
@@ -65,9 +73,9 @@ datasets are sized from the compiled configuration rather than from
 dataset is how a 512 MB VPS ends up refusing to start on a coin it can mine.
 
 **Threads.** One per physical core, two per core only when SMT helps: on the test
-host, two threads on two vCPUs gave 814 H/s and one thread gave 408 H/s, which is
-linear. SMT usually adds 5–15 % hashrate for 30–40 % more power, which is why the
-`watt` profile drops it.
+host, two threads on two vCPUs gave 808–817 H/s, one thread 408 H/s, and four
+threads on two cores 798–801 H/s — oversubscribing buys nothing. SMT usually adds
+5–15 % hashrate for 30–40 % more power, which is why the `watt` profile drops it.
 
 ## The two that do not
 
@@ -86,12 +94,13 @@ one run per configuration.
 
 | Configuration | Hashrate | Ratio |
 | --- | ---: | ---: |
-| default: 2 threads, huge pages, prefetch 1 | 814 H/s | 100 % |
-| `--no-huge-pages` | 634 H/s | 78 % |
-| `--mode light` | 76 H/s | 9 % |
+| default: 2 threads, 1168 pages reserved, prefetch 1 | 800–841 H/s | 100 % |
+| same, no pages reserved (THP backs the mapping) | 786 H/s | 95 % |
+| same, no pages reserved and THP off (4 KiB) | 615–626 H/s | 76 % |
+| `--mode light` | 82 H/s | 10 % |
 | `-t 1` | 408 H/s | 50 % |
-| `--scratchpad-prefetch=0` | 823 H/s | 101 % (noise) |
-| `--scratchpad-prefetch=2` | 823 H/s | 101 % (noise) |
+| `-t 4` on two cores | 798–801 H/s | 98 % (noise) |
+| `--scratchpad-prefetch=0/2/3` | 1208–1302 kH/s on `panthera` | noise |
 | `--no-affinity` | 814 H/s | 100 % (noise) |
 
 The same binary on the same host in a quieter session measured **1008–1103 H/s**.

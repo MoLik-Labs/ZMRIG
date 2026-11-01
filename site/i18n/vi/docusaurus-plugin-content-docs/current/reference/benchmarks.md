@@ -36,12 +36,13 @@ Quy tắc để con số có nghĩa:
 
 | Cấu hình | Hashrate | So với mặc định | Nhận xét |
 | --- | ---: | ---: | --- |
-| Mặc định: 2 thread, huge pages, prefetch 1 | 814 H/s | 100 % | điểm chuẩn |
-| `--no-huge-pages` | 634 H/s | 78 % | mất 22 % ở lần này, 36 % ở lần khác |
-| `--mode light` | 76 H/s | 9 % | chỉ khi thiếu RAM |
+| Mặc định: 2 thread, đặt trước 1168 trang, prefetch 1 | 800–841 H/s | 100 % | điểm chuẩn, năm lần chạy |
+| Không đặt trang nào, THP bật (Ubuntu mặc định) | 786 H/s | 95 % | thứ một user thường nhận được |
+| Không đặt trang nào, THP tắt | 615–626 H/s | 76 % | trường hợp duy nhất đáng bỏ công chạy root |
+| `--mode light` | 82 H/s | 10 % | chỉ khi thiếu RAM |
 | `-t 1` | 408 H/s | 50 % | scale tuyến tính |
-| `--scratchpad-prefetch=0` | 823 H/s | 101 % | trong nhiễu |
-| `--scratchpad-prefetch=2` | 823 H/s | 101 % | trong nhiễu |
+| `-t 4` trên hai core | 798–801 H/s | 98 % | chia quá số core không được gì |
+| `--scratchpad-prefetch=0/2/3` | 1208–1302 kH/s (`panthera`) | — | trong nhiễu |
 | `--no-affinity` | 814 H/s | 100 % | 2 vCPU, không khác biệt |
 
 Cùng máy, cùng binary, ở một phiên ít tải hơn: **1008–1103 H/s**. Độ tản đó là
@@ -70,22 +71,58 @@ tra miner có lấy được: log khởi động in `huge pages … MB (explicit
 phải 1168; `sudo zmrig-tune --algo panthera` ghi đúng con số đó, và `zmrig` tự
 tính mức đặt của mình theo cùng cách.
 
+### Ba trạng thái cỡ trang, đã đo
+
+`--no-huge-pages` không phải cùng một phép thử với "chưa bao giờ đặt trang".
+Miner này đặt `MADV_HUGEPAGE` cho mọi mapping nó tạo, nên trên kernel có
+`transparent_hugepage=madvise` (mặc định của Ubuntu) một lần chạy không có quyền
+root vẫn nhận trang 2 MiB, chỉ là không lấy từ pool. Ba trạng thái, `rx/0`, mỗi
+cấu hình hai lần, cùng phiên:
+
+| Số trang | Nguồn cấp | Hashrate |
+| --- | --- | ---: |
+| đặt trước 1168 | `MAP_HUGETLB` | 814.5 / 832.2 H/s |
+| không đặt trang nào | THP gộp 99 % mapping | 785.9 / 786.1 H/s |
+| không đặt trang nào, THP tắt | 4 KiB | 614.8 / 626.3 H/s |
+
+Vậy bước quan trọng là 4 KiB → 2 MiB (≈ +28 %), còn pool đặt trước thêm 4–6 %
+nữa. Đó là lý do miner chỉ đòi quyền root khi THP tắt, và tại sao log khởi động
+in chính con số kernel đếm được (`huge pages: 2332 MB via THP (99 % of the
+2336 MB mapping, measured by the kernel)`) thay vì tuyên bố rằng gợi ý đã có
+tác dụng.
+
 Cảnh báo thực tế: khi đã đặt 1168 trang, RAM thường còn khoảng 1.2 GB. Chạy
 `--no-huge-pages` lúc đó sẽ bị OOM-kill (exit 137), vì dataset 2 GiB không còn
 chỗ. Hạ `nr_hugepages` về 0 trước.
 
+### Dựng dataset
+
+Dataset 2 GiB là bài toán băng thông bộ nhớ, và là chỗ chờ lâu nhất của một rig.
+Đo trên máy này, seed `00112233…`:
+
+| Số thread khởi tạo | `dataset ready in` |
+| --- | ---: |
+| 1 | 42.9 s |
+| 2 | 21.1 s |
+
+Nên `--randomx-init=1` là cách làm một lần đổi seed mất gấp đôi thời gian, không
+phải cách để chừa một core cho việc khác — mọi core đằng nào cũng đang chờ
+dataset. Mặc định là dùng mọi thread phần cứng, kể cả khi đào được lệnh dùng ít
+thread hơn (`-t 1` vẫn dựng bằng tất cả).
+
 ### 2. Chế độ fast hay light
 
-`fast` dựng một dataset 2 GiB dùng chung cho mọi thread → 814 H/s trên máy 2 vCPU
-này. `light` chỉ giữ cache 256 MiB và tính lại dataset cho mỗi hash → 76 H/s.
+`fast` dựng một dataset 2 GiB dùng chung cho mọi thread → 849 H/s trên máy 2 vCPU
+này. `light` chỉ giữ cache 256 MiB và tính lại dataset cho mỗi hash → 82 H/s.
 
-Gần 11 lần. `light` hợp lý khi VPS không đủ RAM, hoặc để thử nhanh một cấu hình
+Gần 10 lần. `light` hợp lý khi VPS không đủ RAM, hoặc để thử nhanh một cấu hình
 (khởi động 0.6 s thay vì 20 s).
 
 ### 3. Số thread
 
-Tuyến tính trên máy này: 2 thread = 814 H/s, 1 thread = 408 H/s. Không có điểm
-ngọt bí ẩn. Trên vCPU chia sẻ bị throttle, thêm thread có thể làm hashrate mỗi
+Tuyến tính trên máy này: 2 thread = 808–817 H/s, 1 thread = 408 H/s, 4 thread
+trên hai core = 798–801 H/s. Không có điểm ngọt bí ẩn và không có gì trên số core
+thật. Trên vCPU chia sẻ bị throttle, thêm thread có thể làm hashrate mỗi
 thread giảm mà tổng vẫn tăng; đo là cách duy nhất để biết.
 
 ## Những cài đặt không tạo ra khác biệt đo được

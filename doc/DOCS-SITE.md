@@ -153,10 +153,19 @@ python3 site/tools/make-logo.py     # the mark, all formats
 python3 site/tools/make-art.py      # the social cards, which use it
 ```
 
-The shape is the cache (solid core) inside the dataset (the ring) — the two
-layers of memory every supported coin builds before it can hash — with two
-corners cut at 45° so the block has an axis. It is deliberately one tone: no
-accent colour, no gradient, no letterform, nothing that turns to mush at 16 px.
+The shape is a **Z**: bar, diagonal, bar, one weight throughout, with the
+diagonal cut thinner than the bars because an equal-weight diagonal always reads
+heavier. The two corners on the diagonal's axis are chamfered at the same angle,
+which gives the terminals a direction, and the whole outline is symmetric under
+a 180° rotation so it cannot look crooked inside a tab, a tile or a circle. The
+name is ZMRIG, the miner is written in Zig; the bold zigzag is the shape both
+words already share, and a letter survives 16 px without a caption.
+
+One tone only, because a mark that needs an accent colour is a mark that changes
+its meaning in a dark theme. Every coordinate is a whole or half unit on a 32
+unit grid, so the 16, 32 and 48 pixel renders land on pixels instead of on grey
+fringes.
+
 Light and dark pages get the same file in opposite tones (`logo.svg` /
 `logo-dark.svg`), the navbar swaps them with `srcDark`, the home page swaps them
 with `.zm-mark--light` / `.zm-mark--dark`, and `favicon.svg` picks its tone from

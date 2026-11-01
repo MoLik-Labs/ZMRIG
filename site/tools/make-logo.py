@@ -1,11 +1,25 @@
 #!/usr/bin/env python3
 """Draws the ZMRIG mark, once, in every format the repository needs.
 
-The mark is a RandomX rig's two layers of memory: the cache (the solid core)
-inside the dataset (the ring that surrounds it). It is built as a single
-stroked centreline, so the band is the same width all the way round, the two cut
-corners give the block an axis (which is what stops it reading as a checkbox or
-a letter), and one tone is all it needs.
+The mark is a **Z**, and it is drawn rather than typed: one outline, one tone,
+no gradients, no shadow, no second element. Three strokes - bar, diagonal, bar -
+at a weight that stays the same as the letter turns, with the diagonal cut
+thinner than the bars because a diagonal at equal weight always reads heavier.
+The two corners that sit on the diagonal's axis are chamfered, so the terminals
+answer the direction of the stroke instead of being squared off against it.
+
+Two properties make it survive being an icon rather than a poster:
+
+* the outline is symmetric under a 180 degree rotation, so the mark cannot look
+  crooked inside a circle, a square tile or a browser tab;
+* every coordinate is a whole or half grid unit on a 32 unit grid, so the 16, 32
+  and 48 pixel versions land on pixels instead of on grey fringes.
+
+Why a letter: the miner is ZMRIG and the miner is written in Zig. A bold zigzag
+is the shape both names already share, and a mark that is unmistakably a letter
+needs no caption in a favicon. Anything built out of a ring, a core or a pair of
+memory layers was tried first and read as a generic chip logo at 16 px, which is
+where a logo spends its life.
 
     python3 site/tools/make-logo.py
 
@@ -31,103 +45,85 @@ OUT = Path(__file__).resolve().parent.parent / "static" / "img"
 
 # --- geometry, on a 32 unit grid -------------------------------------------
 #
-# The centreline of the ring. Round numbers on purpose: at 16 px one grid unit
-# is half a pixel, so anything off-grid turns to mush.
-BAND = 3.4          # stroke width
-CORNER = 2.1        # radius of the two rounded corners
-CORE = 7.6          # side of the solid core, centred
-CORE_RADIUS = 1.5
-
-# Corner points of the centreline, clockwise from the top-left.
-STRAIGHT = [
-    (7.0, 4.9),
-    (20.6, 4.9),    # top edge, then the 45 degree cut
-    (27.1, 11.4),
-    (27.1, 20.6),   # right edge, then the second cut
-    (20.6, 27.1),
-    (7.0, 27.1),
+# One closed outline, clockwise from the chamfered top-left corner. Read it as
+# three strokes:
+#
+#   top bar      (8,4)  -> (28,4)  -> (28,11)         7 units thick
+#   diagonal     28,11  -> (20.5,21) -> (28,21)       the thin stroke
+#   bottom bar   (4,21) -> (4,28)  -> (28,28)         7 units thick
+#
+# with the bottom-right and top-left corners chamfered by 4 units. The outline
+# is exactly symmetric under (x, y) -> (32 - x, 32 - y).
+Z = [
+    (8.0, 4.0),
+    (28.0, 4.0),
+    (28.0, 11.0),
+    (20.5, 21.0),
+    (28.0, 21.0),
+    (28.0, 24.0),
+    (24.0, 28.0),
+    (4.0, 28.0),
+    (4.0, 21.0),
+    (11.5, 11.0),
+    (4.0, 11.0),
+    (4.0, 8.0),
 ]
-STEPS = 14          # points per rounded corner
+
+# A single polygon rather than three: adjacent shapes with a shared edge leave a
+# hairline seam once an SVG renderer anti-aliases each one separately, and the
+# seam is visible at exactly the sizes this is used at.
+SHAPES = [Z]
 
 
-def centreline_points():
-    """Closed centreline, as (x, y) pairs, with the corners sampled."""
-    import math
-
-    pts = [(7.0, 4.9), (20.6, 4.9), (27.1, 11.4), (27.1, 20.6), (20.6, 27.1), (7.0, 27.1)]
-
-    # bottom-left: centre (7, 25), from angle 90 deg to 180 deg
-    for i in range(1, STEPS + 1):
-        a = math.radians(90 + 90 * i / STEPS)
-        pts.append((7.0 + CORNER * math.cos(a), 25.0 + CORNER * math.sin(a)))
-
-    pts.append((4.9, 25.0))
-    pts.append((4.9, 7.0))
-
-    # top-left: centre (7, 7), from 180 deg to 270 deg
-    for i in range(1, STEPS + 1):
-        a = math.radians(180 + 90 * i / STEPS)
-        pts.append((7.0 + CORNER * math.cos(a), 7.0 + CORNER * math.sin(a)))
-
-    return pts
-
-
-def _fmt(v):
-    text = f"{v:.2f}".rstrip("0").rstrip(".")
+def _fmt(value):
+    text = f"{value:.2f}".rstrip("0").rstrip(".")
     return text if text else "0"
 
 
+def _points(polygon):
+    return " ".join(f"{_fmt(x)},{_fmt(y)}" for x, y in polygon)
+
+
 def svg_document(colour, note=""):
-    pts = centreline_points()
-    head = f"M{_fmt(pts[0][0])} {_fmt(pts[0][1])}"
-    body = "".join(f" L{_fmt(x)} {_fmt(y)}" for x, y in pts[1:])
-    half = CORE / 2
-    core = 16 - half
+    body = "".join(f'\n  <polygon fill="{colour}" points="{_points(p)}"/>' for p in SHAPES)
 
     return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="ZMRIG">
-  <title>ZMRIG</title>{note}
-  <path fill="none" stroke="{colour}" stroke-width="{_fmt(BAND)}" stroke-linejoin="round" stroke-linecap="round" d="{head}{body} Z"/>
-  <rect x="{_fmt(core)}" y="{_fmt(core)}" width="{_fmt(CORE)}" height="{_fmt(CORE)}" rx="{_fmt(CORE_RADIUS)}" fill="{colour}"/>
+  <title>ZMRIG</title>{note}{body}
 </svg>
 """
 
 
 NOTE = """
   <!--
-    The cache inside the dataset: the two layers of memory every coin in this
-    repository has to build before it can hash. One tone, no gradient, no
-    letterform; the two cut corners are the only decoration, and they exist so
-    the block has a direction.
+    ZMRIG. Ziggurat, Zig: one bold Z, bar / diagonal / bar, one tone.
+    The two chamfered corners follow the diagonal's axis, the outline is
+    symmetric under a 180 degree rotation, and every coordinate is on the 32
+    unit grid so the 16, 32 and 48 pixel versions stay sharp.
+    Regenerate with site/tools/make-logo.py - do not hand-edit.
   -->"""
 
 
-def png(size, tile=None, ink=(0, 0, 0, 255)):
-    """Rasterises the mark. `tile` paints a rounded background of that colour."""
+def png(size, tile=None, ink=(0, 0, 0, 255), pad=0.12):
+    """Rasterises the mark. `tile` paints a rounded background of that colour.
+
+    Supersampled 16x: the diagonal's edge is the only curve-free line that can
+    still alias badly, and it is the one thing a favicon is judged on.
+    """
     ss = 16
     s = size * ss
-    if tile is not None:
-        unit = s / 32 * 0.84
-        off = (s - unit * 32) / 2
-    else:
-        unit = s / 32
-        off = 0.0
 
     img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     if tile is not None:
         ImageDraw.Draw(img).rounded_rectangle([0, 0, s - 1, s - 1], radius=s * 0.19, fill=tile)
 
-    mask = Image.new("L", (s, s), 0)
-    d = ImageDraw.Draw(mask)
-    pts = [(off + x * unit, off + y * unit) for x, y in centreline_points()]
-    d.line(pts + [pts[0]], fill=255, width=max(1, round(BAND * unit)), joint="curve")
+    inner = s * (1 - 2 * pad) if tile is not None else s
+    off = (s - inner) / 2
+    unit = inner / 32
 
-    half = CORE / 2
-    d.rounded_rectangle(
-        [off + (16 - half) * unit, off + (16 - half) * unit,
-         off + (16 + half) * unit, off + (16 + half) * unit],
-        radius=CORE_RADIUS * unit,
-        fill=255,
-    )
+    mask = Image.new("L", (s, s), 0)
+    draw = ImageDraw.Draw(mask)
+    for polygon in SHAPES:
+        draw.polygon([(off + x * unit, off + y * unit) for x, y in polygon], fill=255)
 
     img.paste(Image.new("RGBA", (s, s), ink), (0, 0), mask)
     return img.resize((size, size), Image.LANCZOS)
@@ -142,11 +138,10 @@ def main():
     # A tab bar can be light or dark and the mark has one tone, so the favicon
     # carries the opposite tone instead of assuming a background.
     favicon = svg_document("#000000").replace(
-        '<title>ZMRIG</title>',
+        "<title>ZMRIG</title>",
         "<title>ZMRIG</title>\n  <style>\n"
-        "    path { stroke: #000000; }\n    rect { fill: #000000; }\n"
-        "    @media (prefers-color-scheme: dark) {\n"
-        "      path { stroke: #ffffff; }\n      rect { fill: #ffffff; }\n    }\n"
+        "    polygon { fill: #000000; }\n"
+        "    @media (prefers-color-scheme: dark) { polygon { fill: #ffffff; } }\n"
         "  </style>",
     )
     (OUT / "favicon.svg").write_text(favicon)
