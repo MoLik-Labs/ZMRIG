@@ -36,13 +36,13 @@ It is not a silently applied setting. Every one of these says the rate and the
 address:
 
 ```text
-ZMRIG 6.33.0 - RandomX miner by @nggkhaiz
+ZMRIG 6.34.0 - RandomX miner by @nggkhaiz
 1% of Monero mining time goes to the developer (--donate-level=0 turns it off), GPL-3.0, https://github.com/NggKhaiz/ZMRIG
 ```
 
 ```bash
 zmrig ... --check | grep donate
-#   donate  1% of Monero (rx/0) mining time to 46SQLW7D…n6ysb5tJ, 60 s every 100 min (--donate-level=0 turns it off)
+#   donate  1% of Monero (rx/0) mining time to 46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ, 60 s every 100 min (--donate-level=0 turns it off)
 ```
 
 At runtime, once per session:

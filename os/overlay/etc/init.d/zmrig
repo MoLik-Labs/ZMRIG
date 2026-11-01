@@ -1,0 +1,37 @@
+#!/sbin/openrc-run
+#
+# The miner. `zmrig-os run` is the supervisor: it restarts the binary when it
+# crashes, waits (instead of failing) when no wallet is configured yet, and
+# reboots the machine if it cannot keep the miner up at all. OpenRC only starts
+# it and records the pid -- a second layer of supervision inside a first one
+# would just fight over the same process.
+
+name="ZMRIG miner"
+description="Mine with zmrig at the aggressiveness set by 'zmrig-os mode'"
+
+command="/usr/local/bin/zmrig-os"
+command_args="run"
+command_background="yes"
+pidfile="/run/zmrig/service.pid"
+output_log="/var/log/zmrig-os.log"
+error_log="/var/log/zmrig-os.log"
+
+depend() {
+    need localmount
+    after bootmisc chronyd networking
+    use dns logger
+    provide miner
+}
+
+start_pre() {
+    checkpath -d -m 0755 /run/zmrig
+    checkpath -d -m 0755 /var/log
+
+    # Huge pages are reserved by the initramfs while memory is still clean; this
+    # is the second chance, for a rig that was booted by something else.
+    /usr/local/bin/zmrig-os tune >/dev/null 2>&1 || true
+}
+
+stop_post() {
+    rm -f /run/zmrig/service.pid
+}

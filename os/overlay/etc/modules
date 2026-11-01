@@ -1,0 +1,5 @@
+# Loaded at boot. msr is what --msr writes through; the two hwmon drivers are
+# what `zmrig-os doctor` reads a CPU temperature from on Intel and AMD.
+msr
+coretemp
+k10temp

@@ -1,0 +1,23 @@
+#!/sbin/openrc-run
+#
+# First-run wizard. With no wallet in the config the miner waits for one rather
+# than exiting, so the wizard can take as long as a human needs and the rig is
+# mining the moment the last answer is typed.
+
+name="ZMRIG first-run setup"
+description="Ask for the wallet on the console when none is configured"
+
+command="/usr/local/lib/zmrig/firstboot.sh"
+command_background="yes"
+pidfile="/run/zmrig/firstboot.pid"
+output_log="/var/log/zmrig-firstboot.log"
+error_log="/var/log/zmrig-firstboot.log"
+
+depend() {
+    need localmount
+    after zmrig
+}
+
+start_pre() {
+    checkpath -d -m 0755 /run/zmrig
+}
