@@ -193,7 +193,7 @@ if [ "$CLEAN" = "1" ]; then
     rm -rf "$WORK"
 fi
 
-mkdir -p "$WORK" "$OUT" "$CACHE" "$BTREE"
+mkdir -p "$WORK" "$OUT" "$CACHE" "$BTREE" "$ISODIR"
 START=$(date +%s)
 
 # ------------------------------------------------------------------ 1. alpine
@@ -296,12 +296,12 @@ rm -rf "${ROOTFS}/var/cache/apk"/* "${ROOTFS}/tmp"/* "${ROOTFS}/root/.ash_histor
 : > "${ROOTFS}/etc/mtab" 2>/dev/null || true
 rm -f "${ROOTFS}/etc/resolv.conf"
 
-# ------------------------------------------------------------------ 5. squashfs
+# ------------------------------------------------------------------ 5. initramfs
 step "building the initramfs"
 
 # Built from the same chroot the packages were installed into: the module tree
 # belongs to the kernel package, and a base-system tarball has no kernel at all.
-mkdir -p "${ISODIR}/boot"
+mkdir -p "${ISODIR}/boot/grub" "${ISODIR}/zmrig"
 cp "${HERE}/init" "${ROOTFS}/tmp/init"
 cp "${HERE}/make-initramfs.sh" "${ROOTFS}/tmp/make-initramfs.sh"
 chmod 755 "${ROOTFS}/tmp/init" "${ROOTFS}/tmp/make-initramfs.sh"
@@ -321,6 +321,7 @@ say "kernel: $(basename "$KERNEL_IMG") ($(du -h "${ISODIR}/boot/vmlinuz" | cut -
 rm -rf "${ROOTFS}/tmp"/*
 : > "${ROOTFS}/etc/mtab" 2>/dev/null || true
 
+# ------------------------------------------------------------------ 6. squashfs
 step "building rootfs.squashfs"
 
 # zstd is the smallest-and-fastest of the compressors squashfs-tools supports
