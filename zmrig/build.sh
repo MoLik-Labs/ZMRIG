@@ -7,7 +7,14 @@
 #   ./zmrig/build.sh --jobs 8        # parallel C++ compile
 #   ./zmrig/build.sh --no-zig        # only rebuild libxmorx.a
 #   ./zmrig/build.sh --portable      # no -march=native (run on any x86-64)
+#   ./zmrig/build.sh --arch=NAME     # gcc -march=NAME, e.g. x86-64-v2, znver3
+#   ./zmrig/build.sh --static        # one file, no libc at all (musl, via zig)
 #   ./zmrig/build.sh --output DIR    # write the binary/objects to DIR
+#
+# --static cross-compiles the whole engine with `zig cc` against musl and links
+# it into a single file that runs on any Linux, including an Alpine live image
+# that has no glibc and no shared libraries at all. Combine it with --arch to
+# pick the instruction set the ISO build ships.
 #
 # Requirements: g++, ar, zig 0.13 (or set ZIG=/path/to/zig).
 # The Zig part has no external dependencies - nothing is downloaded.
@@ -21,6 +28,8 @@ OBJ="${OUT}/obj"
 JOBS=$(nproc 2>/dev/null || echo 2)
 BUILD_ZIG=1
 MARCH="-march=native"
+MCPU="native"
+STATIC=0
 ZIG="${ZIG:-zig}"
 
 while [ $# -gt 0 ]; do
@@ -30,7 +39,10 @@ while [ $# -gt 0 ]; do
         --output)    OUT="${2:?}"; OBJ="${OUT}/obj"; shift ;;
         --output=*)  OUT="${1#*=}"; OBJ="${OUT}/obj" ;;
         --no-zig)    BUILD_ZIG=0 ;;
-        --portable)  MARCH="" ;;
+        --portable)  MARCH=""; MCPU="baseline" ;;
+        --static)    STATIC=1 ;;
+        --arch)      ARCH="${2:?}"; MARCH="-march=${ARCH}"; MCPU="${ARCH//-/_}"; shift ;;
+        --arch=*)    ARCH="${1#*=}"; MARCH="-march=${ARCH}"; MCPU="${ARCH//-/_}" ;;
         -h|--help)   sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 1 ;;
     esac
@@ -39,15 +51,16 @@ done
 
 command -v g++ >/dev/null || { echo "g++ is required" >&2; exit 1; }
 
-FLAGS_SIG=$(printf '%s\n' "${CXXFLAGS[@]}" "${CFLAGS[@]}" "${ARGON_CFLAGS[@]}" | sha256sum | cut -d' ' -f1)
-
-if [ -d "$OBJ" ] && [ "$(cat "$OBJ/.flags" 2>/dev/null)" != "$FLAGS_SIG" ]; then
-    echo "==> compiler flags changed, rebuilding everything"
-    rm -rf "$OBJ"
+# A static build has to come from one toolchain: gcc links glibc, and glibc
+# cannot be dropped into a musl image. `zig c++` is clang plus a musl sysroot,
+# which is the same compiler family upstream RandomX and XMRig are tested with.
+CXX_BIN=(c++)
+CC_BIN=(cc)
+if [ "$STATIC" -eq 1 ]; then
+    command -v "$ZIG" >/dev/null || [ -x "$ZIG" ] || { echo "zig is required for --static" >&2; exit 1; }
+    CXX_BIN=("$ZIG" c++ -target x86_64-linux-musl)
+    CC_BIN=("$ZIG" cc  -target x86_64-linux-musl)
 fi
-
-mkdir -p "$OBJ"
-printf '%s\n' "$FLAGS_SIG" > "$OBJ/.flags"
 
 CXXFLAGS=(
     -std=c++11 -O3 -DNDEBUG -DXMRIG_FEATURE_ASM -DXMRIG_VAES -fno-rtti -fexceptions -pthread
@@ -74,6 +87,27 @@ ARGON_CFLAGS=(
 [ -n "$MARCH" ] && ARGON_CFLAGS+=("$MARCH" -mtune=native -fno-plt)
 # shellcheck disable=SC2206
 [ -n "${EXTRA_FLAGS:-}" ] && { CFLAGS+=(${EXTRA_FLAGS}); ARGON_CFLAGS+=(${EXTRA_FLAGS}); }
+
+if [ "$STATIC" -eq 1 ]; then
+    CXXFLAGS+=(-static)
+    CFLAGS+=(-static)
+    ARGON_CFLAGS+=(-static)
+fi
+
+# Objects are not interchangeable between flag sets. This signature used to be
+# computed from the *environment* arrays, which were still empty at that point,
+# so a --static or --arch build in the same output directory silently reused the
+# native objects. Hash the real flags, and the mode, now that they exist.
+FLAGS_SIG=$(printf '%s\n' "${CXXFLAGS[@]}" "${CFLAGS[@]}" "${ARGON_CFLAGS[@]}" \
+            "static=${STATIC}" "arch=${MARCH}" | sha256sum | cut -d' ' -f1)
+
+if [ -d "$OBJ" ] && [ "$(cat "$OBJ/.flags" 2>/dev/null)" != "$FLAGS_SIG" ]; then
+    echo "==> compiler flags changed, rebuilding everything"
+    rm -rf "$OBJ"
+fi
+
+mkdir -p "$OBJ"
+printf '%s\n' "$FLAGS_SIG" > "$OBJ/.flags"
 
 RX="${ROOT}/src/crypto/randomx"
 
@@ -166,11 +200,11 @@ compile_one() {
     case "$ext" in
         c)
             case "$src" in
-                */3rdparty/argon2/*) cc "${ARGON_CFLAGS[@]}" -x c -c "$src" -o "$obj" ;;
-                *)                   cc "${CFLAGS[@]}" -x c -c "$src" -o "$obj" ;;
+                */3rdparty/argon2/*) "${CC_BIN[@]}" "${ARGON_CFLAGS[@]}" -x c -c "$src" -o "$obj" ;;
+                *)                   "${CC_BIN[@]}" "${CFLAGS[@]}" -x c -c "$src" -o "$obj" ;;
             esac ;;
         S)
-            cc "${CFLAGS[@]}" -x assembler-with-cpp -c "$src" -o "$obj" ;;
+            "${CC_BIN[@]}" "${CFLAGS[@]}" -x assembler-with-cpp -c "$src" -o "$obj" ;;
         *)
             # The VAES-512 AES routine needs its own ISA even when the build host
             # has none (-march=native only covers the machine doing the build).
@@ -179,9 +213,9 @@ compile_one() {
             # The routine is only ever called behind a runtime CPUID check.
             case "$src" in
                 */aes_hash_vaes512.cpp)
-                    c++ "${CXXFLAGS[@]}" -mvaes -mavx512f -mavx512vl -c "$src" -o "$obj" ;;
+                    "${CXX_BIN[@]}" "${CXXFLAGS[@]}" -mvaes -mavx512f -mavx512vl -c "$src" -o "$obj" ;;
                 *)
-                    c++ "${CXXFLAGS[@]}" -c "$src" -o "$obj" ;;
+                    "${CXX_BIN[@]}" "${CXXFLAGS[@]}" -c "$src" -o "$obj" ;;
             esac ;;
     esac
 }
@@ -237,23 +271,36 @@ command -v "$ZIG" >/dev/null || [ -x "$ZIG" ] || { echo "zig not found (set ZIG=
 echo "==> building zmrig ($($ZIG version))"
 
 CPU_FLAG=()
-[ -n "$MARCH" ] && CPU_FLAG=(-mcpu=native)
+[ -n "$MARCH" ] && CPU_FLAG=("-mcpu=${MCPU}")
 
 # The hash engine is C++, so the binary needs the C++ runtime and the unwinder.
 # Zig does not resolve plain "-lstdc++", so pass the real files.
-LIBSTDCXX=$(c++ -print-file-name=libstdc++.so 2>/dev/null)
-LIBGCC_S=$(c++ -print-file-name=libgcc_s.so.1 2>/dev/null)
-[ -f "${LIBSTDCXX:-/nonexistent}" ] || LIBSTDCXX=/usr/lib/x86_64-linux-gnu/libstdc++.so.6
-[ -f "${LIBGCC_S:-/nonexistent}" ] || LIBGCC_S=/usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+LINK_RT=()
+if [ "$STATIC" -eq 1 ]; then
+    # musl has no separate pthread or librt. The engine is C++, so the C++
+    # runtime still has to be named - Zig ships libc++ and libc++abi as static
+    # archives, which is the same runtime `zig c++` compiled the objects
+    # against. Linking libstdc++ here instead leaves __gxx_personality_v0
+    # undefined, because those archives were never built with gcc.
+    TARGET=(-target x86_64-linux-musl)
+    LINK_RT=(-lc++ -lunwind)
+else
+    LIBSTDCXX=$(c++ -print-file-name=libstdc++.so 2>/dev/null)
+    LIBGCC_S=$(c++ -print-file-name=libgcc_s.so.1 2>/dev/null)
+    [ -f "${LIBSTDCXX:-/nonexistent}" ] || LIBSTDCXX=/usr/lib/x86_64-linux-gnu/libstdc++.so.6
+    [ -f "${LIBGCC_S:-/nonexistent}" ] || LIBGCC_S=/usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+    TARGET=()
+    LINK_RT=("$LIBSTDCXX" "$LIBGCC_S")
+fi
 
-"$ZIG" build-exe "${HERE}/src/main.zig" \
+"$ZIG" build-exe "${HERE}/src/main.zig" "${TARGET[@]}" \
     -O ReleaseFast "${CPU_FLAG[@]}" \
     --name zmrig \
     -femit-bin="${OUT}/zmrig" \
     --cache-dir "${OUT}/zig-cache" \
     --global-cache-dir "${OUT}/zig-global" \
     -lc -lpthread -lm \
-    -L"${OUT}" -lxmorx "${LIBSTDCXX}" "${LIBGCC_S}"
+    -L"${OUT}" -lxmorx "${LINK_RT[@]}"
 
 echo
 echo "built ${OUT}/zmrig"

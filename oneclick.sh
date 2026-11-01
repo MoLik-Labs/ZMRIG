@@ -17,6 +17,9 @@
 #   ./oneclick.sh report                   # machine report code for the web dashboard
 #   ./oneclick.sh verify                   # self-test + developer-fee audit
 #
+# No operating system to install on? os/ builds a bootable image with this miner
+# already tuned: write it to a stick, boot, paste the wallet. See doc/OS.md.
+#
 # Subcommands
 #   install (default)  deps + build + tune + config + service + self-check
 #   build              compile only
@@ -157,7 +160,7 @@ confirm() {
 }
 
 usage() {
-    sed -n '3,37p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,40p' "$0" | sed 's/^# \{0,1\}//'
     cat <<'EOF'
 
 Options

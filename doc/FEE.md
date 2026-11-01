@@ -41,7 +41,7 @@ at one hour so a week of refusals cannot turn into a two-hour session later.
 ## Where it is printed
 
 - the banner (`--help`, a bad option, `--version` is silent about it),
-- `--check`, one line: `donate  1% of Monero (rx/0) mining time to 46SQLW7D…, 60 s every 100 min (--donate-level=0 turns it off)`,
+- `--check`, one line: `donate  1% of Monero (rx/0) mining time to 46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ, 60 s every 100 min (--donate-level=0 turns it off)`,
 - the log at startup: `developer fee: 1% of Monero (rx/0) mining time, <address>`,
 - the log at every session: `developer fee: 60 s owed, reconnecting to pay it`,
   `login ok … for the developer wallet`, `session paid, back to your wallet`,

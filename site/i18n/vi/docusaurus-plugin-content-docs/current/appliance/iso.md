@@ -1,0 +1,201 @@
+---
+title: Ảnh khởi động (ISO)
+description: Ảnh ZMRIG OS live — ghi ra USB, trả lời một câu, máy đào ngay. Không cài gì, không ghi gì lên ổ, mọi thứ đều chỉnh được.
+image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
+---
+
+# Ảnh khởi động
+
+`zmrig-os` là một hệ điều hành đào coin hoàn chỉnh: nhân Linux, một initramfs
+nhỏ, và root filesystem Alpine chỉ đọc bên trong có `zmrig` và gần như không có
+gì khác. Ghi ra USB, khởi động dàn máy, gõ ví — thế là đào. Không có trình cài
+đặt, không cần chuẩn bị ổ, không để lại nửa hệ thống trên máy.
+
+```bash
+# tải ảnh đúng loại CPU ở trang releases, rồi
+sudo dd if=zmrig-os-<version>-x86-64-v3.iso of=/dev/sdX bs=4M status=progress conv=fsync
+```
+
+Có hai bản. `x86-64-v3` cần AVX2 (mọi CPU x86 từ khoảng 2015) và là bản mặc
+định; `x86-64-v2` chạy trên mọi thứ từ Nehalem. Ảnh được biên dịch cho đúng một
+mức lệnh, và trình cập nhật không bao giờ đưa nhầm bản kia.
+
+## Lần khởi động đầu
+
+1. GRUB hiện ra; mục mặc định là *max hashrate*.
+2. Console hiện banner ZMRIG và hỏi địa chỉ Monero.
+3. Dán ví, Enter, và dòng hashrate bắt đầu sau vài giây.
+
+Địa chỉ được kiểm trước khi dùng: 95 hoặc 106 ký tự, bảng chữ base58, bắt đầu
+bằng `4` hoặc `8`. Ví gõ nhầm chữ `0` hay `l` — đúng hai ký tự mà base58 loại bỏ
+vì dễ đọc sai — sẽ bị từ chối thay vì đào vào hư không.
+
+## Không bàn phím, và cả fleet
+
+Dàn máy không có bàn phím thì cấu hình bằng dòng lệnh nhân. Nhấn `e` ở mục GRUB,
+hoặc sửa `grub.cfg` trên ảnh của fleet:
+
+```
+zmrig.os.wallet=4...
+zmrig.os.pool=gulf.moneroocean.stream:10001
+zmrig.os.worker=rig-07
+zmrig.os.mode=max
+```
+
+Khi đã có ví thì wizard không hiện nữa. `zmrig.os.nostart=1` khởi động máy mà
+không đào — đúng thứ một USB cứu hộ cần.
+
+## Các chế độ
+
+Mức "hung hăng" của miner là một từ, đổi được khi đang chạy:
+
+```bash
+zmrig-os mode eco       # khởi động lại với nửa số core và profile watt
+zmrig-os status         # đang đào gì, tốc độ bao nhiêu, ví nào
+```
+
+| Chế độ | Thread | Ưu tiên | Profile | Huge pages | Dùng khi |
+| --- | --- | --- | --- | --- | --- |
+| `max` | theo cache, tất cả core | 5 | free | đặt trước lúc boot | mặc định |
+| `balanced` | core − 1 nếu từ 4 core | 3 | free | đặt trước lúc boot | máy bạn còn ssh vào |
+| `eco` | nửa số core | 1 | watt | THP `madvise` | êm và mát |
+| `light` | tất cả core, cache 256 MiB | 2 | free | không | máy dưới 2,5 GiB RAM |
+
+Mỗi chế độ có một mục GRUB riêng, nên máy không mạng và không bàn phím vẫn đổi
+được: chế độ đi theo dòng lệnh nhân và được áp ngay lúc boot.
+
+## Ảnh làm những gì mà distro thường không làm
+
+Phần khó nhất của RandomX là bộ nhớ, và hệ điều hành quyết gần như toàn bộ. Trên
+một bản cài đặt đa dụng, mỗi mục dưới đây là một cuộc chiến với gói cập nhật
+hoặc một unit systemd. Ở đây chúng là mặc định:
+
+- **Trang 2 MiB được đặt trước bởi initramfs**, trước khi bất kỳ chương trình
+  nào làm phân mảnh bộ nhớ. Đó là +4–6 % cộng thêm trên transparent huge pages,
+  và là bước gần như không thể làm lại vào cuối ngày.
+- **Transparent huge pages vẫn bật** (`always` ở các mục max). Tắt nó mất khoảng
+  28 % — đã đo, xem [Hiệu năng](/docs/operate/performance).
+- **CPU governor là `performance`**, do đúng bước đặt trước bộ nhớ thiết lập,
+  trước khi miner chạy.
+- **`swappiness=1`** để dataset 2,3 GiB không bao giờ bị đẩy ra swap; **giới hạn
+  write-back** để một lần xoay log không chặn thread đào; **giữ 64 MiB trống**
+  để cấp phát đột ngột không kích hoạt reclaim giữa lúc hash;
+  **`zone_reclaim_mode=0`** để máy nhiều socket không khựng ở một node;
+  **tắt NMI watchdog**, vì chưa ai từng phát hiện được gì nhờ nó trên dàn đào.
+- **Không chạy gì khác.** Không desktop, không daemon cập nhật, không telemetry.
+  OpenRC, sshd, chrony và miner.
+- **Binary tĩnh** (musl, một file 19 MB không phụ thuộc libc), nên cập nhật ảnh
+  không làm hỏng nó, và chép sang distro nào cũng chạy.
+
+## Ổn định
+
+Chạy lâu không phải một tính năng mà là một chuỗi:
+
+- miner tự thoát khi bị treo hoặc khi share bị từ chối liên tiếp
+  (`--health-restart`, 900 giây), và ghi lý do vào log;
+- `zmrig-os run` khởi động lại sau 10 giây, mãi mãi;
+- năm lần thất bại liên tiếp thì máy reboot, vì lúc đó thứ hỏng là hệ điều hành;
+- log xoay ở 8 MB, nên máy đào một năm vẫn khởi động được;
+- chrony giữ đồng hồ đúng, vì đăng nhập pool qua TLS sẽ hỏng nếu lệch giờ.
+
+`zmrig-os doctor` in ra mọi kiểm tra mà lúc boot đã làm, kèm giá trị đọc được:
+
+```
+  PASS  binary                 zmrig 6.34.0 - ZMRIG by @nggkhaiz
+  PASS  wallet                 46SQLW7D...ysb5tJ
+  PASS  memory                 32044 MB total, need 2400 MB
+  PASS  hugepages              1168 x 2 MB reserved
+  PASS  thp                    always
+  PASS  governor               performance
+  WARN  msr                    not applied (VM, or no msr module)
+  PASS  swap                   off
+  PASS  dns                    gulf.moneroocean.stream resolves
+  PASS  config                 miner --check passed
+```
+
+## Đo đúng máy này
+
+Số thread là con số duy nhất khác nhau theo từng máy, và heuristic theo cache giả
+định 2 MiB L3 cho mỗi thread. Hãy để máy tự trả lời:
+
+```bash
+zmrig-os autotune 8     # 8 giây mỗi ứng viên, số thread thắng được ghi vào config
+```
+
+Kết quả được ghi vào `os.conf`; `THREADS="auto"` quay lại heuristic.
+
+## Giữ lại cấu hình
+
+Root filesystem chỉ đọc, nên cấu hình nằm trong RAM và mất khi reboot. Một phân
+vùng nhỏ trên cùng cây USB giải quyết việc đó:
+
+```bash
+zmrig-os persist /dev/sdb1      # format, gắn nhãn ZMRIGDATA, chép cấu hình
+```
+
+Initramfs tìm nó theo nhãn ở mỗi lần boot và chép `os.conf` cùng
+`/root/.ssh/authorized_keys` vào.
+
+## Giám sát mà không cần dashboard
+
+Ảnh không có web UI, và đó là chủ ý — một web app là thêm một thứ phải vá. Thứ nó
+có là JSON API của chính miner, mặc định tắt:
+
+```
+API_PORT="18080"
+API_HOST="0.0.0.0"
+API_TOKEN="một chuỗi ngẫu nhiên dài"
+```
+
+Với ba dòng đó, `http://rig:18080/2/summary` trả lời cho ai có token — đúng thứ
+một dashboard fleet, Home Assistant hay một lệnh `curl` trong cron cần. Để
+`API_HOST` là `127.0.0.1` thì API chỉ nằm trong máy.
+
+## Cập nhật
+
+```bash
+zmrig-os update --check                  # bản nào đang phát hành cho kênh này
+zmrig-os update --apply                  # binary 19 MB, kiểm sha256, thay tại chỗ
+zmrig-os update --iso --write /dev/sdb1  # ghi ảnh mới ra USB khác
+```
+
+`--apply` vá vào ảnh đang chạy và mất khi reboot — reboot là quay lại đúng bản
+đã ghi trong ảnh. Toàn bộ quy trình rollback là vậy, không cần menu.
+`--iso` từ chối ghi vào thiết bị mà máy đang boot từ đó.
+
+Kênh: `stable` theo bản phát hành từ master, `beta` theo bản pre-release luân
+phiên. Cả hai phát hành manifest riêng cho từng mức lệnh CPU, và đó là thứ trình
+cập nhật đọc.
+
+## Bảo mật
+
+- Console là shell root tự đăng nhập — wizard cần thế, và chạm được vào dàn máy
+  thì đã là root rồi. Mọi điểm dưới đây tồn tại vì điều đó đúng.
+- SSH **chỉ dùng khoá**: `PermitRootLogin prohibit-password`, không mật khẩu,
+  không keyboard-interactive. `zmrig-os ssh-key add` rồi `rc-service sshd start`.
+- Không có trình quản lý gói nào chạy lúc vận hành: ảnh là thứ đã được build.
+- Cập nhật được kiểm sha256 trước khi thay binary; sai thì báo lỗi và để nguyên
+  file cũ.
+- Không gọi về đâu cả. Lưu lượng ra chỉ là pool của bạn, NTP, và nếu bạn yêu cầu
+  thì một lần kiểm tra cập nhật.
+
+## Tự build
+
+```bash
+sudo ./os/deps.sh                 # xorriso, mtools, grub, squashfs-tools, qemu
+sudo ./os/build-iso.sh            # → os/out/zmrig-os-<version>-x86-64-v3.iso
+sudo ./os/build-iso.sh --smoke    # build rồi boot thử trong QEMU, đọc log
+```
+
+CI build lại ảnh mỗi khi `os/`, `zmrig/` hoặc `scripts/tune-linux.sh` đổi, và
+mỗi bản phát hành giữ lại ISO của mình. Nếu bạn fork, cài workflow trước:
+`cp os/ci/appliance.yml .github/workflows/os.yml`. Bước build cũng phát hành manifest mà
+`zmrig-os update` đọc, nên ảnh ngoài thực địa tiến lên được mà không phải ghi
+lại USB.
+
+## Không phải là gì
+
+Không phải miner GPU. Không phải công cụ ép xung — timing bộ nhớ và điện áp là
+việc của firmware. Không làm cho MSR ghi được trong máy ảo: hypervisor từ chối
+và miner ở lại đường portable, điều mà `zmrig-os doctor` nói thẳng chứ không
+giấu.
