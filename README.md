@@ -8,11 +8,11 @@
 
 by **[@nggkhaiz](https://github.com/NggKhaiz)**
 
-[![release](https://img.shields.io/badge/release-6.36.0-f2763f)](CHANGELOG.md)
+[![release](https://img.shields.io/badge/release-6.37.0-f2763f)](CHANGELOG.md)
 [![licence](https://img.shields.io/badge/licence-GPL--3.0-blue)](LICENSE)
 [![dev fee](https://img.shields.io/badge/developer%20fee-1%25%20%C2%B7%20off%20switch-f2763f)](doc/FEE.md)
 [![platform](https://img.shields.io/badge/platform-Linux%20x86--64%20%C2%B7%20macOS%20%C2%B7%20Windows-lightgrey)](#build-from-source)
-[![tests](https://img.shields.io/badge/tests-14%20suites-46b17b)](#tests)
+[![tests](https://img.shields.io/badge/tests-16%20suites-46b17b)](#tests)
 [![stars](https://img.shields.io/github/stars/MoLik-Labs/ZMRIG?style=flat&color=f2763f)](https://github.com/MoLik-Labs/ZMRIG/stargazers)
 [![last commit](https://img.shields.io/github/last-commit/MoLik-Labs/ZMRIG)](https://github.com/MoLik-Labs/ZMRIG/commits/BETA)
 
@@ -30,6 +30,7 @@ ZMRIG is a complete Monero mining setup, not a loose collection of scripts:
 | **Proxy** — `proxy/` | One pool connection for a farm: extranonce per rig, per-rig difficulty, tunnels for rigs in another building | free |
 | **Pool** — `pool/`, `worker/`, `deploy/` | Self-hosted Monero pool: stratum over TCP and WebSocket, PPLNS, every share re-hashed before it is paid | 1 % of each block, and nothing else |
 | **Image** — `os/` | A bootable ZMRIG OS: kernel, read-only Alpine root, `zmrig`, a wallet wizard, four hashrate modes, verified updates, and CI that rebuilds the ISO on every change | free |
+| **Fleet** — `fleet/` | Telegram and Discord control: enrol a rig by its Device ID, then set the wallet, pool, coin and mode from a chat, with alerts when one goes quiet | free, self-hosted |
 | **Docs** — `site/` | Docusaurus site: command builder, profitability calculator, pool table, every guide — English and Vietnamese | free to host |
 
 Point the miner at any pool. If you point it at the pool in this repository,
@@ -47,6 +48,7 @@ anywhere in it.
 [Check the fee](#check-the-fee) ·
 [Pools, and not getting banned](#pools-and-not-getting-banned) ·
 [Farms](#farms-one-connection) ·
+[Telegram control](#telegram-and-discord-control) ·
 [Self-hosted pool](#self-hosted-pool) ·
 [Performance](#performance) ·
 [Repository layout](#repository-layout) ·
@@ -338,6 +340,41 @@ sudo ./proxy/install.sh --user=<wallet> --pool=gulf.moneroocean.stream:10001
 60 tests, including real sockets and a WebSocket rig. Tunnel comparison and the
 WireGuard recipe: [`doc/PROXY.md`](doc/PROXY.md).
 
+## Telegram and Discord control
+
+A rig prints a Device ID and an enrolment code on its console. Type them into the
+bot once and that machine is configured from the chat from then on:
+
+```
+/enroll ZMR-1A2B-3C4D-5E6F ABCD-1234 basement
+/wallet ZMR-1A2B-3C4D-5E6F 4YourMoneroAddress...
+/mode   ZMR-1A2B-3C4D-5E6F safe 72
+/devices
+```
+
+`fleet/` is one Node process with no dependencies. The rig calls out once a
+minute and receives whatever was queued; every result, including a refusal, comes
+back to the chat. Alerts cover a rig that went quiet, a rig that came back, heat,
+a stop, and a hashrate that halved.
+
+The Device ID is derived from a 32-byte key generated on the rig and never sent
+anywhere except as a bearer token to the URL you configured, so a leaked ID is
+worth nothing and nothing can connect *to* a rig. With no `FLEET_URL` a rig never
+contacts anything at all.
+
+```bash
+cd fleet && cp config.example.env .env    # TELEGRAM_BOT_TOKEN, FLEET_ADMIN_IDS
+set -a; . ./.env; set +a; npm start
+```
+
+Rig side, once: `zmrig-os fleet --url https://your-fleet` — or
+`zmrig.os.fleet=https://your-fleet` on the kernel command line for a stick that
+boots a hundred machines. [`doc/FLEET.md`](doc/FLEET.md) is the operator manual
+and [the site](https://molik-labs.github.io/ZMRIG/docs/fleet/telegram) is the
+short version.
+
+---
+
 ## Self-hosted pool
 
 * **Stratum over TCP and WebSocket** — the second one is what makes a miner work
@@ -396,6 +433,7 @@ zmrig/                 the Zig miner (build.sh, src/, tests/, capi/ bindings)
 os/                    the bootable image (initramfs init, Alpine chroot, zmrig-os, CI)
 src/                   the C++ miner (XMRig 6.26.0, donation code removed)
 proxy/                 one pool connection for a farm (node, no dependencies)
+fleet/                 Telegram/Discord control plane for rigs (node, no dependencies)
 pool/                  self-hosted Monero pool (node, no dependencies)
   worker/              Cloudflare Worker: WebSocket -> TCP bridge
 site/                  documentation site (Docusaurus, en + vi) — the only site now
@@ -410,7 +448,7 @@ NOTICE                 attribution and upstream lineage
 
 ## Tests
 
-Fourteen suites, no mocks where a socket will do. Run them all:
+Sixteen suites, no mocks where a socket will do. Run them all:
 
 ```bash
 sudo apt install -y build-essential cmake nodejs python3   # once
@@ -418,9 +456,11 @@ sudo apt install -y build-essential cmake nodejs python3   # once
 cd site && npm install && cd ..          # once, for the docs site tests
 npm install --no-save jsdom                # once, for the archived site's tests
 ./os/tests/control.sh                      # the appliance tool (no root)
+./os/tests/fleet.sh                        # the rig side of the bot, against the real server
 npm run test:web && npm run test:pool && npm run test:oneclick
 npm run test:site && npm run test:docs && npm run test:pages
 cd proxy && npm test
+cd fleet && npm test && cd ..
 cd .. && ./zmrig/tests/unit.sh && ./zmrig/tests/cli.sh && ./zmrig/tests/health.sh
 ./zmrig/tests/net.sh --soak
 ./zmrig/tests/thermal.sh                   # the safe mode, ~2 min
@@ -440,11 +480,13 @@ checks while two of the rows are wrong.
 | `zmrig/tests/net.sh` | 29 | TCP/TLS/WS/WSS against a fake pool, ban and refusal handling, failover, seed change |
 | `zmrig/tests/health.sh` | 7 | the watchdog, both directions: an honest pool is not a fault, an all-reject pool is |
 | `tests/oneclick/*.sh` | 70 | plan, config, governor, purge (removes only its own paths), branch switching, `--coin` mapping and the algorithm-name guard |
-| `tests/docs/links.sh` | 90 | every relative link and every `#anchor` in the documentation resolves, including `/docs/…` site routes |
+| `fleet` `npm test` | 42 | the control plane without a token: Device ID derivation, the store's atomic writes and corrupt-file rescue, enrolment rules, every command's validation and refusals, the HTTP protocol end to end, the Telegram and Discord renderers, and configuration that refuses to start half-done |
+| `os/tests/fleet.sh` | 26 | the shell agent against that real server: key generation and stability, a wallet applied to `os.conf` and acknowledged, a bad wallet refused with nothing written, stop on a real process, a log request round trip, pacing, and an unreachable server that is not an error |
+| `tests/docs/links.sh` | 96 | every relative link and every `#anchor` in the documentation resolves, including `/docs/…` site routes |
 | `site` `npm test` | 67 | command builder and its blocked states, calculator arithmetic against hand-computed numbers including break-even, pool table vs `oneclick.sh` and `doc/POOLS.md`, coin matrix and ranking (a missing number is never a zero, no invented pool or price), en/vi key parity and no dead or duplicated message |
-| `tests/docs/pages.sh` | 22 | the published site as Pages serves it: Docusaurus entry point, 23 sidebar pages in both locales, all 2494 local `href`/`src`, both sitemaps, language and theme controls, one localised social card per page, a title/description/lang on every page with no leaked placeholder, old-URL redirects, committed build not stale |
+| `tests/docs/pages.sh` | 22 | the published site as Pages serves it: Docusaurus entry point, 24 sidebar pages in both locales, all 2494 local `href`/`src`, both sitemaps, language and theme controls, one localised social card per page, a title/description/lang on every page with no leaked placeholder, old-URL redirects, committed build not stale |
 | `zmrig/tests/thermal.sh` | 10 | the safe mode against a real process and a real pool: cool is not throttled, heat sheds threads, one thread and hot stops hashing, cooling resumes, no sensor changes nothing |
-| `os/tests/control.sh` | 126 | the appliance tool: wallet validation (length, base58 alphabet, prefix), a command line per mode, kernel-command-line overrides, the supervisor waiting for a wallet, an updater that refuses a checksum mismatch, the installer's partition table and its refusals, A/B slot arithmetic and the 1024-byte GRUB environment block — all with no root, no miner, no disk and no network |
+| `os/tests/control.sh` | 141 | the appliance tool: wallet validation (length, base58 alphabet, prefix), a command line per mode, kernel-command-line overrides, the supervisor waiting for a wallet, an updater that refuses a checksum mismatch, the installer's partition table and its refusals, A/B slot arithmetic and the 1024-byte GRUB environment block — all with no root, no miner, no disk and no network |
 
 ## Documentation
 
@@ -462,6 +504,9 @@ checks while two of the rows are wrong.
 * [`doc/OS.md`](doc/OS.md) — the bootable image: boot sequence, modes, the
   sysctl lines and why each one is there, persistence, updates, CI, and the
   troubleshooting table.
+* [`doc/FLEET.md`](doc/FLEET.md) — the control plane: making the bot, hosting it,
+  every environment variable, the wire format, what the Device ID is and is not,
+  and the troubleshooting table.
 * [`doc/PERFORMANCE.md`](doc/PERFORMANCE.md) · [`doc/BENCHMARKS.md`](doc/BENCHMARKS.md)
   — every lever that affects hashrate, with the measurements.
 * [`doc/POOLS.md`](doc/POOLS.md) — pool fees and policies, and how to keep

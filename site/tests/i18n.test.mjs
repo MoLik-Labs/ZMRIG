@@ -44,6 +44,7 @@ test("the site has the pages the documentation promises", () => {
     "pools/coins.mdx",
     "economics/profitability.mdx",
     "economics/report-codes.md",
+    "fleet/telegram.md",
     "fleet/proxy.md",
     "fleet/pool.md",
     "reference/benchmarks.md",

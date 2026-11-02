@@ -272,6 +272,16 @@ With those three lines, `http://rig:18080/2/summary` answers anyone holding the
 token, which is what a fleet dashboard, Home Assistant or a `curl` in a cron job
 needs. Leaving `API_HOST` at `127.0.0.1` keeps it on the machine.
 
+## One bot for the whole shelf
+
+A machine that boots a hundred rigs should not need a keyboard on each of them.
+`zmrig-os fleet --url https://your-fleet` (or `zmrig.os.fleet=` on the kernel
+command line) points a rig at a Telegram and Discord bot, and `zmrig-os id` prints
+the Device ID you enrol it with. Wallets, pools, coins, modes and updates are then
+set from the chat, and a rig that goes quiet tells you.
+
+[Telegram and Discord control](/docs/fleet/telegram) is the guide.
+
 ## Updates, by hand
 
 The automatic job above uses the same commands; these are the manual versions:

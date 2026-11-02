@@ -1,3 +1,71 @@
+# 6.37.0 — a bot that enrols a rig by the ID on its console
+
+The complaint this answers is "every machine needs its wallet typed in, and I
+find out a rig died when the payout drops". There is now a control plane in
+`fleet/`: a Telegram and Discord bot, no dependencies, one JSON file.
+
+## A rig enrols itself by being looked at
+
+Each machine generates a 32-byte key on first boot. Two strings are derived from
+it and printed on the console (`zmrig-os id`, and at first boot before the wizard
+asks anything):
+
+```
+ZMR-1A2B-3C4D-5E6F   sha256(key)[0..6), upper case - public
+ABCD-1234            sha256("enroll:" + key)[0..4) - proof of presence
+```
+
+`/enroll ZMR-… ABCD-… basement` in the chat binds the rig to your account, and
+from then on the wallet, pool, coin, mode, heat cap, thread count and worker name
+are set from there. The server derives both strings from the key the rig presents
+on every check-in, so an ID cannot be claimed by a machine that does not hold its
+key, the key never leaves the rig, and nothing can connect *to* a rig.
+
+## The bot
+
+`/devices`, `/status`, `/device <rig>` with buttons, `/wallet`, `/pool`, `/coin`,
+`/mode … [C]`, `/threads`, `/worker`, `/update`, `/log`, `/reboot`, `/rename`,
+`/remove`. Changes are queued — an offline rig gets them when it returns — and
+every result, applied or refused, is reported back.
+
+Alerts: a rig that has not checked in for five minutes, a rig that came back,
+heat at 85 °C, the miner stopping, a hashrate that halved. One cooldown per rig
+per kind, so a hot machine does not shout every minute.
+
+Telegram long-polls (no webhook, no certificate, works behind NAT); Discord uses
+the gateway over Node's built-in `WebSocket`, so the second platform cost no
+dependency.
+
+## On the rig
+
+```bash
+zmrig-os id                      # Device ID, enrolment code, where the key lives
+zmrig-os fleet --url https://…   # point it at the bot
+zmrig-os sync                    # check in now (cron does it every minute)
+```
+
+`zmrig.os.fleet=` on the kernel command line does the same for media that boots
+many machines, next to `zmrig.os.install=` and `zmrig.os.wallet=`. A rig with no
+fleet configured contacts nothing, exactly as before, and `zmrig-os setup` stays
+the local way in.
+
+The agent validates every instruction again on the machine — a wallet that fails
+`zmrig-os`'s own validator is refused there, nothing is written, and the refusal
+is reported — so the bot is a convenience, not the security boundary.
+
+## Measured
+
+| | |
+| --- | ---: |
+| `fleet` `npm test` | 42 passed |
+| `os/tests/fleet.sh` (shell agent against the real server) | 26 passed |
+| `os/tests/control.sh` | 141 passed (was 126) |
+
+Neither the Telegram nor the Discord network path is exercised in this
+environment (no token, and outbound calls to those hosts are not available here);
+what is tested is everything on both sides of the socket: the handlers, the
+renderers, the protocol, and the agent.
+
 # 6.36.0 — the image installs itself, updates itself, and fits in less RAM
 
 Two forms, one image. The stick still boots and mines with nothing written

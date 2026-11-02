@@ -425,5 +425,52 @@ expect_ok "stop with nothing running is not an error" "$TOOL" stop
 rmroot
 unset ZMRIG_OS_ROOT ZMRIG_OS_DRYRUN ZMRIG_OS_MANIFEST_URL
 
+
+# --------------------------------------------------------------------- fleet
+
+# The identity is derived, not stored twice: the same key must give the same ID
+# and the ID in `status` must be the one `id` prints.
+newroot
+FLEET_ID=$(fn device_id 2>/dev/null || sh "$TOOL" id 2>/dev/null | sed -n 's/^  device *//p')
+case "$FLEET_ID" in
+    ZMR-????-????-????) ok "device_id prints a ZMR- id" ;;
+    *) bad "device_id prints a ZMR- id (got '$FLEET_ID')" ;;
+esac
+[ "$FLEET_ID" = "$(fn device_id)" ] && ok "the same key gives the same id" || bad "the same key gives the same id"
+
+FLEET_CODE=$(fn enrol_code)
+case "$FLEET_CODE" in
+    ????-????) ok "enrol_code prints eight hex characters" ;;
+    *) bad "enrol_code prints eight hex characters (got '$FLEET_CODE')" ;;
+esac
+
+# A key file that is not 64 hex characters is replaced, not used.
+printf 'not-a-key' > "${ROOTDIR}/etc/zmrig/device.key"
+NEW_ID=$(fn device_id)
+case "$NEW_ID" in
+    ZMR-????-????-????) ok "a damaged key is replaced instead of breaking the tool" ;;
+    *) bad "a damaged key is replaced instead of breaking the tool (got '$NEW_ID')" ;;
+esac
+[ -f "${ROOTDIR}/etc/zmrig/device.key.damaged" ] && ok "the damaged key is kept beside the new one" ||
+    bad "the damaged key is kept beside the new one"
+rmroot
+
+check "fleet with no URL does nothing and says so" bash -c "! sh '$TOOL' fleet --bogus 2>/dev/null"
+check "sync without a fleet is a no-op" bash -c "sh '$TOOL' sync --now >/dev/null"
+
+newroot
+expect_fail "a fleet URL must be http(s)" sh "$TOOL" fleet --url ftp://example.com
+contains "must start with https" "$CHECK_MSG" && ok "the refusal names the reason" || bad "the refusal names the reason"
+expect_ok "https is accepted" sh "$TOOL" fleet --url https://fleet.example.com
+contains 'FLEET_URL="https://fleet.example.com"' "$(cat "${ROOTDIR}/etc/zmrig/os.conf")" &&
+    ok "the URL is written to os.conf" || bad "the URL is written to os.conf"
+expect_ok "a bare fleet prints the identity" sh "$TOOL" fleet
+contains "$(fn device_id)" "$CHECK_MSG" && ok "and that identity is the device id" || bad "and that identity is the device id"
+rmroot
+
+# help must mention the two new entry points, or nobody finds them
+contains "zmrig-os id" "$(sh "$TOOL" help)" && ok "help lists 'zmrig-os id'" || bad "help lists 'zmrig-os id'"
+contains "zmrig-os sync" "$(sh "$TOOL" help)" && ok "help lists 'zmrig-os sync'" || bad "help lists 'zmrig-os sync'"
+
 printf '\n    %d passed, %d failed\n\n' "$PASS" "$FAIL"
 [ "$FAIL" = "0" ]

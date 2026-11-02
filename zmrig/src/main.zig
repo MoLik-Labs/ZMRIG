@@ -22,7 +22,7 @@ const thermal = @import("thermal.zig");
 const verify = @import("verify.zig");
 const util = @import("util.zig");
 
-pub const version = "6.36.0";
+pub const version = "6.37.0";
 
 var running = std.atomic.Value(bool).init(true);
 

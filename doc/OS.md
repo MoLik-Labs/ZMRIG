@@ -242,6 +242,8 @@ config file cannot execute anything as root.
 | `API_TOKEN` | — | `Authorization: Bearer` value the API then requires |
 | `AUTO_REBOOT` | `1` | reboot after five failed starts in a row |
 | `CHANNEL` | `stable` | which update channel to follow |
+| `FLEET_URL` | — | control plane (Telegram/Discord bot); empty means nothing is contacted |
+| `FLEET_INTERVAL` | `60` | seconds between check-ins; the server may lower it |
 | `EXTRA_ARGS` | — | anything else, verbatim |
 
 Precedence, lowest to highest: the image, `/zmrig/os.conf` on the media, the
@@ -257,6 +259,7 @@ zmrig.os.worker=rig-01        worker name
 zmrig.os.mode=max|balanced|eco|light|safe
 zmrig.os.maxtemp=72           safe mode: hold the CPU at or below this
 zmrig.os.hugepages=N          0 disables the reservation
+zmrig.os.fleet=https://host   control plane: enrol and configure from a bot
 zmrig.os.data=/dev/sdX1       partition that keeps the config
 zmrig.os.debug=1              shell in the initramfs instead of the miner
 zmrig.os.nostart=1            boot, but do not mine
@@ -264,6 +267,30 @@ zmrig.os.nostart=1            boot, but do not mine
 
 A fleet is re-pointed by editing one GRUB line, or by pressing `e` once at the
 menu.
+
+## Being told what to do
+
+A rig with `FLEET_URL` set checks in with a control plane once a minute and
+applies whatever was queued there: wallet, pool, coin, mode, heat cap, threads,
+worker name, start/stop/restart, update, log, reboot. The rig calls out and never
+listens, so there is no port to open and nothing to reach it through; the whole
+protocol is in [doc/FLEET.md](FLEET.md).
+
+```bash
+zmrig-os id                    # Device ID, enrolment code, where the key lives
+zmrig-os fleet --url https://… # point it at the bot
+zmrig-os sync                  # check in now; crond does it every minute
+```
+
+The key (`device.key`, mode 600) is generated on the machine and never leaves it;
+the Device ID and the enrolment code are both derived from it, so the bot can
+verify a rig without ever holding a secret. On an installed rig it lives with the
+root filesystem; on a live stick it is in RAM unless `zmrig-os persist` gave the
+stick a partition — which is why `zmrig-os id` says so, loudly, in that case.
+
+Everything the bot sends is validated again on the machine (`zmrig-os`'s own
+wallet validator, its own mode list), so a malformed or hostile instruction is
+refused there and the refusal is reported back.
 
 ## Persistence
 

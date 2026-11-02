@@ -6,6 +6,9 @@
 # (a squashfs mounted under a tmpfs overlay), so this file and the config it
 # writes are the only things that decide what the machine does.
 #
+#   zmrig-os id                  # this machine's Device ID and enrolment code
+#   zmrig-os fleet --url URL     # point it at a Telegram/Discord control plane
+#   zmrig-os sync                # check in, apply what the bot queued
 #   zmrig-os setup               # the wizard: wallet, pool, mode, start
 #   zmrig-os setup --wallet 4... --pool host:port --mode max --start
 #   zmrig-os mode balanced       # max | balanced | eco | light | safe
@@ -34,7 +37,7 @@
 
 set -eu
 
-VERSION="6.36.0"
+VERSION="6.37.0"
 MANIFEST_URL="https://github.com/MoLik-Labs/ZMRIG/releases/latest/download"
 # A full URL wins over the derived one, so the test suite can serve a manifest
 # from a file:// path and a fleet can pin an exact release.
@@ -66,6 +69,10 @@ DONATE_DEFAULT="1"
 # its turbo bins and where a desktop CPU is still well inside spec; the pause
 # limit is target + 15, the hard cap target + 8.
 SAFE_TEMP_DEFAULT="72"
+# How often a rig with a fleet configured checks in. One minute is cheap - the
+# request is a few hundred bytes and the answer is usually empty - and it is the
+# difference between "I pressed restart" and "I pressed restart and waited".
+FLEET_INTERVAL_DEFAULT="60"
 # Where the A/B slots live on the boot medium. Both are just file names next to
 # each other, which is why switching one is a 1024-byte text write.
 BOOT_DIR="${MEDIA}/boot"
@@ -138,6 +145,10 @@ load_conf() {
     CHANNEL=$(conf_default CHANNEL "stable")
     AUTO_UPDATE=$(conf_default AUTO_UPDATE "1")
     AUTO_IMAGE=$(conf_default AUTO_IMAGE "0")
+    # The control plane. Empty means "no fleet", which is the default: nothing
+    # here contacts anything until somebody names a server.
+    FLEET_URL=$(conf_default FLEET_URL "")
+    FLEET_INTERVAL=$(conf_default FLEET_INTERVAL "$FLEET_INTERVAL_DEFAULT")
     # An install requested from the kernel command line is not a config value:
     # it is a one-shot instruction, and the machine reboots into the result.
     INSTALL=$(conf_default INSTALL "")
@@ -153,6 +164,7 @@ load_conf() {
         # of the block, and an absent key would make load_conf return 1 under
         # `set -e` - which read as "the tool cannot read its own config".
         v=$(_kc "$kc" SAFE_TEMP); [ -z "$v" ] || SAFE_TEMP="$v"
+        v=$(_kc "$kc" FLEET);     [ -z "$v" ] || FLEET_URL="$v"
         v=$(_kc "$kc" INSTALL);   [ -z "$v" ] || INSTALL="$v"
     fi
 }
@@ -186,6 +198,8 @@ AUTO_UPDATE="${AUTO_UPDATE:-1}"
 AUTO_IMAGE="${AUTO_IMAGE:-0}"
 CHANNEL="${CHANNEL}"
 EXTRA_ARGS="${EXTRA_ARGS}"
+FLEET_URL="${FLEET_URL}"
+FLEET_INTERVAL="${FLEET_INTERVAL:-$FLEET_INTERVAL_DEFAULT}"
 EOF
 
     # Deliberately not wrapped in `run`: ZMRIG_OS_DRYRUN exists to preview
@@ -742,6 +756,8 @@ cmd_status() {
     printf '%-14s %s\n' "updates"  "$( if [ "${AUTO_UPDATE:-1}" = "1" ]; then printf 'daily, automatically'; [ "${AUTO_IMAGE:-0}" = "1" ] && printf ' (including the OS image, with rollback)'; else printf 'off (AUTO_UPDATE=0)'; fi )"
     printf '%-14s %s\n' "thermal"  "$(thermal_now)"
     printf '%-14s %s\n' "fee"      "${DONATE}% of Monero time (--donate-level=0 to turn off)"
+    printf '%-14s %s\n' "device"   "$(device_id 2>/dev/null || echo '?')"
+    printf '%-14s %s\n' "fleet"    "$( if [ -n "$(fleet_url)" ]; then printf '%s (checked in %s)' "$(fleet_url)" "$( if [ -f "${RUN}/sync.last" ]; then printf '%s s ago' "$(( $(date +%s) - $(cut -d' ' -f1 "${RUN}/sync.last") ))"; else printf 'never'; fi )"; else printf 'not configured'; fi )"
     printf '%-14s %s\n' "version"  "$(image_version) ($( "$(zmrig_bin)" --version 2>/dev/null | head -1 || echo 'miner not installed'))"
 }
 
@@ -1303,6 +1319,8 @@ AUTO_UPDATE="${AUTO_UPDATE:-1}"
 AUTO_IMAGE="${AUTO_IMAGE:-0}"
 CHANNEL="${CHANNEL}"
 EXTRA_ARGS="${EXTRA_ARGS}"
+FLEET_URL="${FLEET_URL}"
+FLEET_INTERVAL="${FLEET_INTERVAL:-$FLEET_INTERVAL_DEFAULT}"
 EOF2
 }
 
@@ -1696,13 +1714,520 @@ cmd_export() {
     cat "$CONF"
 }
 
+# --------------------------------------------------------------------- fleet
+#
+# A rig in a fleet is configured from a chat window, not from a keyboard on the
+# rig. The protocol is deliberately one-way at the HTTP level: the machine calls
+# out, never listens, so a rig behind NAT or on a mobile link works, and nothing
+# on the internet can reach into it.
+#
+#   zmrig-os id                  the Device ID + enrolment code, off the console
+#   zmrig-os fleet --url URL     where the control plane lives
+#   zmrig-os sync                check in: send state, apply what was queued
+#
+# The key in <state>/device.key is the identity. It is generated on the machine,
+# never leaves it, and the Device ID and the enrolment code are both derived from
+# it - which is why a person has to be able to see the machine to enrol it, and
+# why a leaked Device ID is worth nothing on its own.
+
+DEVICE_KEY="device.key"
+ACKFILE="${RUN}/acks"
+# Nothing here is allowed to hold the miner up. These are the same numbers the
+# fleet server documents.
+FLEET_TIMEOUT_CONNECT="5"
+FLEET_TIMEOUT_TOTAL="25"
+
+# Where the key can live. On an installed disk the boot medium, because that is
+# the only writable thing that survives a reboot; on a live stick the tmpfs, and
+# `zmrig-os id` says so, because a rig that changes identity after a power cut is
+# a rig that cannot be enrolled from a chat window.
+fleet_dir() {
+    local dir
+
+    # An installed rig keeps the key next to the root filesystem on its own
+    # disk. A live stick keeps it in /etc/zmrig, which is RAM unless somebody
+    # ran `zmrig-os persist` - and then it is the stick, without this script
+    # having to know the difference.
+    if is_installed && [ -n "$STATE" ] && mkdir -p "$STATE" 2>/dev/null && [ -w "$STATE" ]; then
+        printf '%s' "$STATE"
+        return 0
+    fi
+
+    for dir in "$ETC" "$RUN"; do
+        [ -n "$dir" ] || continue
+        mkdir -p "$dir" 2>/dev/null || true
+        if [ -d "$dir" ] && [ -w "$dir" ]; then
+            printf '%s' "$dir"
+            return 0
+        fi
+    done
+    printf '%s' "$RUN"
+}
+
+device_secret() {
+    local dir file secret
+    dir=$(fleet_dir)
+    file="${dir}/${DEVICE_KEY}"
+    if [ -s "$file" ]; then
+        secret=$(tr -cd '0-9a-f' < "$file" 2>/dev/null || true)
+        if [ "${#secret}" -eq 64 ]; then
+            printf '%s' "$secret"
+            return 0
+        fi
+        # A half-written key is a key that will collide with nothing and
+        # authenticate nowhere, so keep it and make a new one.
+        mv "$file" "${file}.damaged" 2>/dev/null || true
+        warn "the device key was damaged; a new identity is being made"
+    fi
+
+    mkdir -p "$dir" 2>/dev/null || true
+    if ! ( umask 077; head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$file" ) || [ ! -s "$file" ]; then
+        warn "cannot write ${file}"
+        return 1
+    fi
+    chmod 600 "$file" 2>/dev/null || true
+    tr -cd '0-9a-f' < "$file"
+}
+
+# ZMR-XXXX-XXXX-XXXX: the first six bytes of sha256(key), upper-case hex. The
+# server recomputes this from the key it is shown, so an ID can never be claimed
+# by a machine that does not hold the key behind it.
+device_id() {
+    local secret hex
+    secret=$(device_secret) || return 1
+    hex=$(printf '%s' "$secret" | sha256sum 2>/dev/null | cut -c1-12 | tr 'a-f' 'A-F')
+    [ "${#hex}" -eq 12 ] || return 1
+    printf 'ZMR-%s-%s-%s' "$(printf '%s' "$hex" | cut -c1-4)" \
+        "$(printf '%s' "$hex" | cut -c5-8)" "$(printf '%s' "$hex" | cut -c9-12)"
+}
+
+# sha256("enroll:" + key), first four bytes. Typing this proves the machine is
+# in front of you; it is not a password and it stops working when the key does.
+enrol_code() {
+    local secret hex
+    secret=$(device_secret) || return 1
+    hex=$(printf 'enroll:%s' "$secret" | sha256sum 2>/dev/null | cut -c1-8 | tr 'a-f' 'A-F')
+    [ "${#hex}" -eq 8 ] || return 1
+    printf '%s-%s' "$(printf '%s' "$hex" | cut -c1-4)" "$(printf '%s' "$hex" | cut -c5-8)"
+}
+
+fleet_url() { printf '%s' "${FLEET_URL:-}"; }
+
+# One JSON string field, without a JSON library. `.*` is greedy on purpose: the
+# key is unique inside a command object, so the last match is the right one.
+json_field() {
+    sed -n 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
+}
+
+json_number() {
+    sed -n 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -1
+}
+
+# Values that go into the body are restricted to what the protocol uses; a pool
+# named `$(reboot)` is not a pool.
+safe_value() { tr -cd 'A-Za-z0-9.:/@_+-' | cut -c1-200; }
+
+log_payload() {
+    if [ -f "${RUN}/wantlog" ] && [ -f "$LOG" ]; then
+        printf '"%s"' "$(tail -n 30 "$LOG" 2>/dev/null | tr -d '\r' | tr -cd '[:print:]\n' |
+            sed 's/\\/\\\\/g; s/"/\\"/g' | awk 'BEGIN { ORS = "\\n" } { print }')"
+    else
+        printf 'null'
+    fi
+}
+
+acks_payload() {
+    local out="" id ok cmd detail
+    [ -f "$ACKFILE" ] || { printf '[]'; return 0; }
+    while IFS='|' read -r id ok cmd detail; do
+        [ -n "$id" ] || continue
+        out="${out}${out:+,}{\"id\":\"${id}\",\"cmd\":\"${cmd}\",\"ok\":${ok},\"detail\":\"${detail}\"}"
+    done < "$ACKFILE"
+    printf '[%s]' "$out"
+}
+
+ack_add() { # id ok cmd detail
+    local id ok cmd detail
+    id=$(printf '%s' "$1" | tr -cd 'A-Za-z0-9' | cut -c1-32)
+    ok="$2"
+    cmd=$(printf '%s' "$3" | tr -cd 'A-Za-z0-9._-' | cut -c1-32)
+    detail=$(printf '%s' "$4" | tr -cd 'A-Za-z0-9 ._:-' | cut -c1-120)
+    mkdir -p "$RUN" 2>/dev/null || true
+    printf '%s|%s|%s|%s\n' "$id" "$ok" "$cmd" "$detail" >> "$ACKFILE"
+}
+
+fleet_body() {
+    local state rate temp up installed=false slot coin threads reason log state_reason
+    load_conf
+
+    if running; then
+        state="mining"
+    else
+        state="stopped"
+    fi
+    reason=""
+    [ -z "$WALLET" ] && reason="no wallet configured"
+
+    rate=$(last_rate)
+    case "$rate" in ''|*[!0-9.]*) rate=0 ;; esac
+    temp=$(thermal_now 2>/dev/null || echo 0)
+    case "$temp" in ''|*[!0-9]*) temp=0 ;; *) temp=$((temp / 1000)) ;; esac
+    up=$(cut -d. -f1 /proc/uptime 2>/dev/null || echo 0)
+    case "$up" in ''|*[!0-9]*) up=0 ;; esac
+    if is_installed; then installed=true; else installed=false; fi
+    slot=""
+    if is_installed; then slot=$(boot_slot) || slot="a"; fi
+
+    case "$ALGO" in
+        auto|"") coin="xmr" ;;
+        rx/wow)  coin="wow" ;;
+        rx/arq)  coin="arq" ;;
+        rx/graft) coin="graft" ;;
+        rx/sfx)  coin="sfx" ;;
+        rx/yada) coin="yada" ;;
+        panthera) coin="xla" ;;
+        *) coin="$ALGO" ;;
+    esac
+
+    threads="${THREADS:-auto}"
+    log=$(log_payload)
+
+    cat <<EOF
+{"device":"$(device_id 2>/dev/null || echo unknown)","version":"$(image_version)","status":{"state":"$state","reason":"$reason","hashrate":${rate:-0},"temp":${temp:-0},"uptime":${up:-0},"mode":"$(printf '%s' "$MODE" | safe_value)","wallet":"$(printf '%s' "$WALLET" | safe_value)","pool":"$(printf '%s' "$POOL" | safe_value)","worker":"$(printf '%s' "$WORKER" | safe_value)","coin":"$(printf '%s' "$coin" | safe_value)","threads":"$threads","version":"$(image_version)","slot":"$slot","installed":$installed},"acks":$(acks_payload),"log":$log}
+EOF
+}
+
+# Returns 0 on success. The answer is on stdout; a rig that is offline prints
+# nothing and is not a failure worth stopping for.
+fleet_post() { # url body
+    local url="$1" body="$2" secret id
+    id=$(device_id) || return 1
+    secret=$(device_secret) || return 1
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsS --connect-timeout "$FLEET_TIMEOUT_CONNECT" --max-time "$FLEET_TIMEOUT_TOTAL" \
+            -H 'content-type: application/json' \
+            -H "authorization: Bearer ${secret}" \
+            -H "x-zmrig-device: ${id}" \
+            --data-binary "$body" "$url"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -T "$FLEET_TIMEOUT_TOTAL" -O - \
+            --header='content-type: application/json' \
+            --header="authorization: Bearer ${secret}" \
+            --header="x-zmrig-device: ${id}" \
+            --post-data="$body" "$url"
+    else
+        warn "no curl and no wget: cannot reach the fleet"
+        return 1
+    fi
+}
+
+# Applies the settings half of a queued command. Sets SETUP_CHANGED when the
+# miner's command line would change, and SETUP_DETAIL when something is refused.
+apply_setup() { # json line
+    local line="$1" value
+
+    value=$(printf '%s' "$line" | json_field wallet)
+    if [ -n "$value" ]; then
+        validate_wallet "$value" "$ALGO" || { SETUP_DETAIL="wallet rejected"; return 1; }
+        [ "$value" = "$WALLET" ] || SETUP_CHANGED=1
+        WALLET="$value"
+    fi
+
+    value=$(printf '%s' "$line" | json_field pool)
+    if [ -n "$value" ]; then
+        case "$value" in
+            *[!A-Za-z0-9.:/@_-]*) SETUP_DETAIL="pool rejected"; return 1 ;;
+        esac
+        case "$value" in
+            *:*) ;;
+            *) SETUP_DETAIL="pool needs host:port"; return 1 ;;
+        esac
+        [ "$value" = "$POOL" ] || SETUP_CHANGED=1
+        POOL="$value"
+    fi
+
+    value=$(printf '%s' "$line" | json_field coin)
+    if [ -n "$value" ]; then
+        case "$value" in
+            xmr)      value="auto" ;;
+            wow)      value="rx/wow" ;;
+            arq)      value="rx/arq" ;;
+            graft)    value="rx/graft" ;;
+            sfx)      value="rx/sfx" ;;
+            yada)     value="rx/yada" ;;
+            xla)      value="panthera" ;;
+            *)        SETUP_DETAIL="unknown coin"; return 1 ;;
+        esac
+        [ "$value" = "$ALGO" ] || SETUP_CHANGED=1
+        ALGO="$value"
+    fi
+
+    value=$(printf '%s' "$line" | json_field mode)
+    if [ -n "$value" ]; then
+        case "$value" in
+            max|balanced|eco|light|safe) ;;
+            *) SETUP_DETAIL="unknown mode"; return 1 ;;
+        esac
+        [ "$value" = "$MODE" ] || SETUP_CHANGED=1
+        MODE="$value"
+    fi
+
+    value=$(printf '%s' "$line" | json_field maxtemp)
+    if [ -n "$value" ]; then
+        case "$value" in
+            *[!0-9]*) SETUP_DETAIL="temperature rejected"; return 1 ;;
+        esac
+        if [ "$value" -lt 50 ] || [ "$value" -gt 95 ]; then
+            SETUP_DETAIL="temperature outside 50-95"
+            return 1
+        fi
+        [ "$value" = "$SAFE_TEMP" ] || SETUP_CHANGED=1
+        SAFE_TEMP="$value"
+    fi
+
+    value=$(printf '%s' "$line" | json_field threads)
+    if [ -n "$value" ]; then
+        case "$value" in
+            auto) ;;
+            *[!0-9]*) SETUP_DETAIL="threads rejected"; return 1 ;;
+            *) if [ "$value" -lt 1 ] || [ "$value" -gt 199 ]; then SETUP_DETAIL="threads out of range"; return 1; fi ;;
+        esac
+        [ "$value" = "$THREADS" ] || SETUP_CHANGED=1
+        THREADS="$value"
+    fi
+
+    value=$(printf '%s' "$line" | json_field worker)
+    if [ -n "$value" ]; then
+        case "$value" in
+            *[!A-Za-z0-9._-]*) SETUP_DETAIL="worker name rejected"; return 1 ;;
+        esac
+        [ "$value" = "$WORKER" ] || SETUP_CHANGED=1
+        WORKER="$value"
+    fi
+
+    if [ "$SETUP_CHANGED" = 1 ]; then
+        save_conf
+    fi
+    return 0
+}
+
+apply_command() { # one command object
+    local line="$1" cid cmd ok=1 detail=""
+
+    cid=$(printf '%s' "$line" | json_field id)
+    cmd=$(printf '%s' "$line" | json_field cmd)
+    [ -n "$cid" ] || return 0
+
+    case "$cmd" in
+        setup)
+            SETUP_CHANGED=0
+            SETUP_DETAIL=""
+            if apply_setup "$line"; then
+                detail="applied"
+                if [ "$SETUP_CHANGED" = 1 ] && running; then
+                    cmd_restart >/dev/null 2>&1 || true
+                    detail="applied, miner restarted"
+                fi
+            else
+                ok=0
+                detail="${SETUP_DETAIL:-rejected}"
+            fi
+            ;;
+        start)
+            if running; then detail="already mining"
+            elif cmd_start >/dev/null 2>&1; then detail="started"
+            else ok=0; detail="start failed"; fi
+            ;;
+        stop)
+            cmd_stop >/dev/null 2>&1 || true
+            detail="stopped; the machine is still reachable"
+            ;;
+        restart)
+            if cmd_restart >/dev/null 2>&1; then detail="restarted"
+            else ok=0; detail="restart failed"; fi
+            ;;
+        update)
+            if cmd_auto --once >/dev/null 2>&1; then detail="update checked and applied"
+            else ok=0; detail="update failed"; fi
+            ;;
+        log)
+            mkdir -p "$RUN" 2>/dev/null || true
+            : > "${RUN}/wantlog"
+            detail="log with the next check-in"
+            ;;
+        reboot)
+            REBOOT_AFTER=1
+            detail="rebooting"
+            ;;
+        *)
+            ok=0
+            detail="unknown command"
+            ;;
+    esac
+
+    if [ "$ok" = 1 ]; then ack_add "$cid" true "$cmd" "$detail"; else ack_add "$cid" false "$cmd" "$detail"; fi
+    log_os "fleet: $cmd ${detail}"
+}
+
+cmd_device() {
+    local id code url seen=""
+    load_conf
+    id=$(device_id) || die "cannot create a device key"
+    code=$(enrol_code) || die "cannot derive the enrolment code"
+    url=$(fleet_url)
+
+    printf 'ZMRIG OS %s\n\n' "$(image_version)"
+    printf '  %-11s %s\n' "device" "$id"
+    printf '  %-11s %s\n' "enrol code" "$code"
+    printf '  %-11s %s\n' "fleet" "${url:-not set (zmrig-os fleet --url https://...)}"
+
+    if [ -f "${RUN}/sync.last" ]; then
+        seen=$(cut -d' ' -f1 "${RUN}/sync.last" 2>/dev/null || true)
+        case "$seen" in
+            ''|*[!0-9]*) seen="" ;;
+            *) printf '  %-11s %s s ago, revision %s\n' "checked in" "$(( $(date +%s) - seen ))" \
+                   "$(cut -d' ' -f2 "${RUN}/sync.last" 2>/dev/null || echo 0)" ;;
+        esac
+    fi
+    [ -n "$seen" ] || printf '  %-11s %s\n' "checked in" "never"
+
+    if ! is_installed; then
+        printf '\n  This key lives in RAM: the rig gets a new ID after a reboot.\n'
+        printf '  Install to disk (zmrig-os install --disk /dev/sdX) or keep the config\n'
+        printf '  on a USB stick (zmrig-os persist /dev/sdX1) to make it permanent.\n'
+    fi
+
+    printf '\n  In the bot:  /enroll %s %s rig-1\n' "$id" "$code"
+}
+
+cmd_fleet() {
+    local url=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --url) url="${2:?}" ; shift ;;
+            --url=*) url="${1#*=}" ;;
+            "") ;;
+            *) die "usage: zmrig-os fleet --url https://host" ;;
+        esac
+        shift
+    done
+
+    load_conf
+    if [ -n "$url" ] && [ "$url" != "-" ]; then
+        case "$url" in
+            https://*|http://*) ;;
+            *) die "the fleet URL must start with https:// (or http:// on a LAN)" ;;
+        esac
+        FLEET_URL="$url"
+        save_conf
+        say "fleet set to $FLEET_URL"
+        return 0
+    fi
+
+    if [ -n "$url" ]; then
+        FLEET_URL=""
+        save_conf
+        say "fleet disabled"
+        return 0
+    fi
+
+    printf '%-14s %s\n' "device" "$(device_id 2>/dev/null || echo '?')"
+    printf '%-14s %s\n' "enrol code" "$(enrol_code 2>/dev/null || echo '?')"
+    printf '%-14s %s\n' "server" "$(fleet_url)"
+    printf '%-14s %s s\n' "interval" "${FLEET_INTERVAL:-$FLEET_INTERVAL_DEFAULT}"
+    if [ -f "${RUN}/sync.last" ]; then
+        printf '%-14s %s s ago\n' "last check-in" "$(( $(date +%s) - $(cut -d' ' -f1 "${RUN}/sync.last") ))"
+    fi
+}
+
+cmd_sync() {
+    local quiet=0 force=0 url resp interval cmds line count=0
+    local next="" now=""
+    REBOOT_AFTER=0
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --quiet|-q) quiet=1 ;;
+            --now|--force) force=1 ;;
+            *) die "usage: zmrig-os sync [--now] [--quiet]" ;;
+        esac
+        shift
+    done
+
+    load_conf
+    url=$(fleet_url)
+    if [ -z "$url" ]; then
+        [ "$quiet" = 1 ] || say "no fleet server configured (zmrig-os fleet --url https://...)"
+        return 0
+    fi
+
+    mkdir -p "$RUN" 2>/dev/null || true
+
+    # One check-in at a time. Two crons, a boot script and an impatient operator
+    # must not become two hellos and two applications of the same command.
+    if ! mkdir "${RUN}/sync.lock" 2>/dev/null; then
+        return 0
+    fi
+    trap 'rmdir "${RUN}/sync.lock" 2>/dev/null || true' EXIT HUP INT TERM
+
+    if [ "$force" = 0 ] && [ -f "${RUN}/sync.next" ]; then
+        next=$(cat "${RUN}/sync.next" 2>/dev/null || echo 0)
+        now=$(date +%s)
+        case "$next" in ''|*[!0-9]*) next=0 ;; esac
+        if [ "$now" -lt "$next" ]; then
+            return 0
+        fi
+    fi
+
+    if ! resp=$(fleet_post "${url%/}/v1/hello" "$(fleet_body)" 2>/dev/null); then
+        [ "$quiet" = 1 ] || say "cannot reach ${url} (offline is fine; mining continues)"
+        return 0
+    fi
+    : > "$ACKFILE"
+
+    interval=$(printf '%s' "$resp" | json_number interval)
+    case "$interval" in ''|*[!0-9]*) interval="${FLEET_INTERVAL:-$FLEET_INTERVAL_DEFAULT}" ;; esac
+    if [ "$interval" -lt 15 ]; then interval=15; fi
+    printf '%s' "$(( $(date +%s) + interval ))" > "${RUN}/sync.next"
+    printf '%s %s\n' "$(date +%s)" "$(printf '%s' "$resp" | json_number config_version)" > "${RUN}/sync.last"
+
+    cmds=$(printf '%s' "$resp" | sed -n 's/.*"commands":\[\(.*\)\].*/\1/p')
+    if [ -n "$cmds" ]; then
+        # The trailing newline is not cosmetic: `read` returns false on a last
+        # line without one, which would silently drop every command.
+        printf '%s\n' "$(printf '%s' "$cmds" | sed 's/},{/}\n{/g')" > "${RUN}/commands"
+        while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            count=$((count + 1))
+            apply_command "$line"
+        done < "${RUN}/commands"
+        rm -f "${RUN}/commands"
+    fi
+
+    if [ "$count" -gt 0 ] && [ "$quiet" = 0 ]; then
+        say "applied $count command(s) from $url"
+    fi
+
+    # A reboot has to be reported before it happens, or the chat never learns
+    # that its instruction was carried out: one more hello, with the ack in it.
+    if [ "$REBOOT_AFTER" = 1 ]; then
+        fleet_post "${url%/}/v1/hello" "$(fleet_body)" >/dev/null 2>&1 || true
+        : > "$ACKFILE"
+        log_os "fleet: rebooting as instructed"
+        run sync
+        run reboot
+    fi
+    return 0
+}
+
 cmd_version() {
     printf 'ZMRIG OS %s\n' "$(image_version)"
     if [ -x "$(zmrig_bin)" ]; then "$(zmrig_bin)" --version 2>/dev/null | head -1; fi
 }
 
 usage() {
-    sed -n '3,28p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,31p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 main() {
@@ -1731,6 +2256,9 @@ main() {
         persist)  cmd_persist "$@" ;;
         ssh-key)  cmd_ssh_key "$@" ;;
         export)   cmd_export "$@" ;;
+        id|device-id) cmd_device "$@" ;;
+        fleet)    cmd_fleet "$@" ;;
+        sync)     cmd_sync "$@" ;;
         version|-V|--version) cmd_version ;;
         help|-h|--help) usage ;;
         *) die "unknown command: $cmd (try 'zmrig-os help')" ;;

@@ -241,6 +241,16 @@ if [ "$SELF_CHECK" = "1" ]; then
         fail=1
     fi
 
+    # The fleet check-in: a crontab that names the tool, and a tool that knows
+    # the command. Without both, an enrolled rig silently stops listening.
+    if grep -q 'zmrig-os sync' "${HERE}/overlay/etc/crontabs/root" 2>/dev/null &&
+       grep -q 'sync)' "${HERE}/overlay/usr/local/bin/zmrig-os"; then
+        printf '  ok    the fleet check-in is scheduled and implemented\n'
+    else
+        printf '  BAD   overlay/etc/crontabs/root or the sync command is missing\n'
+        fail=1
+    fi
+
     # Every script referenced by the workflows has to exist.
     for f in os/build-iso.sh os/deps.sh os/smoke-qemu.sh os/tests/control.sh \
              scripts/find-zig.sh .github/workflows/os.yml; do

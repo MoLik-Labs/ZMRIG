@@ -80,6 +80,11 @@ jobs:
       - name: Control tool
         run: bash os/tests/control.sh
 
+      # The rig half of the control plane, against the real server from fleet/.
+      # It needs node, which the runner has, and nothing else.
+      - name: Fleet agent (enrol, configure, report)
+        run: bash os/tests/fleet.sh
+
   iso:
     name: ISO ${{ matrix.arch }}
     needs: control

@@ -27,3 +27,9 @@ AUTO_UPDATE="1"
 AUTO_IMAGE="0"
 CHANNEL="stable"
 EXTRA_ARGS=""
+# The control plane (Telegram and/or Discord bot). Empty means no fleet: nothing
+# on the rig contacts anything until a server is named here or on the kernel
+# command line (`zmrig.os.fleet=https://...`).
+FLEET_URL=""
+# How often the rig checks in, in seconds. The server may lower this further.
+FLEET_INTERVAL="60"

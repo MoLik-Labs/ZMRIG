@@ -256,6 +256,16 @@ Với ba dòng đó, `http://rig:18080/2/summary` trả lời cho ai có token �
 một dashboard fleet, Home Assistant hay một lệnh `curl` trong cron cần. Để
 `API_HOST` là `127.0.0.1` thì API chỉ nằm trong máy.
 
+## Một bot cho cả giá máy
+
+Một cái USB boot cả trăm rig thì không nên cần bàn phím cho từng máy.
+`zmrig-os fleet --url https://your-fleet` (hoặc `zmrig.os.fleet=` trên dòng lệnh
+nhân) trỏ rig vào bot Telegram và Discord, và `zmrig-os id` in ra Device ID để
+bạn nhập vào bot. Ví, pool, coin, chế độ và cập nhật sau đó đặt từ chat, và rig
+im lặng sẽ tự báo.
+
+[Điều khiển bằng Telegram và Discord](/docs/fleet/telegram) là hướng dẫn.
+
 ## Cập nhật, làm tay
 
 Job tự động ở trên dùng đúng những lệnh này; đây là bản làm tay:

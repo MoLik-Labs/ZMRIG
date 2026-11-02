@@ -61,7 +61,7 @@ const sidebars = {
       type: "category",
       label: "A whole fleet",
       collapsible: true,
-      items: ["fleet/proxy", "fleet/pool"],
+      items: ["fleet/telegram", "fleet/proxy", "fleet/pool"],
     },
     {
       type: "category",

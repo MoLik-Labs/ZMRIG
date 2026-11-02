@@ -107,6 +107,29 @@ jobs:
       - name: Thermal governor against a real process
         run: ./zmrig/tests/thermal.sh
 
+  # The control plane. Zero dependencies, so this is `node --test` and nothing
+  # to install; the agent half runs against the same server in os/tests/fleet.sh.
+  fleet:
+    name: fleet (bot and agent)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Node
+        run: node --version
+
+      - name: Bot, store, protocol and handlers
+        run: cd fleet && npm test
+
+      - name: Configuration check (no token needed)
+        run: cd fleet && node src/index.js --check || true
+
+      - name: Rig agent against the real server
+        run: bash os/tests/fleet.sh
+
   macos:
     name: macOS ${{ matrix.arch }} build and hash tests
     runs-on: ${{ matrix.runner }}
