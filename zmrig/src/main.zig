@@ -224,6 +224,7 @@ pub fn main() !void {
             .power_watts = power.watts,
             .power_source = power.source,
             .pool = "benchmark",
+            .temp_limit_c = opts.max_temp,
             .timestamp = std.time.timestamp(),
         }) catch |e| {
             log.global.err("cannot build the report: {s}", .{@errorName(e)});
@@ -1080,6 +1081,9 @@ const Monitor = struct {
             .power_source = self.report_power_source,
             .pool = self.report_pool,
             .health = self.health_state.label(),
+            .temp_limit_c = if (self.governor) |g| g.config.target_c else null,
+            .temp_c = if (self.thermal_reading) |r| r.celsius else null,
+            .active_threads = self.miner.activeCount(),
             .timestamp = std.time.timestamp(),
         }) catch return;
 

@@ -28,6 +28,10 @@ how fast can it go *for months*.
   a file whose number it changes: cool, hot, one thread, pause, cool, resume.
 - `--check` gained a `thermal` line, because "it throttled" and "it has no sensor
   and never could" are different answers to the same complaint.
+- **The report code carries it too**: `tmax`, `tc` and `at` (threads currently
+  allowed). A rig throttled to five of eight threads and a rig that is simply
+  half loaded look identical from the pool side, and only one of them is on its
+  way to a dead fan.
 
 ### The appliance
 - **`zmrig-os mode safe [TEMP]`**: one core left for the OS and the fan

@@ -648,6 +648,14 @@ pub const Miner = struct {
         return self.shared.thread_count;
     }
 
+    /// Threads the governor is letting hash right now. Equal to `threadCount`
+    /// unless a thermal policy parked some of them, which is why the report
+    /// carries both: "8 threads, 5 allowed" is a different machine from
+    /// "8 threads".
+    pub fn activeCount(self: *const Self) usize {
+        return self.shared.activeCount();
+    }
+
     /// Huge page usage as [allocated, total] in 2 MiB pages, for the API.
     /// `allocated` counts only pages the kernel really gave us.
     pub fn hugePages(self: *const Self) [2]usize {
