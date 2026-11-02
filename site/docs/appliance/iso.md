@@ -42,7 +42,11 @@ zmrig.os.wallet=4...
 zmrig.os.pool=gulf.moneroocean.stream:10001
 zmrig.os.worker=rig-07
 zmrig.os.mode=max
+zmrig.os.maxtemp=70
 ```
+
+`zmrig.os.maxtemp` is the temperature limit for `safe` mode and for any mode
+that arms the governor.
 
 The wizard does not appear when a wallet is already known. `zmrig.os.nostart=1`
 boots the machine without mining, which is what a repair stick wants.

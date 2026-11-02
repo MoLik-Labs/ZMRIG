@@ -40,7 +40,11 @@ zmrig.os.wallet=4...
 zmrig.os.pool=gulf.moneroocean.stream:10001
 zmrig.os.worker=rig-07
 zmrig.os.mode=max
+zmrig.os.maxtemp=70
 ```
+
+`zmrig.os.maxtemp` là giới hạn nhiệt độ cho chế độ `safe` và cho bất kỳ chế độ nào
+bật bộ điều tiết.
 
 Khi đã có ví thì wizard không hiện nữa. `zmrig.os.nostart=1` khởi động máy mà
 không đào — đúng thứ một USB cứu hộ cần.
