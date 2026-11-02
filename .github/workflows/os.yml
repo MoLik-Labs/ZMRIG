@@ -49,6 +49,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 concurrency:
   group: os-${{ github.ref }}
@@ -154,6 +155,30 @@ jobs:
         run: |
           ls -lh dist/
           cat dist/*.iso.json
+          [ -f dist/size-report.txt ] && cat dist/size-report.txt || true
+
+      # The size report is the only way to answer "why is the image this big"
+      # without downloading it, and the job log is not readable from every place
+      # that asks. One comment per architecture, updated in place.
+      - name: Post the size report
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          [ -f dist/size-report.txt ] || exit 0
+          marker="<!-- size-report:${{ matrix.arch }} -->"
+          { echo "$marker"; echo '```'; cat dist/size-report.txt; echo '```'; } > body.md
+
+          existing=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+              --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -1)
+
+          if [ -n "$existing" ]; then
+              gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$existing" \
+                  -F body=@body.md --jq .id >/dev/null
+          else
+              gh api -X POST "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+                  -F body=@body.md --jq .id >/dev/null
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
@@ -162,6 +187,7 @@ jobs:
             dist/*.iso
             dist/*.iso.sha256
             dist/*.iso.json
+            dist/size-report.txt
           retention-days: 14
           if-no-files-found: error
 

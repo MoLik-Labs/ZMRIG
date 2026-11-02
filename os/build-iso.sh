@@ -104,11 +104,13 @@ size_report() { # rootfs_dir squashfs
 
     [ -d "$rootfs" ] || return 0
     total=$(du -sm "$rootfs" 2>/dev/null | cut -f1)
+    REPORT="${OUT}/size-report.txt"
+    printf 'ZMRIG OS %s (%s)\n\n' "$VERSION" "$ARCH_LEVEL" > "$REPORT"
 
     printf '\n    image contents (MB, biggest first)\n'
     du -sm "$rootfs"/* 2>/dev/null | sort -rn | head -10 | while read -r mb path; do
         printf '      %6s  %s\n' "$mb" "/${path#"$rootfs"/}"
-    done
+    done | tee -a "$REPORT"
 
     # The largest single files matter as much as the largest directories: one
     # 300 MB tarball looks like "an Alpine image" in a directory listing.
@@ -117,20 +119,12 @@ size_report() { # rootfs_dir squashfs
         sort -rn | head -8 |
         while read -r bytes path; do
             printf '      %6s MB  %s\n' "$((bytes / 1048576))" "/${path#"$rootfs"/}"
-        done
+        done | tee -a "$REPORT"
 
     out="rootfs ${total} MB, squashfs $(( $(stat -c %s "$squash" 2>/dev/null || echo 0) / 1048576 )) MB"
     printf '\n    %s\n' "$out"
+    printf '\n%s\n' "$out" >> "$REPORT"
     [ -n "${GITHUB_ACTIONS:-}" ] && printf '::notice title=Image size::%s\n' "$out" || true
-    [ -n "${GITHUB_ACTIONS:-}" ] && du -sm "$rootfs"/* 2>/dev/null | sort -rn | head -5 |
-        while read -r mb path; do
-            printf '::notice title=Image contents::%s MB /%s\n' "$mb" "${path#"$rootfs"/}"
-        done || true
-    [ -n "${GITHUB_ACTIONS:-}" ] && find "$rootfs" -xdev -type f -size +20M -printf '%s %p\n' 2>/dev/null |
-        sort -rn | head -5 |
-        while read -r bytes path; do
-            printf '::notice title=Largest file::%s MB /%s\n' "$((bytes / 1048576))" "${path#"$rootfs"/}"
-        done || true
     return 0
 }
 
@@ -684,6 +678,9 @@ EOF
 
 ELAPSED=$(( $(date +%s) - START ))
 ISO_MB=$(stat -c %s "$ISO_PATH" 2>/dev/null | awk '{ printf "%d", $1 / 1048576 }')
+[ -f "${OUT}/size-report.txt" ] &&
+    printf 'iso %s MB (%s)\nbuilt in %s s\n' "${ISO_MB:-?}" "$(basename "$ISO_PATH")" "$ELAPSED" \
+        >> "${OUT}/size-report.txt"
 [ -n "${GITHUB_ACTIONS:-}" ] &&
     printf '::notice title=ISO::%s MB (%s)\n' "${ISO_MB:-?}" "$(basename "$ISO_PATH")" || true
 
