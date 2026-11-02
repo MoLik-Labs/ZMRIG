@@ -36,7 +36,7 @@ fn onSignal(_: c_int) callconv(.C) void {
 /// and a rejected config. One string, so the author line cannot go stale.
 pub const banner =
     "ZMRIG " ++ version ++ " - RandomX miner by @nggkhaiz\n" ++
-    "1% of Monero mining time goes to the developer (--donate-level=0 turns it off), GPL-3.0, https://github.com/NggKhaiz/ZMRIG\n";
+    "1% of Monero mining time goes to the developer (--donate-level=0 turns it off), GPL-3.0, https://github.com/MoLik-Labs/ZMRIG\n";
 
 fn installSignalHandlers() void {
     const act = std.posix.Sigaction{

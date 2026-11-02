@@ -12,11 +12,11 @@ by **[@nggkhaiz](https://github.com/NggKhaiz)**
 [![licence](https://img.shields.io/badge/licence-GPL--3.0-blue)](LICENSE)
 [![dev fee](https://img.shields.io/badge/developer%20fee-1%25%20%C2%B7%20off%20switch-f2763f)](doc/FEE.md)
 [![platform](https://img.shields.io/badge/platform-Linux%20x86--64%20%C2%B7%20macOS%20%C2%B7%20Windows-lightgrey)](#build-from-source)
-[![tests](https://img.shields.io/badge/tests-541%20checks%20%C2%B7%2012%20suites-46b17b)](#tests)
-[![stars](https://img.shields.io/github/stars/NggKhaiz/ZMRIG?style=flat&color=f2763f)](https://github.com/NggKhaiz/ZMRIG/stargazers)
-[![last commit](https://img.shields.io/github/last-commit/NggKhaiz/ZMRIG)](https://github.com/NggKhaiz/ZMRIG/commits/BETA)
+[![tests](https://img.shields.io/badge/tests-12%20suites-46b17b)](#tests)
+[![stars](https://img.shields.io/github/stars/NggKhaiz/ZMRIG?style=flat&color=f2763f)](https://github.com/MoLik-Labs/ZMRIG/stargazers)
+[![last commit](https://img.shields.io/github/last-commit/NggKhaiz/ZMRIG)](https://github.com/MoLik-Labs/ZMRIG/commits/BETA)
 
-[Install](#install-in-one-command) · [Docs](https://nggkhaiz.github.io/ZMRIG/docs/intro) · [Documentation](#documentation) · [Performance](#performance) · [Credits](#credits) · [Donate (optional)](#support)
+[Install](#install-in-one-command) · [Docs](https://molik-labs.github.io/ZMRIG/docs/intro) · [Documentation](#documentation) · [Performance](#performance) · [Credits](#credits) · [Donate (optional)](#support)
 
 </div>
 
@@ -100,7 +100,7 @@ the host (huge pages, THP, governor, MSR), measures the machine to find the best
 thread count, writes a systemd unit, audits the developer fee and prints live stats.
 Re-running is safe: an existing config is never overwritten without `--force`.
 
-Do not want to remember flags? The **[command builder](https://nggkhaiz.github.io/ZMRIG/docs/install/builder)**
+Do not want to remember flags? The **[command builder](https://molik-labs.github.io/ZMRIG/docs/install/builder)**
 asks for the wallet, the pool and the network of the machine, validates the
 address as you type, and prints exactly this command — plus a `plan` variant
 that resolves everything and changes nothing. The builder and the pool table on
@@ -135,7 +135,7 @@ too often to hard-code, so `--coin wow` without `--pool` is an error rather than
 a guess. The engine follows the algorithm (`rx/*` and `panthera` → the Zig
 engine), and the address is checked for the shape this repository can be
 sure of — the pool verifies the checksum. Which coin pays best for your
-hashrate: **[other coins](https://nggkhaiz.github.io/ZMRIG/docs/pools/coins)**,
+hashrate: **[other coins](https://molik-labs.github.io/ZMRIG/docs/pools/coins)**,
 where the ranking comes from numbers you paste, and prices are fetched only when
 you ask.
 
@@ -171,13 +171,14 @@ is never modified, and pulling it out leaves the machine exactly as it was.
   burned into the stick, which is the entire rollback story.
 - **Two builds** — `x86-64-v3` (AVX2) and `x86-64-v2` (everything since Nehalem) —
   rebuilt by CI whenever `os/`, `zmrig/` or the tuner changes, with every past
-  version kept. The workflow is `os/ci/appliance.yml`; install it with
-  `cp os/ci/appliance.yml .github/workflows/os.yml` (see [`doc/OS.md`](doc/OS.md#ci)). `os/smoke-qemu.sh` boots the finished ISO in QEMU and fails
+  version kept. The workflow is `.github/workflows/os.yml` and it also runs on a
+  pull request that touches `os/`, so the image is built before it is merged.
+  `os/smoke-qemu.sh` boots the finished ISO in QEMU and fails
   unless it reaches userspace, so the claim is "it boots", not "it builds".
 
 `zmrig-os status`, `mode`, `logs`, `bench 30`, `doctor`, `update`, `ssh-key` and
 `autotune`, `persist` are the whole interface; `doc/OS.md` is the operator manual and
-[docs/appliance/iso](https://nggkhaiz.github.io/ZMRIG/docs/appliance/iso) is the
+[docs/appliance/iso](https://molik-labs.github.io/ZMRIG/docs/appliance/iso) is the
 guide.
 
 ---
@@ -392,6 +393,10 @@ cd .. && ./zmrig/tests/unit.sh && ./zmrig/tests/cli.sh && ./zmrig/tests/health.s
 ./zmrig/tests/net.sh --soak
 ```
 
+Each suite prints its own count when it runs, and the count in this table is
+that output — not a total maintained by hand, which is how a badge can claim 538
+checks while two of the rows are wrong.
+
 | Suite | Assertions | What it proves |
 | --- | ---: | --- |
 | `web` `node --test legacy/tests/` | 57 | the archived site: wizard and builder produced the same command, pool table matched `oneclick.sh`, branch names, donation address |
@@ -402,7 +407,7 @@ cd .. && ./zmrig/tests/unit.sh && ./zmrig/tests/cli.sh && ./zmrig/tests/health.s
 | `zmrig/tests/net.sh` | 29 | TCP/TLS/WS/WSS against a fake pool, ban and refusal handling, failover, seed change |
 | `zmrig/tests/health.sh` | 7 | the watchdog, both directions: an honest pool is not a fault, an all-reject pool is |
 | `tests/oneclick/*.sh` | 63 | plan, config, governor, purge (removes only its own paths), branch switching, `--coin` mapping and the algorithm-name guard |
-| `tests/docs/links.sh` | 92 | every relative link and every `#anchor` in the documentation resolves, including `/docs/…` site routes |
+| `tests/docs/links.sh` | 90 | every relative link and every `#anchor` in the documentation resolves, including `/docs/…` site routes |
 | `site` `npm test` | 67 | command builder and its blocked states, calculator arithmetic against hand-computed numbers including break-even, pool table vs `oneclick.sh` and `doc/POOLS.md`, coin matrix and ranking (a missing number is never a zero, no invented pool or price), en/vi key parity and no dead or duplicated message |
 | `tests/docs/pages.sh` | 22 | the published site as Pages serves it: Docusaurus entry point, 23 sidebar pages in both locales, all 2494 local `href`/`src`, both sitemaps, language and theme controls, one localised social card per page, a title/description/lang on every page with no leaked placeholder, old-URL redirects, committed build not stale |
 | `os/tests/control.sh` | 66 | the appliance tool: wallet validation (length, base58 alphabet, prefix), a command line per mode, kernel-command-line overrides, the supervisor waiting for a wallet, and an updater that refuses a checksum mismatch — all with no root, no miner and no network |
@@ -415,10 +420,10 @@ cd .. && ./zmrig/tests/unit.sh && ./zmrig/tests/cli.sh && ./zmrig/tests/health.s
   settings, workflows, publishing the site, deploying the pool.
 * [`doc/DOCS-SITE.md`](doc/DOCS-SITE.md) — how the documentation site is built,
   published, searched (Algolia DocSearch) and translated.
-* **[The site itself](https://nggkhaiz.github.io/ZMRIG/docs/intro)** —
-  [English](https://nggkhaiz.github.io/ZMRIG/docs/intro) ·
-  [Tiếng Việt](https://nggkhaiz.github.io/ZMRIG/vi/docs/intro): install guide,
-  command builder, [profitability calculator](https://nggkhaiz.github.io/ZMRIG/docs/economics/profitability),
+* **[The site itself](https://molik-labs.github.io/ZMRIG/docs/intro)** —
+  [English](https://molik-labs.github.io/ZMRIG/docs/intro) ·
+  [Tiếng Việt](https://molik-labs.github.io/ZMRIG/vi/docs/intro): install guide,
+  command builder, [profitability calculator](https://molik-labs.github.io/ZMRIG/docs/economics/profitability),
   pools, fleet, benchmarks, architecture, testing.
 * [`doc/OS.md`](doc/OS.md) — the bootable image: boot sequence, modes, the
   sysctl lines and why each one is there, persistence, updates, CI, and the
@@ -497,8 +502,9 @@ attribution in [`NOTICE`](NOTICE).
 
 ## Support
 
-The miner has no fee, so the honest answer to "how do I support this?" is: you
-do not have to. If you still want to, there is exactly one address:
+The Zig engine already pays 1 % of its Monero time, so the honest answer to
+"how do I support this?" is: you already are, and `--donate-level=0` ends it. If
+you want to give more than the fee, there is exactly one address:
 
 <p align="center">
   <img src="doc/donate/monero.png" width="190" alt="QR code for the Monero address 46SQLW7D…n6ysb5tJ">
@@ -509,10 +515,11 @@ do not have to. If you still want to, there is exactly one address:
 ```
 
 Monero (XMR), mainnet, 95 characters, network byte `18`, base58 checksum valid.
-It is the same wallet the pool's 1 % fee is paid to, so a thank-you and a fee
-payment land in one place with one audit trail; the verification recipe is in
-[`doc/DONATE.md`](doc/DONATE.md). No flag, config key or service reads this
-address — `./oneclick.sh verify` still reports 0 % with it sitting in this file.
+It is the same wallet the miner's 1 % time fee and the pool's 1 % block fee are
+paid to, so a thank-you and a fee payment land in one place with one audit trail;
+the verification recipe is in [`doc/DONATE.md`](doc/DONATE.md). No flag, config
+key or service reads the address in this paragraph — it is text, and
+`./scripts/verify-fee.sh` shows the one address the binary itself uses.
 
 **Worth more than money:** mine through the pool, send a before/after
 measurement, or open an issue with the command, the full output and the

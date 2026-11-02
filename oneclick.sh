@@ -36,7 +36,7 @@
 # overwrite an existing config unless --force is passed, and skips a rebuild
 # when the binary is newer than the sources.
 #
-# ZMRIG installer, by @nggkhaiz - https://github.com/NggKhaiz/ZMRIG
+# ZMRIG installer, by @nggkhaiz - https://github.com/MoLik-Labs/ZMRIG
 # Licensed under GPL-3.0.
 #
 set -euo pipefail
@@ -45,7 +45,7 @@ ONECLICK_VERSION="1.3"
 ZIG_VERSION="${MINER_ZIG_VERSION:-0.13.0}"
 
 SELF="${BASH_SOURCE[0]:-}"
-REPO_URL="${MINER_REPO_URL:-https://github.com/NggKhaiz/ZMRIG.git}"
+REPO_URL="${MINER_REPO_URL:-https://github.com/MoLik-Labs/ZMRIG.git}"
 REPO_BRANCH="${MINER_BRANCH:-BETA}"
 
 PREFIX="${MINER_PREFIX:-/usr/local}"

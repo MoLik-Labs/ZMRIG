@@ -1,7 +1,7 @@
 ---
 title: The 1 % fee, in full
 description: What the developer fee costs, which coin it applies to, where it is printed, how to change it, and the commands that show it is the only one.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-en.png
+image: https://molik-labs.github.io/ZMRIG/img/og-en.png
 ---
 
 # The 1 % fee, in full
@@ -37,7 +37,7 @@ address:
 
 ```text
 ZMRIG 6.34.0 - RandomX miner by @nggkhaiz
-1% of Monero mining time goes to the developer (--donate-level=0 turns it off), GPL-3.0, https://github.com/NggKhaiz/ZMRIG
+1% of Monero mining time goes to the developer (--donate-level=0 turns it off), GPL-3.0, https://github.com/MoLik-Labs/ZMRIG
 ```
 
 ```bash

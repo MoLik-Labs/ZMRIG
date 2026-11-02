@@ -1,7 +1,7 @@
 ---
 title: Performance
 description: What actually changes hashrate on a CPU, what does not, and how to measure it without fooling yourself.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-en.png
+image: https://molik-labs.github.io/ZMRIG/img/og-en.png
 ---
 
 # Performance

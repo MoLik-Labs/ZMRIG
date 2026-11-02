@@ -153,7 +153,7 @@ if [ "$SELF_CHECK" = "1" ]; then
     [ -x "${HERE}/init" ] && printf '  ok    init is executable\n' || { printf '  BAD   init is not executable\n'; fail=1; }
 
     # Every script referenced by the workflows has to exist.
-    for f in os/build-iso.sh os/deps.sh os/smoke-qemu.sh os/tests/control.sh os/ci/appliance.yml; do
+    for f in os/build-iso.sh os/deps.sh os/smoke-qemu.sh os/tests/control.sh .github/workflows/os.yml; do
         want "${ROOT}/${f}"
     done
 
@@ -426,7 +426,7 @@ The developer fee is 1 % of Monero mining time, printed in --check and in the
 banner. 'zmrig-os setup --donate 0' turns it off; nothing else about the miner
 changes.
 
-Everything here is @nggkhaiz's build of ZMRIG: https://github.com/NggKhaiz/ZMRIG
+Everything here is @nggkhaiz's build of ZMRIG: https://github.com/MoLik-Labs/ZMRIG
 EOF
 
 mkdir -p "${ISODIR}/.disk"

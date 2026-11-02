@@ -1,7 +1,7 @@
 ---
 title: Run your own pool
 description: A Monero pool in Node.js with no dependencies — the 1 % fee and what it buys, a five-minute local run, free hosting options, and the operating rules.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-en.png
+image: https://molik-labs.github.io/ZMRIG/img/og-en.png
 ---
 
 # Run your own pool
@@ -110,4 +110,4 @@ zmrig -o pool.example.com:3333 -u 4YourMoneroAddress.rig1 -t 4
 
 Payouts via `monero-wallet-rpc`, the API and the security notes are in
 `pool/README.md`, and the deployment steps you must run yourself are in
-[`doc/SETUP.md`](https://github.com/NggKhaiz/ZMRIG/blob/master/doc/SETUP.md).
+[`doc/SETUP.md`](https://github.com/MoLik-Labs/ZMRIG/blob/master/doc/SETUP.md).

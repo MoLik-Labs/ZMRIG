@@ -2,12 +2,10 @@
 
 A rig should not be a general-purpose computer. `os/` now builds a bootable
 image — GRUB (BIOS and UEFI), a kernel, a 10 MB initramfs and a read-only Alpine
-root filesystem with `zmrig` in it — and `os/ci/appliance.yml` rebuilds it
-on every change, boots it in QEMU, and publishes every version. The workflow sits
-outside `.github/workflows/` on purpose: installing a workflow file needs a token
-with the `workflows` scope, and the automation account that writes this
-repository does not have it. `cp os/ci/appliance.yml .github/workflows/os.yml` is
-the whole installation.
+root filesystem with `zmrig` in it — and `.github/workflows/os.yml` rebuilds it
+on every change, boots it in QEMU, and publishes every version. It also runs on
+pull requests that touch `os/`, so the image is built before it is merged, and
+publishing stays a separate decision (a tag, or a manual run).
 
 ### The image
 - **Live, not an installer.** The initramfs finds `rootfs.squashfs` on the media,
@@ -262,7 +260,7 @@ pretend about the rest.
 
 ## the documentation site is the site
 
-`https://nggkhaiz.github.io/ZMRIG/` used to serve the hand-written site in
+`https://molik-labs.github.io/ZMRIG/` used to serve the hand-written site in
 `web/`. It now serves the Docusaurus build, at the same URL, with the same
 content in both languages. No binary changed.
 

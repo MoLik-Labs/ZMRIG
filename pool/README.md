@@ -1,7 +1,7 @@
 # zmrig-pool
 
 A Monero (RandomX) mining pool in about 5 000 lines of dependency-free
-JavaScript, part of [ZMRIG](https://github.com/NggKhaiz/ZMRIG) by
+JavaScript, part of [ZMRIG](https://github.com/MoLik-Labs/ZMRIG) by
 [@nggkhaiz](https://github.com/NggKhaiz).
 
 It speaks classic stratum over TCP and stratum over WebSocket, which

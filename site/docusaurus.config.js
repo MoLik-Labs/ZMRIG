@@ -1,7 +1,7 @@
 // @ts-check
 
-const REPO = "https://github.com/NggKhaiz/ZMRIG";
-const SITE = "https://nggkhaiz.github.io";
+const REPO = "https://github.com/MoLik-Labs/ZMRIG";
+const SITE = "https://molik-labs.github.io";
 const BASE = "/ZMRIG/";
 const VERSION = require("./package.json").version;
 
@@ -26,7 +26,7 @@ const algolia = algoliaConfig();
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   title: "ZMRIG",
-  tagline: "RandomX miner, 0 % developer fee, made by @nggkhaiz",
+  tagline: "RandomX miner with a 1 % developer fee you can see and switch off",
   // One tone, one shape: a bold Z (bar, diagonal, bar) drawn on a 32 unit grid.
   // `logo.svg` and `logo-dark.svg` are the same geometry in black and white;
   // `favicon.svg` picks the tone from the browser's colour scheme so it stays
@@ -44,7 +44,7 @@ const config = {
   baseUrl: BASE,
   trailingSlash: false,
 
-  organizationName: "NggKhaiz",
+  organizationName: "MoLik-Labs",
   projectName: "ZMRIG",
 
   onBrokenLinks: "throw",
@@ -199,7 +199,7 @@ const config = {
             ],
           },
         ],
-        copyright: `ZMRIG ${VERSION} · GPL-3.0 · made by <a href="https://github.com/NggKhaiz">@nggkhaiz</a> · no tracking, no accounts, no developer fee`,
+        copyright: `ZMRIG ${VERSION} · GPL-3.0 · made by <a href="https://github.com/NggKhaiz">@nggkhaiz</a> · no tracking, no accounts · the 1 % fee is printed and switchable off`,
       },
       docs: {
         sidebar: {

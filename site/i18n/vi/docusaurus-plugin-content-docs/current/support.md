@@ -1,7 +1,7 @@
 ---
 title: Hỗ trợ và donate
 description: Nơi gửi Monero, cách kiểm tra địa chỉ trước khi gửi, một khoản donate không mua được gì, và những gì giúp dự án nhiều hơn.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
+image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 ---
 
 # Hỗ trợ và donate

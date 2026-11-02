@@ -1,7 +1,7 @@
 ---
 title: Tự dựng pool
 description: Một pool Monero bằng Node.js không dependency — phí 1 % đổi lấy gì, chạy thử trong năm phút, các lựa chọn hosting miễn phí, và quy tắc vận hành.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
+image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 ---
 
 # Tự dựng pool
@@ -107,4 +107,4 @@ zmrig -o pool.example.com:3333 -u 4YourMoneroAddress.rig1 -t 4
 
 Payout qua `monero-wallet-rpc`, API và các lưu ý bảo mật nằm trong
 `pool/README.md`; những bước bạn phải tự chạy khi deploy ở
-[`doc/SETUP.md`](https://github.com/NggKhaiz/ZMRIG/blob/master/doc/SETUP.md).
+[`doc/SETUP.md`](https://github.com/MoLik-Labs/ZMRIG/blob/master/doc/SETUP.md).

@@ -97,7 +97,7 @@ export default function Home() {
   const { i18n } = useDocusaurusContext();
   const locale = i18n.currentLocale === "vi" ? "vi" : "en";
   const c = COPY[locale];
-  const socialImage = `https://nggkhaiz.github.io/ZMRIG/img/og-${locale}.png`;
+  const socialImage = `https://molik-labs.github.io/ZMRIG/img/og-${locale}.png`;
 
   return (
     <Layout title="ZMRIG" description={c.lede}>

@@ -1,7 +1,7 @@
 ---
 title: The bootable image
 description: A live ZMRIG OS image — write it to a stick, answer one question, and the rig hashes. Nothing installed, nothing persisted, everything tunable.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-en.png
+image: https://molik-labs.github.io/ZMRIG/img/og-en.png
 ---
 
 # The bootable image
@@ -193,8 +193,8 @@ sudo ./os/build-iso.sh --smoke    # build, then boot it in QEMU and read the log
 ```
 
 The image is rebuilt by CI whenever `os/`, `zmrig/` or `scripts/tune-linux.sh`
-change, and every release keeps its ISO. In a fork, install the workflow first:
-`cp os/ci/appliance.yml .github/workflows/os.yml`. The build also publishes the manifest
+change, and every release keeps its ISO. The workflow also runs on pull requests
+that touch `os/`, so a broken image fails before it is merged. The build also publishes the manifest
 `zmrig-os update` consumes, so an image in the field can move forward without
 being rewritten.
 

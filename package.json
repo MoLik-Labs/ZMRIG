@@ -1,7 +1,7 @@
 {
   "name": "zmrig",
   "version": "6.34.0",
-  "description": "ZMRIG - RandomX miner with 0% developer fee, by @nggkhaiz",
+  "description": "ZMRIG - RandomX miner with a 1% developer fee that is printed and switchable off, by @nggkhaiz",
   "main": "index.js",
   "directories": {
     "doc": "doc"
@@ -20,7 +20,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/NggKhaiz/ZMRIG.git"
+    "url": "git+https://github.com/MoLik-Labs/ZMRIG.git"
   },
   "keywords": [
     "monero",
@@ -33,9 +33,9 @@
   "author": "@nggkhaiz (https://github.com/NggKhaiz)",
   "license": "GPLv3",
   "bugs": {
-    "url": "https://github.com/NggKhaiz/ZMRIG/issues"
+    "url": "https://github.com/MoLik-Labs/ZMRIG/issues"
   },
-  "homepage": "https://nggkhaiz.github.io/ZMRIG/",
+  "homepage": "https://molik-labs.github.io/ZMRIG/",
   "devDependencies": {
     "jsdom": "^30.1.3"
   }

@@ -1,17 +1,12 @@
-# ZMRIG OS image build. This file belongs at .github/workflows/os.yml.
+# ZMRIG OS image build: assemble the live image, boot it in QEMU, publish it.
 #
-# It lives here because installing it needs a token with the `workflows` scope,
-# which the automation account does not have. One command turns it on:
+# Runs on every push to BETA or master that touches the appliance, the miner or
+# the tuner, on tags, and on a pull request that touches the same paths -- a
+# workflow that only ever runs after a merge is a workflow nobody has tested.
 #
-#     mkdir -p .github/workflows
-#     cp os/ci/appliance.yml .github/workflows/os.yml
-#     git add .github/workflows/os.yml
-#     git commit -m "ci: build and boot-test the appliance image"
-#     git push
-#
-# (Or add the same file through the GitHub web UI: Actions -> New workflow ->
-# paste.) Nothing else depends on the path: build-iso.sh, deps.sh and
-# smoke-qemu.sh all run from a shell.
+# Publishing is deliberate: a push builds and uploads an artifact, a tag or a
+# manual run with publish=true creates the release, and every past version stays
+# downloadable because assets are replaced in place (--clobber), not the release.
 #
 name: Appliance image
 
@@ -29,6 +24,12 @@ on:
   push:
     branches: [BETA, master]
     tags: ['v*']
+    paths:
+      - 'os/**'
+      - 'zmrig/**'
+      - 'scripts/tune-linux.sh'
+      - '.github/workflows/os.yml'
+  pull_request:
     paths:
       - 'os/**'
       - 'zmrig/**'
@@ -131,8 +132,10 @@ jobs:
     name: Publish the images
     needs: iso
     if: |
-      github.event_name == 'workflow_dispatch' && inputs.publish ||
-      startsWith(github.ref, 'refs/tags/v')
+      github.event_name != 'pull_request' && (
+        (github.event_name == 'workflow_dispatch' && inputs.publish) ||
+        startsWith(github.ref, 'refs/tags/v')
+      )
     runs-on: ubuntu-24.04
     timeout-minutes: 20
 

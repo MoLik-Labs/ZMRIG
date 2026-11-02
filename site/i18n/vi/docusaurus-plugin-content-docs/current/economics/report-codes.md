@@ -1,7 +1,7 @@
 ---
 title: Mã báo cáo
 description: Định dạng ZMRIG1. — máy đo những gì, cách tự giải mã, và vì sao trong đó không có ví hay token.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
+image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 ---
 
 # Mã báo cáo

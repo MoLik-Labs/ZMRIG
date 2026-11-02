@@ -1,7 +1,7 @@
 ---
 title: Ảnh khởi động (ISO)
 description: Ảnh ZMRIG OS live — ghi ra USB, trả lời một câu, máy đào ngay. Không cài gì, không ghi gì lên ổ, mọi thứ đều chỉnh được.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
+image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 ---
 
 # Ảnh khởi động
@@ -188,8 +188,8 @@ sudo ./os/build-iso.sh --smoke    # build rồi boot thử trong QEMU, đọc lo
 ```
 
 CI build lại ảnh mỗi khi `os/`, `zmrig/` hoặc `scripts/tune-linux.sh` đổi, và
-mỗi bản phát hành giữ lại ISO của mình. Nếu bạn fork, cài workflow trước:
-`cp os/ci/appliance.yml .github/workflows/os.yml`. Bước build cũng phát hành manifest mà
+mỗi bản phát hành giữ lại ISO của mình. Workflow cũng chạy trên pull request đụng
+`os/`, nên ảnh hỏng sẽ fail trước khi merge. Bước build cũng phát hành manifest mà
 `zmrig-os update` đọc, nên ảnh ngoài thực địa tiến lên được mà không phải ghi
 lại USB.
 

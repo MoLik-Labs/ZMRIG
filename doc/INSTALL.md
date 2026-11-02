@@ -106,7 +106,7 @@ sudo ./oneclick.sh purge      # remove everything, config included (asks first)
 `"health": {"restart": false, "warmup": 180}` from the config.
 
 Do not want to remember any of these? The published site has a four-step
-[wizard](https://nggkhaiz.github.io/ZMRIG/wizard.html) that produces the same
+[wizard](https://molik-labs.github.io/ZMRIG/wizard.html) that produces the same
 command, plus a `plan`-only variant that changes nothing on the host. Every
 short pool name above is a clickable card there.
 

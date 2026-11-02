@@ -222,21 +222,18 @@ serial console. That is what runs in CI, so "the image builds" is not the claim;
 
 ## CI
 
-The workflow is `os/ci/appliance.yml`, installed as `.github/workflows/os.yml`:
+The workflow is `.github/workflows/os.yml`. It was kept in `os/ci/` for a while
+because installing a file under `.github/workflows/` needs a token with the
+`workflows` scope and the account writing the repository did not have it; the
+organisation's installation does, so it lives in the usual place now.
 
-```bash
-mkdir -p .github/workflows
-cp os/ci/appliance.yml .github/workflows/os.yml
-git add .github/workflows/os.yml && git commit -m "ci: build the appliance" && git push
-```
+It runs on every push to `BETA` or `master` that touches `os/`, `zmrig/`,
+`scripts/tune-linux.sh` or the workflow itself, on tags, and on a **pull
+request** that touches the same paths — a workflow that first runs after a merge
+is a workflow nobody has tested. Publishing is separate: only a tag, or a manual
+run with `publish=true`, creates or refreshes a release.
 
-It is kept outside `.github/workflows/` because installing a workflow file needs
-a token with the `workflows` scope, and the automation account used to write the
-rest of this repository does not have it. Everything else — the build, the
-self-check, the QEMU boot test and the control tests — runs from a shell without
-it.
-
-Once installed, it does this:
+It does this:
 
 1. `shellcheck -s error` over every script, then `os/tests/control.sh` (66
    checks, no root needed).
