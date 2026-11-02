@@ -24,6 +24,10 @@ apk update --no-progress
 # a time source (TLS handshakes and pool logins both fail on a wrong clock), an
 # ssh server so the rig never needs a keyboard, curl for the updater, e2fsprogs
 # for the persistence partition and pciutils for the doctor.
+# Every package here has a job on a rig: no documentation, no shells beyond
+# busybox, no editors, no python. dosfstools is for the installer's EFI
+# partition, e2fsprogs for the data partition and for `install`, util-linux for
+# sfdisk (a real GPT writer - busybox fdisk cannot).
 apk add --no-progress --no-cache \
     alpine-base \
     "${KERNEL_PKG}" \
@@ -31,14 +35,56 @@ apk add --no-progress --no-cache \
     busybox \
     kmod \
     e2fsprogs \
+    dosfstools \
     util-linux \
     curl \
     ca-certificates \
     chrony \
     openssh \
-    pciutils \
     ifupdown-ng \
     dhcpcd
+
+# ---------------------------------------------------------------- kernel
+# The kernel module tree is the single largest thing in this image - bigger than
+# everything else combined - and a mining rig uses a fraction of it. Keep what a
+# machine needs to boot, reach a pool, read a temperature sensor and run in a
+# VM; drop the rest. The list is directories, not modules, so a kernel update
+# does not silently lose a driver that a new rig needs.
+say "pruning the module tree"
+
+# Dropped wholesale: a rig has no sound card, no camera, no GPU to drive, no
+# InfiniBand fabric, no CAN bus and no staging driver it should rely on. These
+# are 80 % of the module tree by bytes and none of them has ever hashed a block.
+DROP="sound media gpu infiniband isdn wan can iio staging nfc bluetooth thunderbolt"
+
+for tree in /lib/modules/*; do
+    [ -d "$tree" ] || continue
+    before=$(du -sk "$tree" | cut -f1)
+    total=$(find "$tree" -type f -name '*.ko*' | wc -l)
+
+    # Deleting inside a pipeline would run in a subshell; this loop runs in the
+    # current shell so the deletions actually happen.
+    find "$tree" -type f \( -name '*.ko' -o -name '*.ko.gz' -o -name '*.ko.xz' -o -name '*.ko.zst' \) > /tmp/modlist
+    while read -r ko; do
+        rel="${ko#"$tree"/}"
+        for d in $DROP; do
+            case "$rel" in
+                kernel/drivers/"$d"/*) rm -f "$ko"; break ;;
+            esac
+        done
+    done < /tmp/modlist
+    rm -f /tmp/modlist
+
+    # Every removed module takes its dependencies' last user with it, and a
+    # modules.dep pointing at a file that is gone turns modprobe's "not found"
+    # into "cannot load anything", so the index is rebuilt from what is left.
+    depmod -a "$(basename "$tree")" 2>/dev/null || true
+    after=$(du -sk "$tree" | cut -f1)
+    left=$(find "$tree" -type f -name '*.ko*' | wc -l)
+    printf '    %s: dropped %s of %s modules, %s MB -> %s MB\n' \
+        "$(basename "$tree")" "$((total - left))" "$total" \
+        "$((before / 1024))" "$((after / 1024))"
+done
 
 # A static busybox is what the initramfs runs on. It is a separate package on
 # some Alpine releases and a file inside the main package on others, so this is

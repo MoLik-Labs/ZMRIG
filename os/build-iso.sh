@@ -89,6 +89,7 @@ step() {
 }
 say()  { printf '    %s\n' "$*"; }
 die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
+warn() { printf 'warning: %s\n' "$*" >&2; }
 
 ROOTFS="${WORK}/rootfs"
 BTREE="${WORK}/bin"
@@ -179,6 +180,26 @@ if [ "$SELF_CHECK" = "1" ]; then
         printf '  ok    the manifest is named *.iso.json, as the workflow expects\n'
     else
         printf '  BAD   the manifest name does not match dist/*.iso.json\n'
+        fail=1
+    fi
+
+    # The installer writes these three files and nothing else bootable; if the
+    # build stops producing them, `zmrig-os install` turns a disk into a brick.
+    for f in "${HERE}/overlay/usr/local/bin/zmrig-os"; do
+        for need in BOOTX64.EFI core.img boot.img; do
+            grep -q "$need" "$f" || { printf '  BAD   %s never mentions %s\n' "$f" "$need"; fail=1; }
+        done
+    done
+    grep -q 'grub-mkimage -O x86_64-efi' "${HERE}/build-iso.sh" &&
+        printf '  ok    the image builds its own EFI bootloader\n' ||
+        { printf '  BAD   no EFI bootloader is built\n'; fail=1; }
+
+    # A daily updater that is not executable is a rig that silently stops
+    # updating, which looks exactly like a rig that is up to date.
+    if [ -x "${HERE}/overlay/etc/periodic/daily/zmrig-auto" ]; then
+        printf '  ok    the daily update hook is executable\n'
+    else
+        printf '  BAD   overlay/etc/periodic/daily/zmrig-auto is missing or not executable\n'
         fail=1
     fi
 
@@ -312,7 +333,7 @@ printf '%s\n' "$VERSION" > "${ROOTFS}/etc/zmrig/version"
 printf '%s\n' "$ARCH_LEVEL" > "${ROOTFS}/etc/zmrig/arch"
 
 # OpenRC has to know about the two services before the image is sealed.
-for svc in zmrig zmrig-firstboot; do
+for svc in zmrig zmrig-firstboot crond; do
     chroot "$ROOTFS" rc-update add "$svc" default >/dev/null 2>&1 ||
         die "rc-update add $svc failed"
 done
@@ -391,6 +412,71 @@ else
     say "kept the root filesystem at $ROOTFS"
 fi
 
+# --------------------------------------------------------------- 7. handlers
+step "bootloader images for an installed disk"
+
+# A machine that installs ZMRIG OS onto its own disk still has to boot it, and
+# the guest has no grub-install: the image is 120 MB and a GRUB toolkit for
+# five architectures is not part of it. So the two files an install actually
+# writes are built here, once, and carried inside the image:
+#
+#   BOOTX64.EFI   a standalone GRUB for the EFI partition (no module files)
+#   core.img      the BIOS half, written into a 1 MiB BIOS-boot partition
+#   boot.img      the 512-byte MBR half, written over the partition table
+#
+# They are self-contained: the early config searches for the filesystem label
+# and hands over to the grub.cfg the installer writes, so nothing depends on
+# disk numbering (which changes the moment a second disk is plugged in).
+if command -v grub-mkimage >/dev/null 2>&1; then
+    mkdir -p "${ISODIR}/zmrig/boot"
+    EARLY="${WORK}/early.cfg"
+    cat > "$EARLY" <<'EOF'
+search --no-floppy --label --set=root ZMRIGROOT
+if [ -z "$root" ]; then
+    search --no-floppy --file --set=root /boot/grub/grub.cfg
+fi
+if [ -z "$root" ]; then
+    search --no-floppy --label --set=root ZMRIGOS
+fi
+set prefix=($root)/boot/grub
+configfile ($root)/boot/grub/grub.cfg
+EOF
+
+    # The module list is what the early config and a normal menu need, not the
+    # whole catalogue: search (by label and by file), ext2 for ext4, and the
+    # loader itself.
+    MODULES="part_gpt part_msdos ext2 fat search search_label search_fs_file
+             normal linux echo test configfile loadenv serial terminal"
+
+    if grub-mkimage -O x86_64-efi -o "${ISODIR}/zmrig/boot/BOOTX64.EFI" \
+            -p /boot/grub -c "$EARLY" $MODULES >"${WORK}/grub-efi.log" 2>&1; then
+        say "BOOTX64.EFI: $(du -h "${ISODIR}/zmrig/boot/BOOTX64.EFI" | cut -f1)"
+    else
+        tail -5 "${WORK}/grub-efi.log"
+        die "cannot build the EFI GRUB image (grub-efi-amd64-bin)"
+    fi
+
+    if grub-mkimage -O i386-pc -o "${ISODIR}/zmrig/boot/core.img" \
+            -p /boot/grub -c "$EARLY" biosdisk $MODULES >"${WORK}/grub-bios.log" 2>&1; then
+        say "core.img: $(du -h "${ISODIR}/zmrig/boot/core.img" | cut -f1)"
+    else
+        tail -5 "${WORK}/grub-bios.log"
+        die "cannot build the BIOS GRUB image (grub-pc-bin)"
+    fi
+
+    BOOTIMG=""
+    for c in /usr/lib/grub/i386-pc/boot.img /usr/share/grub2/i386-pc/boot.img \
+             /usr/lib/grub2/i386-pc/boot.img; do
+        [ -f "$c" ] && { BOOTIMG="$c"; break; }
+    done
+    [ -n "$BOOTIMG" ] || die "cannot find boot.img (grub-pc-bin)"
+    cp "$BOOTIMG" "${ISODIR}/zmrig/boot/boot.img"
+    say "boot.img: $BOOTIMG"
+else
+    warn "grub-mkimage is missing: this ISO cannot install itself to a disk"
+    warn "install grub-pc-bin and grub-efi-amd64-bin, or run sudo ./os/deps.sh"
+fi
+
 step "writing GRUB and the ISO tree"
 
 cat > "${ISODIR}/boot/grub/grub.cfg" <<EOF
@@ -428,6 +514,15 @@ menuentry "ZMRIG OS ${VERSION} - safe (never above 72 C, one core free)" {
     initrd /boot/initramfs.gz
 }
 
+# The CPU mitigations cost real hashrate on recent silicon and protect against
+# attacks that need code execution on this machine first. On a box that only
+# mines, with no browser and no other users, that trade is worth offering - and
+# it is offered as a menu entry, never as the default.
+menuentry "ZMRIG OS ${VERSION} - max hashrate (CPU mitigations off)" {
+    linux /boot/vmlinuz \$zmrig_params zmrig.os.mode=max transparent_hugepage=always mitigations=off
+    initrd /boot/initramfs.gz
+}
+
 menuentry "ZMRIG OS ${VERSION} - troubleshooting (no huge pages, no MSR)" {
     linux /boot/vmlinuz \$zmrig_params zmrig.os.mode=max zmrig.os.hugepages=0 transparent_hugepage=madvise nomodeset
     initrd /boot/initramfs.gz
@@ -444,8 +539,24 @@ cp "${HERE}/overlay/etc/zmrig/os.conf.example" "${ISODIR}/zmrig/os.conf.example"
 cat > "${ISODIR}/zmrig/README.txt" <<EOF
 ZMRIG OS ${VERSION} (${ARCH_LEVEL}, ${CHANNEL})
 
-Boot this image on the rig -- USB stick or CD, BIOS or UEFI. Nothing is
-installed and nothing on the machine is modified.
+Two ways to use this image. Both boot on BIOS and UEFI, from a stick, a CD, or a
+Ventoy menu.
+
+1. LIVE  (what this stick does when you boot it)
+   Nothing is installed and nothing on the machine is modified. The config lives
+   in RAM, so a reboot forgets it unless you give it a ZMRIGDATA partition.
+
+2. INSTALLED  (write it onto the machine's own disk)
+       zmrig-os install --disk /dev/nvme0n1     # or /dev/sda, /dev/vda ...
+       zmrig-os install --disk /dev/sda --dry-run
+   The disk is partitioned (EFI + one ext4 root) and the image is copied onto it:
+   about a minute. From then on the machine boots from its own disk, the config
+   persists, the miner starts by itself, updates itself once a day, and an update
+   that will not boot rolls back to the other slot on the third try.
+
+   Unattended, from a Ventoy menu or a fleet: add this to the boot entry
+       zmrig.os.install=/dev/nvme0n1
+   and the machine installs and reboots into it with no keyboard at all.
 
 First boot
   1. A wizard asks for your Monero wallet on the console. Paste it.
@@ -458,6 +569,7 @@ Headless / fleet
       zmrig.os.worker=rig-01
       zmrig.os.mode=max|balanced|eco|light|safe
       zmrig.os.maxtemp=72      (safe mode: hold the CPU at or below this)
+      zmrig.os.install=/dev/sdX  (install, then reboot)
 
 Safe mode
   For a machine somebody also needs tomorrow. One core stays free, priority is
@@ -466,18 +578,27 @@ Safe mode
   stops hashing above 87 C, and climbs again once it is cool. The dataset stays
   in RAM the whole time, so nothing is rebuilt on the way back up.
 
-Keeping the config across reboots
+Updates
+  An installed rig checks for a newer miner once a day and installs it next to
+  the running system, so it survives a reboot. The OS image itself is written
+  into the spare slot and only boots after a successful copy:
+      zmrig-os auto --check     is there anything newer?
+      zmrig-os auto --apply     install it now
+      zmrig-os slot             which slot boots next
+  AUTO_UPDATE=0 in /etc/zmrig/os.conf stops all of it.
+
+Keeping the config across reboots on a LIVE stick
   The image is read-only, so /etc/zmrig lives in RAM. Make a partition on the
   same stick, label it ZMRIGDATA, and the settings are picked up at every boot:
       zmrig-os persist /dev/sdX1
 
 Daily use
-      zmrig-os status        what is hashing and at what rate
+      zmrig-os status        what is hashing, at what rate, at what temperature
       zmrig-os mode eco      change aggressiveness without a reboot
       zmrig-os logs 100      the miner log
       zmrig-os bench 30      measure this machine for 30 s
       zmrig-os doctor        every check the boot makes, printed
-      zmrig-os update --apply    pull the newest miner into the running image
+      zmrig-os install       the two forms above, explained
       zmrig-os ssh-key add   paste a public key, then 'rc-service sshd start'
 
 The developer fee is 1 % of Monero mining time, printed in --check and in the

@@ -13,7 +13,9 @@ set -euo pipefail
 CHECK=0
 [ "${1:-}" = "--check" ] && CHECK=1
 
-need=(xorriso mtools mksquashfs cpio gzip tar curl sha256sum grub-mkrescue gcc g++)
+# grub-mkimage is what builds the two files `zmrig-os install` writes to a disk:
+# without it the ISO still boots, but it cannot install itself anywhere.
+need=(xorriso mtools mksquashfs cpio gzip tar curl sha256sum grub-mkrescue grub-mkimage gcc g++)
 
 missing=()
 for t in "${need[@]}"; do

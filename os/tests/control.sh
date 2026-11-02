@@ -270,6 +270,146 @@ contains 'THREADS="3"' "$(cat "$ROOTDIR/etc/zmrig/os.conf")" &&
     ok "the winning thread count is written to os.conf" ||
     bad "the winning thread count is written to os.conf"
 
+# ------------------------------------------------- two forms: live / disk
+# The installer is the part of this image that can destroy somebody's disk, so
+# the tests below are mostly about what it refuses to do.
+newroot
+expect_ok "install with no --disk explains the two forms" "$TOOL" install
+contains "live" "$CHECK_MSG" && ok "it describes the live form" || bad "it describes the live form"
+contains "installed" "$CHECK_MSG" && ok "it describes the installed form" || bad "it describes the installed form"
+contains "zmrig-os install --disk" "$CHECK_MSG" && ok "it shows the command" || bad "it shows the command"
+
+expect_fail "a path that is not a device is refused" "$TOOL" install --disk /tmp/notadisk
+contains "not a device path" "$CHECK_MSG" && ok "it says why" || bad "it says why"
+expect_fail "a loop device is refused" "$TOOL" install --disk /dev/loop0
+expect_fail "an optical device is refused" "$TOOL" install --disk /dev/sr0
+
+# The running medium is /media in the fake root; an install must never target
+# the disk the machine booted from.
+mkdir -p "$ROOTDIR/media/zmrig" "$ROOTDIR/etc/zmrig"
+: > "$ROOTDIR/media/zmrig/installed"
+printf '/dev/sdz\n' > "$ROOTDIR/etc/zmrig/bootdev"
+
+# A dry run of a real-looking device: /dev/zero is a character device, so the
+# refusal is about the type, not about the size - which is the point of --dry-run
+# being checked above with no device at all.
+expect_fail "a character device is refused" "$TOOL" install --disk /dev/zero
+
+# ------------------------------------------------------------ installed form
+# What the tool believes about the medium decides the persistence questions, so
+# the marker and the slot file are asserted directly.
+mkdir -p "$ROOTDIR/media/zmrig/state" "$ROOTDIR/media/boot/grub" "$ROOTDIR/etc/zmrig"
+printf 'b\n' > "$ROOTDIR/etc/zmrig/slot"
+"$TOOL" status > "$ROOTDIR/status.log" 2>&1 || true
+CHECK_MSG=$(cat "$ROOTDIR/status.log")
+contains "installed" "$CHECK_MSG" && ok "status says the system is installed" || bad "status says the system is installed"
+contains "slot b" "$CHECK_MSG" && ok "status shows the running slot" || bad "status shows the running slot"
+contains "daily" "$CHECK_MSG" && ok "status shows the update policy" || bad "status shows the update policy"
+
+# A live image must say so, because "why did my wallet disappear" is a question
+# with exactly one useful answer.
+rm -f "$ROOTDIR/media/zmrig/installed"
+"$TOOL" status > "$ROOTDIR/status.log" 2>&1 || true
+contains "live image" "$(cat "$ROOTDIR/status.log")" &&
+    ok "status says the system is live" || bad "status says the system is live"
+: > "$ROOTDIR/media/zmrig/installed"
+
+# ------------------------------------------------------------ A/B slots
+expect_ok "slot prints the running and next slot" "$TOOL" slot
+contains "running" "$CHECK_MSG" && ok "slot shows the running slot" || bad "slot shows the running slot"
+contains "next boot" "$CHECK_MSG" && ok "slot shows the next boot" || bad "slot shows the next boot"
+
+expect_fail "switching to an empty slot is refused" "$TOOL" slot b
+contains "empty" "$CHECK_MSG" && ok "it says the slot is empty" || bad "it says the slot is empty"
+expect_fail "an unknown slot is refused" "$TOOL" slot c
+
+: > "$ROOTDIR/media/zmrig/rootfs-b.squashfs"
+expect_ok "a slot with a root filesystem can be selected" "$TOOL" slot b
+contains "slot b" "$CHECK_MSG" && ok "it reports the new default" || bad "it reports the new default"
+# The block is what GRUB reads: exactly 1024 bytes, with the key in it.
+if [ -f "$ROOTDIR/media/boot/grub/grubenv" ]; then
+    size=$(wc -c < "$ROOTDIR/media/boot/grub/grubenv")
+    [ "$size" = "1024" ] && ok "the GRUB environment block is 1024 bytes" ||
+        bad "the GRUB environment block is ${size} bytes, GRUB ignores anything but 1024"
+    grep -q '^zmrig_slot=b$' "$ROOTDIR/media/boot/grub/grubenv" &&
+        ok "the block names the slot" || bad "the block names the slot"
+else
+    bad "no GRUB environment block was written"
+fi
+
+# ------------------------------------------------------------ auto update
+# A manifest served from a file:// path is the same code path as the release
+# URL: the updater cannot tell the difference, which is why this test needs no
+# network.
+mkdir -p "$ROOTDIR/media/zmrig/bin"
+cat > "$ROOTDIR/manifest.json" <<'EOF'
+{"version":"9.9.9","binary_url":"file:///dev/null","binary_sha256":""}
+EOF
+export ZMRIG_OS_MANIFEST_URL="file://$ROOTDIR/manifest.json"
+
+expect_ok "auto --check reads a manifest" "$TOOL" auto --check
+contains "installed" "$CHECK_MSG" && ok "it prints what is installed" || bad "it prints what is installed"
+contains "9.9.9" "$CHECK_MSG" && ok "it prints what is available" || bad "it prints what is available"
+
+# An older manifest is not an update in either direction.
+printf '{"version":"0.0.1"}\n' > "$ROOTDIR/manifest.json"
+expect_ok "an older release is not an upgrade" "$TOOL" auto --check
+contains "up to date" "$CHECK_MSG" && ok "it says so" || bad "it says so"
+
+# No network (no manifest) is not a failure: a rig behind a firewall keeps
+# mining and the daily job exits 0.
+export ZMRIG_OS_MANIFEST_URL="file://$ROOTDIR/nothing-here.json"
+expect_ok "an unreachable manifest is not an error" "$TOOL" auto --once
+contains "offline" "$CHECK_MSG" && ok "it explains itself" || bad "it explains itself"
+unset ZMRIG_OS_MANIFEST_URL
+
+# AUTO_UPDATE=0 turns the whole thing off, and the miner does not phone home.
+expect_ok "a config exists to switch updates off" "$TOOL" setup --wallet "$WALLET" --pool pool.example.com:10001
+grep -q '^AUTO_UPDATE=' "$ROOTDIR/etc/zmrig/os.conf" && sed -i 's/^AUTO_UPDATE=.*/AUTO_UPDATE="0"/' "$ROOTDIR/etc/zmrig/os.conf" ||
+    printf 'AUTO_UPDATE="0"\n' >> "$ROOTDIR/etc/zmrig/os.conf"
+expect_ok "automatic updates can be switched off" "$TOOL" auto --once
+contains "off" "$CHECK_MSG" && ok "it says updates are off" || bad "it says updates are off"
+
+# ------------------------------------------------- the install, without a disk
+# The installer is the only part of this image that can destroy a disk, so the
+# decisions it makes are asserted directly. `ZMRIG_OS_NO_MAIN=1` lets this test
+# source the tool and call the functions that build the partition table and the
+# plan - the same ones a real run executes, not a copy of them.
+fn() { # function name, args...
+    local name="$1"; shift
+    ZMRIG_OS_NO_MAIN=1 ZMRIG_OS_ROOT="$ROOTDIR" sh -c '. "$1"; shift; "$@"' _ "$TOOL" "$name" "$@"
+}
+
+pts=$(fn partition_script)
+contains "label: gpt" "$pts" && ok "the install writes a GPT" || bad "the install writes a GPT"
+contains "21686148-6449-6E6F-744E-656564454649" "$pts" &&
+    ok "there is a BIOS-boot partition for core.img" || bad "there is a BIOS-boot partition"
+contains "C12A7328-F81F-11D2-BA4B-00A0C93EC93B" "$pts" &&
+    ok "there is an EFI system partition" || bad "there is an EFI system partition"
+contains "0FC63DAF-8483-4772-8E79-3D69D8477DE4" "$pts" &&
+    ok "there is a Linux root partition" || bad "there is a Linux root partition"
+contains "start=2048, size=2048" "$pts" && ok "the BIOS boot partition is placed first" ||
+    bad "the BIOS boot partition is placed first"
+
+plan=$(fn install_plan /dev/sda /m/vmlinuz /m/initramfs.gz /m/rootfs.squashfs /dev/sda2 /dev/sda3)
+contains "BOOTX64.EFI" "$plan" && ok "the plan installs the EFI loader" || bad "the plan installs the EFI loader"
+contains "rootfs-a.squashfs" "$plan" && ok "the plan copies the root filesystem into slot a" ||
+    bad "the plan copies the root filesystem into slot a"
+contains "sector 2048" "$plan" && ok "the plan puts core.img where the BIOS looks" ||
+    bad "the plan puts core.img where the BIOS looks"
+contains "grubenv (slot a)" "$plan" && ok "the plan seeds the A/B environment" ||
+    bad "the plan seeds the A/B environment"
+
+fn other_slot a > "$ROOTDIR/os.txt" 2>&1
+[ "$(cat "$ROOTDIR/os.txt")" = "b" ] && ok "slot a's other half is b" || bad "slot a's other half is b"
+fn other_slot b > "$ROOTDIR/os.txt" 2>&1
+[ "$(cat "$ROOTDIR/os.txt")" = "a" ] && ok "slot b's other half is a" || bad "slot b's other half is a"
+
+fn newer_than 6.35.0 6.34.0 && ok "6.35.0 is newer than 6.34.0" || bad "6.35.0 is newer than 6.34.0"
+fn newer_than 6.34.0 6.35.0 && bad "an older version is not newer" || ok "an older version is not newer"
+fn newer_than 6.34.10 6.34.9 && ok "a two-digit patch level compares as a number" ||
+    bad "a two-digit patch level compares as a number (sort -V was not used)"
+
 # ---------------------------------------------------------------- doctor
 # The doctor is expected to fail on an unconfigured sandbox (no binary on this
 # path, no MSR); what matters is that it runs and reports every check.

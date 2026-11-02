@@ -1,0 +1,10 @@
+#!/bin/sh
+# Daily self-update, run by busybox crond (busybox ships the cron daemon and the
+# periodic directories, so this costs nothing: no systemd timer, no extra
+# package, no 15 MB of anything).
+#
+# The miner is updated to the newest release on the channel the image was built
+# for. An OS image update is written into the *other* slot and only becomes the
+# default on the next boot, which is why a bad update is a reboot away from
+# being undone instead of a rig that never comes back.
+exec /usr/local/bin/zmrig-os auto --once

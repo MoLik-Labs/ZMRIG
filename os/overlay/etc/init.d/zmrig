@@ -18,8 +18,13 @@ error_log="/var/log/zmrig-os.log"
 
 depend() {
     need localmount
-    after bootmisc chronyd networking
-    use dns logger
+    after bootmisc
+    # Soft dependencies: start as soon as the filesystem is up and pick up
+    # networking, DNS and the clock *if* they are present. Blocking on the
+    # network costs ten seconds on every boot and gains nothing - stratum
+    # reconnects on its own, and a rig that is hashing before the DHCP lease
+    # arrives is a rig that did not lose a minute to it.
+    use net dns chronyd logger
     provide miner
 }
 

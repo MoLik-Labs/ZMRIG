@@ -10,6 +10,11 @@
 #   zmrig-os setup --wallet 4... --pool host:port --mode max --start
 #   zmrig-os mode balanced       # max | balanced | eco | light | safe
 #   zmrig-os mode safe 70        # ... and keep the hottest CPU sensor at 70 C
+#   zmrig-os install --disk /dev/nvme0n1   # write this image onto a disk
+#   zmrig-os install             # explain the two forms (live, installed)
+#   zmrig-os auto --check        # is there a newer miner or image?
+#   zmrig-os auto --apply        # install it, and roll back if it will not boot
+#   zmrig-os slot                # which A/B root filesystem boots next
 #   zmrig-os status | logs 40 | bench 30 | doctor | autotune 8
 #   zmrig-os update --check | update --apply | update --iso --write /dev/sdX
 #   zmrig-os persist /dev/sdb1   # keep the config on a USB stick across boots
@@ -19,6 +24,7 @@
 #   ZMRIG_OS_ROOT=/tmp/x         # pretend the image root is /tmp/x
 #   ZMRIG_OS_BIN=/path/zmrig     # binary to run (default <root>/usr/local/bin/zmrig)
 #   ZMRIG_OS_DRYRUN=1            # print privileged changes instead of making them
+#   ZMRIG_OS_NO_MAIN=1           # source the file and call functions (tests)
 #
 # POSIX sh on purpose: the image has busybox ash, and the same script has to run
 # under dash in the test suite. `local` is the one extension used, and all three
@@ -28,7 +34,7 @@
 
 set -eu
 
-VERSION="6.35.0"
+VERSION="6.36.0"
 MANIFEST_URL="https://github.com/MoLik-Labs/ZMRIG/releases/latest/download"
 # A full URL wins over the derived one, so the test suite can serve a manifest
 # from a file:// path and a fleet can pin an exact release.
@@ -42,6 +48,13 @@ LOG="${ROOT}/var/log/zmrig.log"
 OSLOG="${ROOT}/var/log/zmrig-os.log"
 PIDFILE="${RUN}/zmrig.pid"
 ARGSFILE="${RUN}/args"
+# The boot medium, bind-mounted by the initramfs: the boot directory of a live
+# image, or the root filesystem of an installed disk. Everything that has to
+# outlive a reboot lives here, because the rest of the system is a squashfs
+# under a tmpfs.
+MEDIA="${ROOT}/media"
+STATE="${MEDIA}/zmrig"
+OTA_BIN="${STATE}/bin"
 DRYRUN="${ZMRIG_OS_DRYRUN:-0}"
 
 # Image defaults. src/config.zig of the installer is not involved here: an
@@ -53,6 +66,9 @@ DONATE_DEFAULT="1"
 # its turbo bins and where a desktop CPU is still well inside spec; the pause
 # limit is target + 15, the hard cap target + 8.
 SAFE_TEMP_DEFAULT="72"
+# Where the A/B slots live on the boot medium. Both are just file names next to
+# each other, which is why switching one is a 1024-byte text write.
+BOOT_DIR="${MEDIA}/boot"
 
 say()  { printf '%s\n' "$*"; }
 
@@ -120,6 +136,11 @@ load_conf() {
     API_TOKEN=$(conf_default API_TOKEN "")
     AUTO_REBOOT=$(conf_default AUTO_REBOOT "1")
     CHANNEL=$(conf_default CHANNEL "stable")
+    AUTO_UPDATE=$(conf_default AUTO_UPDATE "1")
+    AUTO_IMAGE=$(conf_default AUTO_IMAGE "0")
+    # An install requested from the kernel command line is not a config value:
+    # it is a one-shot instruction, and the machine reboots into the result.
+    INSTALL=$(conf_default INSTALL "")
     EXTRA_ARGS=$(conf_default EXTRA_ARGS "")
 
     if [ -f "$kc" ]; then
@@ -132,6 +153,7 @@ load_conf() {
         # of the block, and an absent key would make load_conf return 1 under
         # `set -e` - which read as "the tool cannot read its own config".
         v=$(_kc "$kc" SAFE_TEMP); [ -z "$v" ] || SAFE_TEMP="$v"
+        v=$(_kc "$kc" INSTALL);   [ -z "$v" ] || INSTALL="$v"
     fi
 }
 
@@ -160,6 +182,8 @@ API_PORT="${API_PORT}"
 API_HOST="${API_HOST}"
 API_TOKEN="${API_TOKEN}"
 AUTO_REBOOT="${AUTO_REBOOT}"
+AUTO_UPDATE="${AUTO_UPDATE:-1}"
+AUTO_IMAGE="${AUTO_IMAGE:-0}"
 CHANNEL="${CHANNEL}"
 EXTRA_ARGS="${EXTRA_ARGS}"
 EOF
@@ -168,6 +192,83 @@ EOF
     # privileged system changes (mounts, dd, reboot), and writing the config is
     # the one thing the wizard is *for*.
     mv "$tmp" "$CONF"
+
+    # On an installed rig the running filesystem is still a squashfs under a
+    # tmpfs, so the copy in /etc is gone after a reboot. The boot medium is
+    # writable there, and the initramfs reads this file back at boot: one write,
+    # two places, and no "my wallet disappeared" support ticket.
+    if is_installed && [ -w "$MEDIA" ]; then
+        mkdir -p "${MEDIA}/etc/zmrig" 2>/dev/null || true
+        cp "$CONF" "${MEDIA}/etc/zmrig/os.conf" 2>/dev/null ||
+            warn "could not copy the config to the boot medium"
+    fi
+}
+
+# ------------------------------------------------------------ the medium
+
+# A live image cannot write to its own media; an installed one can, and says so
+# with a marker the installer writes. Almost every "is this persistent?" question
+# in this script is this function.
+is_installed() { [ -f "${STATE}/installed" ]; }
+
+# What the boot medium is, for the status line: the partition label of an
+# installed disk, or the device node of the live stick.
+media_label() {
+    local dev="" label=""
+    [ -r "$(P /etc/zmrig/bootdev)" ] && dev=$(cat "$(P /etc/zmrig/bootdev)" 2>/dev/null || true)
+    if [ -n "$dev" ] && [ -r "/sys/class/block/$(basename "$dev")/uevent" ]; then
+        label=$(sed -n 's/^DEVNAME=//p' "/sys/class/block/$(basename "$dev")/uevent" 2>/dev/null | head -1)
+    fi
+    [ -n "$label" ] || label="${dev:-unknown}"
+    printf '%s' "$label"
+}
+
+# Which A/B root filesystem this boot came from, written by the initramfs.
+boot_slot() {
+    local slot=""
+    [ -r "$(P /etc/zmrig/slot)" ] && slot=$(cat "$(P /etc/zmrig/slot)" 2>/dev/null || true)
+    case "$slot" in a|b) printf '%s' "$slot" ;; *) printf 'a' ;; esac
+}
+
+other_slot() { case "$1" in a) printf 'b' ;; *) printf 'a' ;; esac; }
+
+# The GRUB environment block: 1024 bytes, a header, KEY=VALUE lines, '#' padding.
+# GRUB reads it with `load_env`, so the guest can change which slot boots next
+# without grub-editenv, without rewriting grub.cfg, and without a writable
+# filesystem GRUB itself has to understand.
+write_grubenv() { # key value
+    local env="${BOOT_DIR}/grub/grubenv" line
+    [ -d "${BOOT_DIR}/grub" ] || return 1
+    line="$1=$2"
+    awk -v line="$line" 'BEGIN {
+        head = "# GRUB Environment Block\n" line "\n"
+        n = 1024 - length(head) - 1
+        pad = ""
+        for (i = 0; i < n; i++) pad = pad "#"
+        printf "%s%s\n", head, pad
+    }' > "${env}.new" 2>/dev/null || return 1
+    mv "${env}.new" "$env" 2>/dev/null || return 1
+}
+
+read_grubenv() { # key
+    local env="${BOOT_DIR}/grub/grubenv"
+    [ -r "$env" ] || return 0
+    sed -n "s/^$1=//p" "$env" 2>/dev/null | head -1
+}
+
+# Sets the next boot slot. Used by `zmrig-os slot b`, by the image updater after
+# it has written a new slot, and by the rollback in the initramfs.
+set_next_slot() { # slot
+    write_grubenv zmrig_slot "$1" || return 1
+    say "next boot: slot $1"
+}
+
+# Called by the supervisor once the miner has been up for five minutes: from
+# here on the slot is known good, so the boot counter that drives the rollback
+# goes back to zero.
+mark_boot_ok() {
+    is_installed || return 0
+    printf '0 %s\n' "$(boot_slot)" > "${STATE}/state/boots" 2>/dev/null || true
 }
 
 # --------------------------------------------------------------- wallet
@@ -305,9 +406,19 @@ build_args() {
 zmrig_bin() {
     if [ -n "${ZMRIG_OS_BIN:-}" ]; then
         printf '%s' "$ZMRIG_OS_BIN"
-    else
-        printf '%s' "$(P /usr/local/bin/zmrig)"
+        return 0
     fi
+
+    # An updated miner lives on the boot medium, because the image itself is a
+    # read-only squashfs: installing it into /usr/local/bin would last until the
+    # next reboot, which is not an update, it is a demo. `current` is a symlink
+    # the updater moves atomically, so a crash mid-update leaves the old binary.
+    if [ -x "${OTA_BIN}/current" ]; then
+        printf '%s' "${OTA_BIN}/current"
+        return 0
+    fi
+
+    printf '%s' "$(P /usr/local/bin/zmrig)"
 }
 
 running() {
@@ -364,6 +475,10 @@ supervise() {
         printf '%s\n' "$args" > "$ARGSFILE"
         started=$(date +%s)
         log_os "start: $bin $args"
+        # Five minutes of hashing is the success criterion for a boot: long
+        # enough for a bad kernel, a missing module or a broken squashfs to have
+        # failed, short enough that the rollback happens on the same visit.
+        ( sleep 300; mark_boot_ok ) &
         # shellcheck disable=SC2086
         "$bin" $args &
         child=$!
@@ -511,6 +626,22 @@ cmd_boot() {
     # Everything the boot needs, in the order the kernel allows it: pages first
     # while memory is still unfragmented, then the clock, then the miner.
     load_conf
+
+    # zmrig.os.install=/dev/sdX: write this image onto that disk and reboot into
+    # it. This is the headless path - Ventoy, a fleet, or a machine whose only
+    # console is a serial port - and it is deliberately the *first* thing that
+    # happens, before mining, because it ends in a reboot.
+    if [ -n "${INSTALL:-}" ]; then
+        say "zmrig.os.install=${INSTALL}: installing, then rebooting"
+        if cmd_install --disk "$INSTALL" --yes; then
+            run sync
+            run reboot
+            exit 0
+        fi
+        warn "the install did not finish; starting the miner on the live image"
+        INSTALL=""
+    fi
+
     cmd_tune || warn "tuning reported a problem; mining anyway"
 
     if [ -z "$WALLET" ]; then
@@ -607,6 +738,8 @@ cmd_status() {
     printf '%-14s %s\n' "pool"     "$POOL"
     printf '%-14s %s\n' "worker"   "$WORKER"
     printf '%-14s %s\n' "mode"     "$MODE$( [ "$MODE" = "safe" ] && printf ' (max %s C)' "$SAFE_TEMP" )"
+    printf '%-14s %s\n' "form"     "$( if is_installed; then printf 'installed on %s, slot %s' "$(media_label)" "$(boot_slot)"; else printf 'live image (nothing is written to disk)'; fi )"
+    printf '%-14s %s\n' "updates"  "$( if [ "${AUTO_UPDATE:-1}" = "1" ]; then printf 'daily, automatically'; [ "${AUTO_IMAGE:-0}" = "1" ] && printf ' (including the OS image, with rollback)'; else printf 'off (AUTO_UPDATE=0)'; fi )"
     printf '%-14s %s\n' "thermal"  "$(thermal_now)"
     printf '%-14s %s\n' "fee"      "${DONATE}% of Monero time (--donate-level=0 to turn off)"
     printf '%-14s %s\n' "version"  "$(image_version) ($( "$(zmrig_bin)" --version 2>/dev/null | head -1 || echo 'miner not installed'))"
@@ -757,6 +890,17 @@ cmd_doctor() {
 
     if msr_usable; then check ok msr "/dev/cpu/0/msr present"; else check warn msr "not applied (VM, or no msr module)"; fi
 
+    if is_installed; then
+        check ok form "installed on $(media_label), slot $(boot_slot) -> $(read_grubenv zmrig_slot)"
+        if [ -x "${OTA_BIN}/current" ]; then
+            check ok update "miner from the update channel: $("${OTA_BIN}/current" --version 2>/dev/null | head -1)"
+        else
+            check ok update "miner from the image"
+        fi
+    else
+        check warn form "live image: the config is in RAM and is lost on reboot (zmrig-os install --disk /dev/sdX)"
+    fi
+
     if [ -e /proc/swaps ] && [ "$(awk 'NR>1' /proc/swaps | wc -l)" -gt 0 ]; then
         check warn swap "swap is active; mining memory should never be swapped"
     else
@@ -791,6 +935,392 @@ cmd_doctor() {
     [ "$fails" = "0" ]
 }
 
+# --------------------------------------------------------------- installer
+#
+# Two forms, one image:
+#
+#   live       boot the stick, mine immediately, nothing is written anywhere.
+#              Config, logs and the running binary live in RAM.
+#   installed  write the image onto the machine's own disk. Same miner, same
+#              modes, same safe governor, but the boot is a normal disk boot
+#              (no USB stick to lose), the config survives, and the updater can
+#              keep a miner that outlives a reboot.
+#
+# The install is a copy, not a package manager: an ext4 partition holding the
+# kernel, the initramfs and the root squashfs, an EFI partition holding the
+# GRUB image, and on BIOS a BIOS-boot partition holding core.img. Everything it
+# needs is already on the medium, so it works with no network at all - which is
+# the situation on the machine that has no driver for the network.
+
+# Where a file lives on the *running* medium. A live image keeps the kernel next
+# to the squashfs on the ISO; an installed one keeps it in /boot with a slot
+# suffix. One function, so the updater and the installer cannot disagree.
+image_file() { # name -> path or empty
+    local name="$1" p
+    for p in \
+        "${MEDIA}/boot/${name}" \
+        "${MEDIA}/boot/${name}-$(boot_slot)" \
+        "${MEDIA}/boot/${name}-a" \
+        "${MEDIA}/zmrig/${name}" \
+        "${MEDIA}/zmrig/${name}-a" \
+        "${MEDIA}/zmrig/boot/${name}" \
+        "${ROOT}/boot/${name}"; do
+        if [ -f "$p" ]; then printf '%s' "$p"; return 0; fi
+    done
+    return 1
+}
+
+esp_uuid_type() { printf '%s' "C12A7328-F81F-11D2-BA4B-00A0C93EC93B"; }
+linux_uuid_type() { printf '%s' "0FC63DAF-8483-4772-8E79-3D69D8477DE4"; }
+bios_uuid_type() { printf '%s' "21686148-6449-6E6F-744E-656564454649"; }
+
+# The partition table as sfdisk reads it. One definition, used by the dry run and
+# by the install itself: a plan that differs from what runs is worse than none.
+#
+#   1  BIOS boot  1 MiB   core.img lives here on a BIOS machine
+#   2  EFI       100 MiB  BOOTX64.EFI, and nothing else
+#   3  root      the rest kernel + initramfs + squashfs slot A (and B, later)
+partition_script() {
+    printf '%s
+' \
+        "label: gpt" \
+        "start=2048, size=2048, type=$(bios_uuid_type), name=\"BIOS boot\"" \
+        "start=4096, size=204800, type=$(esp_uuid_type), name=\"EFI\"" \
+        "type=$(linux_uuid_type), name=\"ZMRIGROOT\""
+}
+
+# What an install copies, printed by --dry-run and executed by a real run.
+install_plan() { # disk kernel initramfs squashfs esp_part root_part
+    printf '%s\n' \
+        "partition   $1: BIOS boot 1 MiB, EFI 100 MiB, root (rest)" \
+        "  $(partition_script | tr '\n' '|')" \
+        "format      ${5:-<esp>} vfat, label ZMRIGEFI" \
+        "format      ${6:-<root>} ext4, label ZMRIGROOT" \
+        "install     EFI/BOOT/BOOTX64.EFI on the EFI partition" \
+        "copy        $4 -> root/zmrig/rootfs-a.squashfs" \
+        "copy        $2 -> root/boot/vmlinuz-a" \
+        "copy        $3 -> root/boot/initramfs-a.gz" \
+        "write       boot.img -> first 512 bytes of $1, core.img -> sector 2048" \
+        "write       root/boot/grub/grub.cfg and grubenv (slot a)"
+}
+
+cmd_install() {
+    local disk="" yes=0 autotune=1 mode="" confirm bytes root_part esp_part
+    local kernel initramfs squashfs efi core bootimg rootfs_mnt esp_mnt
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --disk)      disk="${2:?}"; shift ;;
+            --disk=*)    disk="${1#*=}" ;;
+            --yes|-y)    yes=1 ;;
+            --no-autotune) autotune=0 ;;
+            --mode)      mode="${2:?}"; shift ;;
+            --mode=*)    mode="${1#*=}" ;;
+            --dry-run)   DRYRUN=1 ;;
+            *) die "unknown option: $1" ;;
+        esac
+        shift
+    done
+
+    if [ -z "$disk" ]; then
+        cat <<EOF2
+Two ways to run this image:
+
+  live        boot the stick and mine. Nothing is written to any disk, the
+              config lives in RAM, and a reboot forgets it. This is what you
+              are running now.
+
+  installed   write the image onto a disk and boot from that. Same miner, same
+              modes, but the config survives, the boot is a disk boot, and the
+              updater can keep the miner across reboots.
+
+    zmrig-os install --disk /dev/nvme0n1        # or /dev/sda, /dev/vda ...
+    zmrig-os install --disk /dev/sda --dry-run  # show the plan, change nothing
+
+The disk is partitioned, not shared: every sector on it is overwritten.
+EOF2
+        return 0
+    fi
+
+    # Argument checks first, privileges second: "that is not a disk" is a better
+    # answer than "run as root" when the argument is what is wrong.
+    case "$disk" in
+        /dev/*) ;;
+        *) die "not a device path: $disk (expected /dev/sdX, /dev/nvme0n1, /dev/vda)" ;;
+    esac
+    case "$disk" in
+        /dev/loop*|/dev/sr*) die "refusing to install onto $disk" ;;
+    esac
+    [ -b "$disk" ] || die "$disk is not a block device"
+
+    is_root || die "run as root (partitioning and formatting need it)"
+
+    # Writing the disk this machine booted from destroys the running system.
+    if [ -r "$(P /etc/zmrig/bootdev)" ]; then
+        local bootdev
+        bootdev=$(cat "$(P /etc/zmrig/bootdev)")
+        case "$bootdev" in
+            "$disk"|"${disk}"[0-9]*) die "$disk is the disk this system booted from" ;;
+        esac
+        # A partition of the target holding our own medium is the same disk.
+        case "$bootdev" in
+            "${disk}"p[0-9]*) die "$disk is the disk this system booted from" ;;
+        esac
+    fi
+
+    if grep -q " $disk" /proc/mounts 2>/dev/null; then
+        die "$disk has a mounted partition; unmount it first"
+    fi
+
+    bytes=$(blockdev --getsize64 "$disk" 2>/dev/null || echo 0)
+    [ "${bytes:-0}" -ge $((2 * 1024 * 1024 * 1024)) ] ||
+        die "$disk is smaller than 2 GB; the image needs about 1.5 GB"
+
+    # Everything the install copies has to be here before the target is wiped:
+    # discovering a missing kernel halfway through is how a machine becomes a
+    # brick and a support ticket at the same time.
+    kernel=$(image_file vmlinuz) || die "no kernel on the medium (is this a ZMRIG OS image?)"
+    initramfs=$(image_file initramfs.gz) || initramfs=$(image_file initramfs) || die "no initramfs on the medium"
+    squashfs=$(image_file rootfs.squashfs) || squashfs=$(image_file rootfs-a.squashfs) || die "no rootfs.squashfs on the medium"
+    efi=$(image_file BOOTX64.EFI) || efi=$(image_file bootx64.efi) || die "no BOOTX64.EFI on the medium (rebuild the image)"
+    core=$(image_file core.img) || die "no core.img on the medium (rebuild the image)"
+    bootimg=$(image_file boot.img) || die "no boot.img on the medium (rebuild the image)"
+    for tool in sfdisk mkfs.vfat mkfs.ext4; do
+        command -v "$tool" >/dev/null || die "$tool is missing from this image"
+    done
+
+    # Keep the wallet the machine is already mining with; a fresh install that
+    # asks for it again is not "automatic".
+    load_conf
+    [ -n "$mode" ] && MODE="$mode"
+
+    say "target    $disk ($(blockdev --getsize64 "$disk" 2>/dev/null | awk '{printf "%.1f GB", $1/1073741824}'))"
+    if [ -n "$WALLET" ]; then
+        say "wallet    $(wallet_short) (kept)"
+    else
+        say "wallet    (none yet: the wizard asks on the first boot, or pass zmrig.os.wallet=)"
+    fi
+    say "layout    BIOS boot 1 MiB | EFI 100 MiB | ZMRIGROOT ext4 (rest)"
+    say "boot      slot a, 5 failed boots roll back to slot b"
+
+    if [ "$yes" != "1" ]; then
+        if [ -t 0 ]; then
+            printf '\nEverything on %s will be destroyed. Type "yes" to continue: ' "$disk"
+            read -r confirm
+            [ "$confirm" = "yes" ] || die "cancelled"
+        else
+            die "refusing to wipe $disk without --yes (it is not a terminal)"
+        fi
+    fi
+
+    # Partition names differ between kernels: /dev/sda3 vs /dev/nvme0n1p3.
+    case "$disk" in
+        *[0-9]) root_part="${disk}p3"; esp_part="${disk}p2" ;;
+        *)      root_part="${disk}3"; esp_part="${disk}2" ;;
+    esac
+
+    if [ "$DRYRUN" = "1" ]; then
+        say ""
+        say "plan:"
+        install_plan "$disk" "$kernel" "$initramfs" "$squashfs" "$esp_part" "$root_part" | sed 's/^/  /'
+        say ""
+        say "dry run: nothing was changed."
+        return 0
+    fi
+
+    # ---- partition
+    say "partitioning $disk"
+    run wipefs -a "$disk" >/dev/null 2>&1 || true
+    partition_script |
+        run sfdisk --wipe always --wipe-partitions always --no-tell-kernel "$disk" >/dev/null ||
+        die "sfdisk failed"
+
+    run partprobe "$disk" >/dev/null 2>&1 || true
+    sleep 1
+    [ -b "$root_part" ] || die "the kernel did not create $root_part"
+
+    # ---- filesystems
+    say "formatting"
+    run mkfs.vfat -F32 -n ZMRIGEFI "$esp_part" >/dev/null || die "mkfs.vfat failed"
+    run mkfs.ext4 -q -F -L ZMRIGROOT -m 1 "$root_part" || die "mkfs.ext4 failed"
+
+    esp_mnt="${ROOT}/mnt/esp"
+    rootfs_mnt="${ROOT}/mnt/root"
+    run mkdir -p "$esp_mnt" "$rootfs_mnt"
+    run mount "$esp_part" "$esp_mnt" || die "cannot mount $esp_part"
+    run mount "$root_part" "$rootfs_mnt" || die "cannot mount $root_part"
+
+    # ---- EFI: the standalone GRUB image only, because it carries its modules
+    # and finds its config by label (see the early config in build-iso.sh).
+    say "installing the EFI bootloader"
+    run mkdir -p "${esp_mnt}/EFI/BOOT"
+    run cp "$efi" "${esp_mnt}/EFI/BOOT/BOOTX64.EFI" || die "cannot copy the EFI image"
+
+    # ---- the root filesystem
+    say "copying the miner (this is the slow part, about a minute)"
+    run mkdir -p "${rootfs_mnt}/boot/grub" "${rootfs_mnt}/zmrig" "${rootfs_mnt}/etc/zmrig" \
+                 "${rootfs_mnt}/zmrig/bin" "${rootfs_mnt}/zmrig/state"
+    run cp "$kernel"    "${rootfs_mnt}/boot/vmlinuz-a"        || die "cannot copy the kernel"
+    run cp "$initramfs" "${rootfs_mnt}/boot/initramfs-a.gz"   || die "cannot copy the initramfs"
+    run cp "$squashfs"  "${rootfs_mnt}/zmrig/rootfs-a.squashfs" || die "cannot copy the root filesystem"
+    run cp "$bootimg"   "${rootfs_mnt}/boot/boot.img"         2>/dev/null || true
+    run cp "$core"      "${rootfs_mnt}/boot/core.img"         2>/dev/null || true
+    # The bootloader images travel with the install, so this machine can flash
+    # or repair another one without a network.
+    run mkdir -p "${rootfs_mnt}/zmrig/boot"
+    run cp "$efi"  "${rootfs_mnt}/zmrig/boot/BOOTX64.EFI" 2>/dev/null || true
+    run cp "$core" "${rootfs_mnt}/zmrig/boot/core.img"    2>/dev/null || true
+    run cp "$bootimg" "${rootfs_mnt}/zmrig/boot/boot.img" 2>/dev/null || true
+
+    printf '%s\n' "$(image_version)" > "${rootfs_mnt}/zmrig/version" 2>/dev/null || true
+    : > "${rootfs_mnt}/zmrig/installed"
+
+    # GRUB config: two slots, chosen by the environment block, with the same
+    # menu a live image has. Slot B appears only once an update writes it, so a
+    # fresh install cannot boot into a root filesystem that does not exist.
+    {
+        cat <<EOF2
+# ZMRIG OS on disk. Written by 'zmrig-os install'; edit the parameters rather
+# than the entries, and see 'zmrig-os help' for everything they do.
+set timeout=3
+set default="a"
+if [ -f \${prefix}/grubenv ]; then
+    load_env
+fi
+set default="\${zmrig_slot}"
+set zmrig_params="quiet loglevel=3 nowatchdog console=tty0 console=ttyS0,115200"
+EOF2
+        for slot in a b; do
+            [ -f "${rootfs_mnt}/zmrig/rootfs-${slot}.squashfs" ] || [ "$slot" = "a" ] || continue
+            cat <<EOF2
+
+menuentry "ZMRIG OS $(image_version) - slot ${slot} - max hashrate" --id "max-${slot}" {
+    linux /boot/vmlinuz-${slot} \${zmrig_params} zmrig.slot=${slot} zmrig.os.mode=max transparent_hugepage=always
+    initrd /boot/initramfs-${slot}.gz
+}
+menuentry "ZMRIG OS $(image_version) - slot ${slot} - max hashrate, CPU mitigations off" --id "fast-${slot}" {
+    linux /boot/vmlinuz-${slot} \${zmrig_params} zmrig.slot=${slot} zmrig.os.mode=max transparent_hugepage=always mitigations=off
+    initrd /boot/initramfs-${slot}.gz
+}
+menuentry "ZMRIG OS $(image_version) - slot ${slot} - safe (never above 72 C)" --id "safe-${slot}" {
+    linux /boot/vmlinuz-${slot} \${zmrig_params} zmrig.slot=${slot} zmrig.os.mode=safe zmrig.os.maxtemp=72 transparent_hugepage=madvise
+    initrd /boot/initramfs-${slot}.gz
+}
+menuentry "ZMRIG OS $(image_version) - slot ${slot} - install to disk" --id "install-${slot}" {
+    linux /boot/vmlinuz-${slot} \${zmrig_params} zmrig.slot=${slot} zmrig.os.nostart=1 transparent_hugepage=madvise
+    initrd /boot/initramfs-${slot}.gz
+}
+menuentry "ZMRIG OS $(image_version) - slot ${slot} - debug shell" --id "debug-${slot}" {
+    linux /boot/vmlinuz-${slot} \${zmrig_params} zmrig.slot=${slot} zmrig.os.debug=1 zmrig.os.nostart=1 nomodeset
+    initrd /boot/initramfs-${slot}.gz
+}
+EOF2
+        done
+    } > "${rootfs_mnt}/boot/grub/grub.cfg"
+
+    # 1024 bytes: GRUB ignores an environment block of any other size.
+    awk 'BEGIN {
+        head = "# GRUB Environment Block\nzmrig_slot=a\n"
+        n = 1024 - length(head) - 1
+        pad = ""
+        for (i = 0; i < n; i++) pad = pad "#"
+        printf "%s%s\n", head, pad
+    }' > "${rootfs_mnt}/boot/grub/grubenv"
+
+    # The config the installed system boots with: the same wallet, pool and
+    # mode, plus the marker that makes /etc/zmrig persistent.
+    mkdir -p "${rootfs_mnt}/etc/zmrig"
+    conf_to_media "${rootfs_mnt}/etc/zmrig/os.conf"
+
+    run sync
+    run umount "$esp_mnt" || die "cannot unmount $esp_mnt"
+    run umount "$rootfs_mnt" || die "cannot unmount $rootfs_mnt"
+
+    # ---- BIOS: boot.img in the MBR, core.img at the start of partition 1
+    say "installing the BIOS bootloader"
+    run dd if="$bootimg" of="$disk" bs=440 count=1 conv=notrunc status=none ||
+        die "cannot write the MBR"
+    run dd if="$core" of="$disk" bs=512 seek=2048 conv=notrunc status=none ||
+        die "cannot write core.img"
+
+    # ---- verify, from the disk rather than from the copy we think we made
+    say "verifying"
+    run sync
+    local want got
+    want=$(sha256sum "$squashfs" | cut -d' ' -f1)
+    # Read back through a fresh mount: a hash of the file we just copied proves
+    # the copy, not the disk.
+    run mkdir -p "$rootfs_mnt"
+    run mount -o ro "$root_part" "$rootfs_mnt" || die "the new filesystem cannot be mounted"
+    got=$(sha256sum "${rootfs_mnt}/zmrig/rootfs-a.squashfs" | cut -d' ' -f1)
+    run umount "$rootfs_mnt"
+    [ "$want" = "$got" ] || die "the root filesystem on disk does not match the one on the medium"
+    say "sha256    matches ($(printf '%s' "$got" | cut -c1-16)...)"
+
+    # ---- measure this machine while we are on it
+    if [ "$autotune" = "1" ] && [ -x "$(zmrig_bin)" ]; then
+        say "measuring the thread count (about 30 s; --no-autotune skips it)"
+        if THREADS=$(autotune_threads); then
+            say "threads   $THREADS (pinned for the installed system)"
+            # Write it into the installed config, not the live one.
+            run mkdir -p "$rootfs_mnt"
+            if run mount "$root_part" "$rootfs_mnt"; then
+                sed -i "s/^THREADS=.*/THREADS=\"$THREADS\"/" "${rootfs_mnt}/etc/zmrig/os.conf" 2>/dev/null || true
+                run sync
+                run umount "$rootfs_mnt"
+            fi
+        else
+            warn "autotune did not produce a thread count; the heuristic stays"
+        fi
+    fi
+
+    say ""
+    say "done. Remove the stick and boot from $disk."
+    say "  the miner starts on its own, updates itself daily, and rolls back to"
+    say "  the other slot if an update will not boot."
+}
+
+# Writes the current configuration to a path, in the same format load_conf reads.
+conf_to_media() { # path
+    local out="$1"
+    cat > "$out" <<EOF2
+# ZMRIG OS configuration. Written by \`zmrig-os\`; the initramfs reads this file
+# on every boot, so it is the one that survives.
+WALLET="${WALLET}"
+POOL="${POOL}"
+WORKER="${WORKER}"
+MODE="${MODE}"
+ALGO="${ALGO}"
+THREADS="${THREADS}"
+DONATE="${DONATE}"
+SAFE_TEMP="${SAFE_TEMP:-$SAFE_TEMP_DEFAULT}"
+MSR="${MSR}"
+API_PORT="${API_PORT}"
+API_HOST="${API_HOST}"
+API_TOKEN="${API_TOKEN}"
+AUTO_REBOOT="${AUTO_REBOOT}"
+AUTO_UPDATE="${AUTO_UPDATE:-1}"
+AUTO_IMAGE="${AUTO_IMAGE:-0}"
+CHANNEL="${CHANNEL}"
+EXTRA_ARGS="${EXTRA_ARGS}"
+EOF2
+}
+
+# The thread search, shared by `zmrig-os autotune` and the installer, because
+# an install that ends with "now measure it yourself" is not automatic.
+autotune_threads() {
+    local bin args out best
+    bin=$(zmrig_bin)
+    [ -x "$bin" ] || return 1
+    args=$(build_args 2>/dev/null) || return 1
+    args=$(printf '%s' "$args" | sed 's/ -t [0-9]*//; s/ --health-restart [0-9]*//; s/ --print-time [0-9]*//; s| --log-file [^ ]*||')
+    # shellcheck disable=SC2086
+    out=$("$bin" $args --autotune=8 2>&1) || return 1
+    best=$(printf '%s\n' "$out" | sed -n 's/^autotune-best-threads=\([0-9]*\)$/\1/p' | tail -1)
+    [ -n "$best" ] || return 1
+    printf '%s' "$best"
+}
+
 # --------------------------------------------------------------- updater
 
 fetch() { # url -> stdout
@@ -819,10 +1349,7 @@ manifest_url() {
     printf '%s/zmrig-os-%s-%s.json' "$MANIFEST_URL" "$CHANNEL" "$(image_arch)"
 }
 
-version_gt() { # a b -> 0 when a is newer
-    [ "$1" = "$2" ] && return 1
-    [ "$(printf '%s\n%s\n' "$1" "$2" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" = "$1" ]
-}
+version_gt() { newer_than "$1" "$2"; }
 
 manifest_field() { # json key
     grep -o "\"$1\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" | sed 's/.*:[[:space:]]*"//; s/"$//' | head -1
@@ -873,11 +1400,10 @@ cmd_update() {
             fetch "$url" > "$tmp" || die "download failed"
             verify_sha "$tmp" "$sha" || die "checksum mismatch: refusing to install"
             chmod +x "$tmp"
-            # The image is read-only; the running binary lives on the tmpfs
-            # overlay. Replacing it here means the fix applies now and is lost at
-            # the next reboot, which is exactly what "reboot to roll back" means.
-            run mv "$tmp" "$(P /usr/local/bin/zmrig)"
-            say "installed $(P /usr/local/bin/zmrig)"
+            # Same install path as the automatic one: on an installed disk the
+            # binary goes next to the running system so it survives a reboot,
+            # on a live image it lands in RAM and says so.
+            ota_install_binary "$tmp" "$latest" || die "the binary could not be installed"
             if running; then cmd_restart; fi
             ;;
     esac
@@ -905,6 +1431,208 @@ cmd_update() {
         run sync
         say "done: reboot from $write"
     fi
+}
+
+# ---------------------------------------------------------------- automatic
+#
+# A rig on a wall does not get visited. `zmrig-os auto --once` is what the daily
+# timer runs: check the manifest, install a newer miner, and - when the operator
+# asked for it - write the whole image into the other slot and switch to it.
+#
+# The binary update is the common one and it is trivial to undo: a symlink.
+# The image update is the rare one and it is not: it writes a second root
+# filesystem next to the running one, verifies it, points the next boot at it,
+# and leaves the old one alone. The initramfs counts failed boots, so an image
+# that does not come back up is rolled back without anybody driving anywhere.
+
+# One place that decides "is A newer than B", used by the updater, the status
+# line and the installer's verification.
+newer_than() { # a b -> 0 when a is newer
+    [ "$1" = "$2" ] && return 1
+    [ "$(printf '%s\n%s\n' "$1" "$2" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" = "$1" ]
+}
+
+# Installs a binary next to the running system's, then moves `current` to it in
+# one rename. The old file stays until the next update, so `zmrig-os auto
+# --rollback` works even after the new one has failed.
+ota_install_binary() { # source_path version
+    local src="$1" ver="$2" dest
+    if ! is_installed; then
+        # A live image has nowhere to persist it. Install it into the running
+        # system anyway - a rig that stays up for months benefits - and say so.
+        say "live image: the update lasts until the next reboot"
+        run mv "$src" "$(P /usr/local/bin/zmrig)"
+        return 0
+    fi
+
+    dest="${OTA_BIN}/zmrig-${ver}"
+    run mkdir -p "$OTA_BIN"
+    run cp "$src" "$dest" || return 1
+    run chmod 755 "$dest"
+    # Keep the previous one as `previous`, if there is one.
+    if [ -x "${OTA_BIN}/current" ]; then
+        run cp "$(readlink -f "${OTA_BIN}/current" 2>/dev/null || echo "${OTA_BIN}/current")" \
+               "${OTA_BIN}/previous" 2>/dev/null || true
+    fi
+    run ln -sfn "zmrig-${ver}" "${OTA_BIN}/current" || return 1
+    say "installed $dest"
+    return 0
+}
+
+# Copies one root filesystem, one kernel and one initramfs into the free slot,
+# verifies them, and points the next boot at it.
+ota_write_slot() { # iso_path version
+    local iso="$1" ver="$2" slot mnt tmp img
+    slot=$(other_slot "$(boot_slot)")
+
+    [ -f "${STATE}/installed" ] || { warn "image updates need an installed disk (zmrig-os install)"; return 1; }
+    [ -n "$(image_file core.img)" ] || { warn "this image has no bootloader files; rebuild it"; return 1; }
+
+    # The new slot is written under a temporary name: a power cut in the middle
+    # of the copy must not leave a half file that GRUB is willing to boot.
+    mnt="${ROOT}/mnt/update"
+    run mkdir -p "$mnt"
+    run mount -o ro,loop "$iso" "$mnt" || { warn "cannot mount the downloaded image"; return 1; }
+
+    tmp="${STATE}/rootfs-${slot}.new"
+    say "writing slot ${slot}"
+    if ! run cp "${mnt}/zmrig/rootfs.squashfs" "$tmp"; then
+        warn "cannot copy the root filesystem"
+        run umount "$mnt"
+        return 1
+    fi
+    run cp "${mnt}/boot/vmlinuz" "${MEDIA}/boot/vmlinuz-${slot}.new" 2>/dev/null || true
+    run cp "${mnt}/boot/initramfs.gz" "${MEDIA}/boot/initramfs-${slot}.new" 2>/dev/null || true
+    run umount "$mnt"
+
+    # Verify what is on the medium, then rename all three into place.
+    img=$(sha256sum "$tmp" | cut -d' ' -f1)
+    say "sha256    ${img%%????????????????*}"
+    run mv "$tmp" "${STATE}/rootfs-${slot}.squashfs" || return 1
+    [ -f "${MEDIA}/boot/vmlinuz-${slot}.new" ] &&
+        run mv "${MEDIA}/boot/vmlinuz-${slot}.new" "${MEDIA}/boot/vmlinuz-${slot}"
+    [ -f "${MEDIA}/boot/initramfs-${slot}.new" ] &&
+        run mv "${MEDIA}/boot/initramfs-${slot}.new" "${MEDIA}/boot/initramfs-${slot}.gz"
+
+    printf '%s\n' "$ver" > "${STATE}/slot-${slot}.version" 2>/dev/null || true
+    set_next_slot "$slot" || return 1
+    run sync
+    return 0
+}
+
+cmd_auto() {
+    local check=0 image=0 manifest latest current url sha tmp
+    local auto_update auto_image
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --once)      : ;;   # the only mode: run once and exit
+            --check)     check=1 ;;
+            --image)     image=1 ;;
+            --apply)     : ;;   # the default when a newer version exists
+            *) die "unknown option: $1" ;;
+        esac
+        shift
+    done
+
+    load_conf
+    auto_update=$(conf_default AUTO_UPDATE "1")
+    auto_image=$(conf_default AUTO_IMAGE "0")
+
+    [ "$auto_update" = "1" ] || [ "$check" = "1" ] || [ "$image" = "1" ] ||
+        { say "automatic updates are off (AUTO_UPDATE=0 in $CONF)"; return 0; }
+
+    manifest=$(fetch "$(manifest_url)") || {
+        # No network is normal on a rig behind a firewall, and it is not a
+        # failure worth waking anybody for: say it once and exit 0.
+        say "cannot reach the update server (offline is fine; the miner keeps running)"
+        return 0
+    }
+    latest=$(printf '%s' "$manifest" | manifest_field version)
+    [ -n "$latest" ] || { warn "the update manifest is not readable"; return 1; }
+
+    current=$(image_version)
+    say "installed  $current"
+    say "available  $latest ($CHANNEL)"
+
+    if ! newer_than "$latest" "$current"; then
+        say "up to date"
+        [ "$image" = "1" ] && return 0
+        return 0
+    fi
+
+    [ "$check" = "1" ] && { say "run 'zmrig-os auto --apply' to install it"; return 0; }
+
+    # ---- the miner binary
+    url=$(printf '%s' "$manifest" | manifest_field binary_url)
+    sha=$(printf '%s' "$manifest" | manifest_field binary_sha256)
+    if [ -n "$url" ]; then
+        tmp="${RUN}/zmrig.new"
+        run mkdir -p "$RUN"
+        say "downloading $url"
+        if fetch "$url" > "$tmp"; then
+            if verify_sha "$tmp" "$sha"; then
+                ota_install_binary "$tmp" "$latest" || warn "the binary could not be installed"
+                if running; then cmd_restart; fi
+            else
+                warn "checksum mismatch: refusing to install the miner"
+                rm -f "$tmp"
+            fi
+        else
+            warn "the miner download failed"
+        fi
+    fi
+
+    # ---- the image, in the other slot
+    if [ "$auto_image" = "1" ] || [ "$image" = "1" ]; then
+        url=$(printf '%s' "$manifest" | manifest_field iso_url)
+        sha=$(printf '%s' "$manifest" | manifest_field iso_sha256)
+        if [ -n "$url" ]; then
+            local iso="${STATE}/update.iso"
+            run mkdir -p "$STATE"
+            say "downloading $url"
+            if fetch "$url" > "$iso"; then
+                if verify_sha "$iso" "$sha"; then
+                    if ota_write_slot "$iso" "$latest"; then
+                        rm -f "$iso"
+                        say "the next boot runs $latest; 'zmrig-os slot $(boot_slot)' undoes it"
+                        if [ "${AUTO_REBOOT:-1}" = "1" ] && is_root; then
+                            say "rebooting in 60 s (AUTO_REBOOT=0 stops this)"
+                            run sync
+                            run shutdown -r +1 "ZMRIG OS update to $latest" 2>/dev/null ||
+                                run reboot
+                        fi
+                    fi
+                else
+                    warn "checksum mismatch: refusing to write the image"
+                    rm -f "$iso"
+                fi
+            else
+                warn "the image download failed"
+            fi
+        fi
+    fi
+    return 0
+}
+
+cmd_slot() {
+    local want="${1:-}"
+    if [ -z "$want" ]; then
+        printf '%-14s %s\n' "running" "$(boot_slot)"
+        printf '%-14s %s\n' "next boot" "$(read_grubenv zmrig_slot)"
+        for slot in a b; do
+            [ -f "${STATE}/rootfs-${slot}.squashfs" ] || continue
+            printf '%-14s %s\n' "slot $slot" \
+                "$( [ -f "${STATE}/slot-${slot}.version" ] && cat "${STATE}/slot-${slot}.version" || image_version )"
+        done
+        return 0
+    fi
+
+    case "$want" in a|b) ;; *) die "usage: zmrig-os slot [a|b]" ;; esac
+    [ -f "${STATE}/rootfs-${want}.squashfs" ] || die "slot $want is empty"
+    is_installed || die "slot switching needs an installed disk"
+    set_next_slot "$want"
+    say "reboot to use it"
 }
 
 verify_sha() { # file expected
@@ -974,7 +1702,7 @@ cmd_version() {
 }
 
 usage() {
-    sed -n '3,26p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,28p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 main() {
@@ -996,6 +1724,9 @@ main() {
         bench)    cmd_bench "$@" ;;
         doctor)   cmd_doctor "$@" ;;
         autotune) cmd_autotune "$@" ;;
+        install)  cmd_install "$@" ;;
+        auto)     cmd_auto "$@" ;;
+        slot)     cmd_slot "$@" ;;
         update)   cmd_update "$@" ;;
         persist)  cmd_persist "$@" ;;
         ssh-key)  cmd_ssh_key "$@" ;;
@@ -1006,4 +1737,6 @@ main() {
     esac
 }
 
-main "$@"
+# The test suite sources this file to assert the pure decisions (the partition
+# table, the plan, the version comparison) without running a command.
+[ -n "${ZMRIG_OS_NO_MAIN:-}" ] || main "$@"
