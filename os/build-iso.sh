@@ -5,6 +5,7 @@
 #   sudo ./os/build-iso.sh                       # x86-64-v3, stable
 #   sudo ./os/build-iso.sh --arch x86-64-v2      # older CPUs
 #   sudo ./os/build-iso.sh --kernel linux-virt   # VMs only, smaller image
+#   sudo ./os/build-iso.sh --firmware all        # keep every firmware blob
 #   sudo ./os/build-iso.sh --plan                # print the steps, change nothing
 #   sudo ./os/build-iso.sh --smoke               # build, then boot it in QEMU
 #
@@ -33,6 +34,9 @@ ORIG_ARGS=("$@")
 ALPINE_VER="${ALPINE_VER:-latest-stable}"
 ALPINE_MIRROR="${ALPINE_MIRROR:-https://dl-cdn.alpinelinux.org/alpine}"
 KERNEL_PKG="${KERNEL_PKG:-linux-lts}"
+# minimal drops the GPU/Wi-Fi/Infiniband firmware blobs and the stock initramfs;
+# `all` keeps the package intact for a board with a NIC that needs one of them.
+FIRMWARE="${FIRMWARE:-minimal}"
 ARCH_LEVEL="${ARCH_LEVEL:-x86-64-v3}"
 CHANNEL="${CHANNEL:-stable}"
 WORK="${ZMRIG_OS_WORK:-/tmp/zmrig-os-build}"
@@ -52,6 +56,8 @@ while [ $# -gt 0 ]; do
         --arch=*)      ARCH_LEVEL="${1#*=}" ;;
         --kernel)      KERNEL_PKG="${2:?}"; shift ;;
         --kernel=*)    KERNEL_PKG="${1#*=}" ;;
+        --firmware)    FIRMWARE="${2:?}"; shift ;;
+        --firmware=*)  FIRMWARE="${1#*=}" ;;
         --channel)     CHANNEL="${2:?}"; shift ;;
         --channel=*)   CHANNEL="${1#*=}" ;;
         --alpine)      ALPINE_VER="${2:?}"; shift ;;
@@ -340,7 +346,7 @@ mount --bind /dev/pts "${ROOTFS}/dev/pts"
 # apk is the only step that talks to a package mirror, and a mirror that stops
 # answering hangs a job rather than failing it. 40 minutes is generous: the same
 # install takes two to four on a loaded runner.
-timeout 2400 chroot "$ROOTFS" /bin/sh /tmp/chroot-setup.sh "$KERNEL_PKG" "$CHANNEL" ||
+timeout 2400 chroot "$ROOTFS" /bin/sh /tmp/chroot-setup.sh "$KERNEL_PKG" "$CHANNEL" "$FIRMWARE" ||
     die "the chroot setup failed or timed out after 2400 s (apk: ${ALPINE_MIRROR})"
 
 [ -s "${ROOTFS}/tmp/chroot-kver" ] ||

@@ -3,11 +3,14 @@
 # network available. Everything that needs a package manager happens here so the
 # host script stays a plain orchestrator.
 #
-# Arguments: /tmp/chroot-setup.sh <kernel-package> <channel>
+# Arguments: /tmp/chroot-setup.sh <kernel-package> <channel> [firmware]
+#   firmware = minimal (default) keeps only what a wired rig needs;
+#              all keeps the package's whole /lib/firmware.
 set -eu
 
 KERNEL_PKG="${1:-linux-lts}"
 CHANNEL="${2:-stable}"
+FIRMWARE="${3:-minimal}"
 
 export PATH=/sbin:/bin:/usr/sbin:/usr/bin
 export HOME=/root
@@ -85,6 +88,48 @@ for tree in /lib/modules/*; do
         "$(basename "$tree")" "$((total - left))" "$total" \
         "$((before / 1024))" "$((after / 1024))"
 done
+
+# ---------------------------------------------------------------- firmware
+# Two things in the kernel package have no use on a rig and are most of the
+# image:
+#
+#   /boot/initramfs-*   the stock Alpine initramfs, ~170 MB. This image builds
+#                       its own (make-initramfs.sh) and never reads that one.
+#   /lib/firmware       GPU, Wi-Fi, InfiniBand and smart-NIC blobs. A rig has
+#                       wired ethernet and no display; the common drivers
+#                       (e1000e, igb, ixgbe, r8169 with its rtl_nic blobs) either
+#                       need no firmware or are in the keep list below.
+#
+# `--firmware all` turns the second one off for a board with an exotic NIC.
+say "removing the stock initramfs and unused firmware"
+
+rm -f /boot/initramfs-* /boot/System.map-* /boot/config-* /boot/initrd-* 2>/dev/null || true
+
+if [ "$FIRMWARE" = "all" ]; then
+    printf '    firmware: kept (%s)\n' "$(du -sh /lib/firmware 2>/dev/null | cut -f1)"
+elif [ -d /lib/firmware ]; then
+    FWKEEP=/tmp/fwkeep
+    rm -rf "$FWKEEP"
+    mkdir -p "$FWKEEP"
+    before=$(du -sk /lib/firmware | cut -f1)
+
+    # Wired NIC firmware that some server boards genuinely need, plus CPU
+    # microcode, which is stability rather than features.
+    for keep in rtl_nic bnx2 bnx2x tg3 intel/ice amd-ucode; do
+        [ -e "/lib/firmware/$keep" ] || continue
+        mkdir -p "$FWKEEP/$(dirname "$keep")"
+        cp -a "/lib/firmware/$keep" "$FWKEEP/$keep"
+    done
+
+    rm -rf /lib/firmware
+    mkdir -p /lib/firmware
+    cp -a "$FWKEEP/." /lib/firmware/
+    rm -rf "$FWKEEP"
+    printf '    firmware: %s MB -> %s MB\n' \
+        "$((before / 1024))" "$(( $(du -sk /lib/firmware | cut -f1) / 1024 ))"
+else
+    printf '    firmware: the package ships none\n'
+fi
 
 # A static busybox is what the initramfs runs on. It is a separate package on
 # some Alpine releases and a file inside the main package on others, so this is
