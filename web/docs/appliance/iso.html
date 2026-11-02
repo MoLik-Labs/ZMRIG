@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.e1cb14c0.css">
-<script src="/ZMRIG/assets/js/runtime~main.e62af355.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/runtime~main.1df4f7b9.js" defer="defer"></script>
 <script src="/ZMRIG/assets/js/main.854b3448.js" defer="defer"></script>
 </head>
 <body>
@@ -116,11 +116,14 @@ and reboot. <code>zmrig-os slot</code> shows both, <code>zmrig-os slot b</code> 
 all of it. On a general-purpose install every setting below is a fight against a
 package upgrade or a systemd unit. Here they are the defaults:</p>
 <ul>
-<li class=""><strong>The kernel carries only the drivers a rig uses.</strong> Sound, video capture, GPU,
-InfiniBand, ISDN, WAN, CAN, IIO, NFC, Bluetooth and staging modules are
-removed at build time and <code>depmod</code> is rebuilt; the build log prints how many
-were dropped and the size before and after. That is most of the image, and a
-rig has never needed any of it — the console is the kernel&#x27;s own framebuffer.</li>
+<li class=""><strong>It is 158 MB, and the number is a build output.</strong> The stock Alpine initramfs
+(171 MB, never read — the image builds its own), the GPU/Wi-Fi/switch firmware
+(660 MB → 16 MB) and the sound, video-capture, GPU, InfiniBand, ISDN, WAN, CAN,
+IIO, NFC, Bluetooth and staging drivers are not in it. Every build writes
+<code>dist/size-report.txt</code> with the biggest directories, the biggest files and the
+totals, so &quot;why is the image this big&quot; has an answer with numbers in it. Before
+this the same image was 1081 MB. <code>--firmware all</code> puts the firmware back for a
+board with a NIC outside the keep list.</li>
 <li class=""><strong>2 MiB pages are reserved by the initramfs</strong>, before any userspace program has
 fragmented memory. That is the +4–6 % on top of transparent huge pages, and it
 is the one tuning step that is nearly impossible to do later in the day.</li>

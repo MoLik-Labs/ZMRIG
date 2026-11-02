@@ -197,9 +197,10 @@ boot rolls back to the other slot on the third try instead of needing a visit.
 - **Updates are verified and automatic:** a daily job installs a sha256-checked
   static binary *next to* the running system, so it survives a reboot; on an
   installed disk the OS image can update too, into the spare slot.
-- **Light and quick to boot:** the kernel carries only the drivers a rig uses
-  (sound, video capture, GPU, InfiniBand and the rest are removed at build time),
-  and the miner no longer waits for DHCP before it starts.
+- **158 MB, and quick to boot:** the stock initramfs (171 MB, unused), the
+  GPU/Wi-Fi firmware (660 MB) and the sound/video/GPU drivers are not in it, and
+  the miner no longer waits for DHCP before it starts. Measured by the build's
+  own size report: the same image was 1081 MB before.
 - **Two builds** — `x86-64-v3` (AVX2) and `x86-64-v2` (everything since Nehalem) —
   rebuilt by CI whenever `os/`, `zmrig/` or the tuner changes, with every past
   version kept. The workflow is `.github/workflows/os.yml` and it also runs on a

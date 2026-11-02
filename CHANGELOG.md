@@ -47,11 +47,29 @@ an update that will not boot undoes itself.
   a rig behind a firewall keeps mining and the daily job exits 0.
 
 ### Lighter, and faster to boot
+The image was 1081 MB and nobody had asked why. The build now prints a size
+report (biggest directories, biggest files, rootfs/squashfs/ISO totals) and posts
+it on the pull request, and the answer was not the kernel modules:
+
+| | before | after |
+| --- | ---: | ---: |
+| `/boot/initramfs-lts` (stock Alpine's, never read) | 171 MB | — |
+| `/lib/firmware` (GPU GSP blobs, Wi-Fi, switch firmware) | 660 MB | 16 MB |
+| rootfs | 1122 MB | 180 MB |
+| squashfs | 1051 MB | 129 MB |
+| **ISO** | **1081 MB** | **158 MB** |
+
+Measured by the size report of the CI build on 2026-11-02 (x86-64-v3 and v2
+agree to within a megabyte). Both jobs still boot to userspace in QEMU.
+
+- **The stock initramfs is deleted**: this image builds its own and never read
+  that one.
+- **Firmware is trimmed to what a wired rig loads** (`rtl_nic`, `bnx2`, `bnx2x`,
+  `tg3`, `intel/ice`, plus CPU microcode). `--firmware all` keeps the package
+  intact for a board with an exotic NIC.
 - **The kernel module tree is pruned**: sound, media, GPU, InfiniBand, ISDN, WAN,
   CAN, IIO, staging, NFC, Bluetooth and Thunderbolt are removed and `depmod` is
-  rebuilt. They are the bulk of the image and none of them has ever hashed a
-  block. The build prints how many modules it dropped and how big the tree
-  became, so the number is in the log rather than in an estimate.
+  rebuilt, with the count and the size printed at build time.
 - `pciutils` is gone (nothing in the image called it); `dosfstools` is added for
   the EFI partition.
 - The miner service no longer *needs* networking, DNS or the clock: those are

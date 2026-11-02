@@ -53,11 +53,14 @@ job instead of the operator's:
   `ifupdown-ng`, `dhcpcd`. `zmrig` is a **static musl binary** built by
   `zmrig/build.sh --static`, so the miner cannot be broken by a libc update and
   the same file runs on any distribution.
-- **Kernel modules are pruned at build time**: `sound`, `media`, `gpu`,
-  `infiniband`, `isdn`, `wan`, `can`, `iio`, `staging`, `nfc`, `bluetooth` and
-  `thunderbolt` are deleted and `depmod` rebuilt. Those are the bulk of the image;
-  a rig drives the kernel's own framebuffer and no GPU, and `chroot-setup.sh`
-  prints how many modules went and the size before and after.
+- **Sized deliberately**: `/boot/initramfs-lts` (the package's 171 MB initramfs,
+  which this image never reads) is deleted, `/lib/firmware` keeps only what a
+  wired rig loads (`rtl_nic`, `bnx2`, `bnx2x`, `tg3`, `intel/ice`, microcode —
+  660 MB becomes 16 MB), and `sound`, `media`, `gpu`, `infiniband`, `isdn`, `wan`,
+  `can`, `iio`, `staging`, `nfc`, `bluetooth` and `thunderbolt` modules are
+  deleted with `depmod` rebuilt. Measured: rootfs 1122 → 180 MB, ISO 1081 →
+  158 MB. `--firmware all` keeps the whole set for an unusual NIC, and the build
+  prints a size report every run (`dist/size-report.txt`, posted on the PR).
 - **Services**: `zmrig` (the miner, via `zmrig-os run`), `zmrig-firstboot` (the
   wizard on the console when no wallet is configured), `crond` (the daily update
   job), `networking`, `chronyd`, `sshd`, `syslog`, `mdev`/`hwdrivers`. The miner

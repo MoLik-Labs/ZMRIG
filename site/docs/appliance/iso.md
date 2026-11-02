@@ -180,11 +180,14 @@ The harshest part of RandomX is memory, and the operating system decides almost
 all of it. On a general-purpose install every setting below is a fight against a
 package upgrade or a systemd unit. Here they are the defaults:
 
-- **The kernel carries only the drivers a rig uses.** Sound, video capture, GPU,
-  InfiniBand, ISDN, WAN, CAN, IIO, NFC, Bluetooth and staging modules are
-  removed at build time and `depmod` is rebuilt; the build log prints how many
-  were dropped and the size before and after. That is most of the image, and a
-  rig has never needed any of it — the console is the kernel's own framebuffer.
+- **It is 158 MB, and the number is a build output.** The stock Alpine initramfs
+  (171 MB, never read — the image builds its own), the GPU/Wi-Fi/switch firmware
+  (660 MB → 16 MB) and the sound, video-capture, GPU, InfiniBand, ISDN, WAN, CAN,
+  IIO, NFC, Bluetooth and staging drivers are not in it. Every build writes
+  `dist/size-report.txt` with the biggest directories, the biggest files and the
+  totals, so "why is the image this big" has an answer with numbers in it. Before
+  this the same image was 1081 MB. `--firmware all` puts the firmware back for a
+  board with a NIC outside the keep list.
 - **2 MiB pages are reserved by the initramfs**, before any userspace program has
   fragmented memory. That is the +4–6 % on top of transparent huge pages, and it
   is the one tuning step that is nearly impossible to do later in the day.
