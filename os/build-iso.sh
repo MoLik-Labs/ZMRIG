@@ -96,6 +96,44 @@ BTREE="${WORK}/bin"
 ISODIR="${WORK}/iso"
 CACHE="${WORK}/cache"
 
+# What is actually inside the image, in megabytes, biggest first. Printed to the
+# log and, in CI, as annotations, because the job log is not always readable from
+# where somebody is debugging.
+size_report() { # rootfs_dir squashfs
+    local rootfs="$1" squash="$2" total line out
+
+    [ -d "$rootfs" ] || return 0
+    total=$(du -sm "$rootfs" 2>/dev/null | cut -f1)
+
+    printf '\n    image contents (MB, biggest first)\n'
+    du -sm "$rootfs"/* 2>/dev/null | sort -rn | head -10 | while read -r mb path; do
+        printf '      %6s  %s\n' "$mb" "/${path#"$rootfs"/}"
+    done
+
+    # The largest single files matter as much as the largest directories: one
+    # 300 MB tarball looks like "an Alpine image" in a directory listing.
+    printf '\n    largest files\n'
+    find "$rootfs" -xdev -type f -size +10M -printf '%s %p\n' 2>/dev/null |
+        sort -rn | head -8 |
+        while read -r bytes path; do
+            printf '      %6s MB  %s\n' "$((bytes / 1048576))" "/${path#"$rootfs"/}"
+        done
+
+    out="rootfs ${total} MB, squashfs $(( $(stat -c %s "$squash" 2>/dev/null || echo 0) / 1048576 )) MB"
+    printf '\n    %s\n' "$out"
+    [ -n "${GITHUB_ACTIONS:-}" ] && printf '::notice title=Image size::%s\n' "$out" || true
+    [ -n "${GITHUB_ACTIONS:-}" ] && du -sm "$rootfs"/* 2>/dev/null | sort -rn | head -5 |
+        while read -r mb path; do
+            printf '::notice title=Image contents::%s MB /%s\n' "$mb" "${path#"$rootfs"/}"
+        done || true
+    [ -n "${GITHUB_ACTIONS:-}" ] && find "$rootfs" -xdev -type f -size +20M -printf '%s %p\n' 2>/dev/null |
+        sort -rn | head -5 |
+        while read -r bytes path; do
+            printf '::notice title=Largest file::%s MB /%s\n' "$((bytes / 1048576))" "${path#"$rootfs"/}"
+        done || true
+    return 0
+}
+
 plan() {
     cat <<EOF
 ZMRIG OS ${VERSION} (${ARCH_LEVEL}, channel ${CHANNEL}, kernel ${KERNEL_PKG})
@@ -406,6 +444,11 @@ else
 fi
 say "rootfs.squashfs: $(du -h "${ISODIR}/zmrig/rootfs.squashfs" | cut -f1)"
 
+# The image is the product, so its size is a build output, not a mystery. This
+# report exists because "the ISO is 1.1 GB" was once answered with "the kernel
+# modules", and that turned out to be 3 % of it.
+size_report "$ROOTFS" "${ISODIR}/zmrig/rootfs.squashfs"
+
 if [ "$KEEP_ROOTFS" = "0" ]; then
     rm -rf "$ROOTFS"
 else
@@ -640,6 +683,10 @@ cat > "${OUT}/${ISO_NAME}.iso.json" <<EOF
 EOF
 
 ELAPSED=$(( $(date +%s) - START ))
+ISO_MB=$(stat -c %s "$ISO_PATH" 2>/dev/null | awk '{ printf "%d", $1 / 1048576 }')
+[ -n "${GITHUB_ACTIONS:-}" ] &&
+    printf '::notice title=ISO::%s MB (%s)\n' "${ISO_MB:-?}" "$(basename "$ISO_PATH")" || true
+
 step "done in ${ELAPSED}s"
 say "image     ${ISO_PATH} ($(du -h "$ISO_PATH" | cut -f1))"
 say "sha256    ${ISO_SHA}"
