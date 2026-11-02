@@ -80,7 +80,7 @@ nothing had been published.
 
 | | |
 | --- | ---: |
-| `serve` `npm test` | 39 passed |
+| `serve` `npm test` | 40 passed |
 | `fleet` `npm test` | 58 passed |
 | `site` `npm test` | 67 passed |
 | `tests/docs/pages.sh` | 22 passed (26 sidebar pages, 2808 local links) |

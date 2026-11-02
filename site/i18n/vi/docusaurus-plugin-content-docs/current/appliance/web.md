@@ -83,7 +83,7 @@ vì bên thứ ba không sẵn sàng.
 ## Kiểm thử
 
 ```bash
-cd serve && npm test      # 39 kiểm tra
+cd serve && npm test      # 40 kiểm tra
 ```
 
 Bảng file, thương lượng nén, đường `304`, thử đi ngược thư mục, escape mọi thứ đến

@@ -18,7 +18,7 @@ always point at the newest image — in one Node process with no dependencies.
 ```bash
 cd ../site && npm install && npm run build && cd ../serve
 npm start                     # http://localhost:8080
-npm test                      # 39 checks, no network
+npm test                      # 40 checks, no network
 ```
 
 The site is built for GitHub Pages under `/ZMRIG/`. This host serves from the

@@ -6,7 +6,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
-const { Releases } = require('../../lib/releases');
+const { Releases, describe } = require('../../lib/releases');
 
 const ASSETS = [
   { name: 'zmrig-os-6.38.0-x86-64-v3.iso', size: 165_000_000, download_count: 9, browser_download_url: 'https://example.test/v3.iso' },
@@ -88,6 +88,33 @@ test('a dead API keeps the last good answer', async () => {
   const second = await releases.latest();
   assert.equal(second.stable.tag, 'v6.38.0', 'the last list survives');
   assert.match(second.error, /could not reach GitHub/);
+});
+
+test('a failure says what to fix, not just that something failed', async () => {
+  const dns = new Error('fetch failed');
+  dns.cause = { code: 'ENOTFOUND' };
+  assert.match(describe(dns), /name lookup failed/);
+
+  const cert = new Error('unable to verify the first certificate');
+  assert.match(describe(cert), /TLS certificate rejected/);
+
+  const timeout = new Error('fetch failed');
+  timeout.cause = { code: 'UND_ERR_CONNECT_TIMEOUT' };
+  assert.match(describe(timeout), /timed out/);
+
+  // Anything unrecognised is passed through rather than replaced by a guess.
+  assert.equal(describe(new Error('socket hang up')), 'socket hang up');
+
+  const releases = new Releases({
+    fetchImpl: async () => {
+      const error = new Error('fetch failed');
+      error.cause = { code: 'ENOTFOUND' };
+      throw error;
+    },
+  });
+  const data = await releases.latest();
+  assert.match(data.error, /name lookup failed/);
+  assert.equal(data.stable, null);
 });
 
 test('a non-200 is a failure, not a page full of undefined', async () => {

@@ -117,7 +117,7 @@ Nothing 500s because a third party is down.
 ## Tests
 
 ```bash
-cd serve && npm test        # 39 checks
+cd serve && npm test        # 40 checks
 ```
 
 The suite covers the file table, negotiation, the 304 path, traversal attempts,

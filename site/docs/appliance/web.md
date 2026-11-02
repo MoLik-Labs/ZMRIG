@@ -84,7 +84,7 @@ Nothing 500s because a third party is unavailable.
 ## Tests
 
 ```bash
-cd serve && npm test      # 39 checks
+cd serve && npm test      # 40 checks
 ```
 
 File table, negotiation, `304`, traversal attempts, escaping of everything that
