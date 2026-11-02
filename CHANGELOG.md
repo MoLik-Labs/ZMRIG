@@ -43,6 +43,17 @@ how fast can it go *for months*.
   plan output shows the policy before it is applied, and a value outside 45-95
   is refused rather than silently clamped.
 
+### The ISO that never finished
+- **The image build squashed a live `/proc`.** `cleanup_mounts` ran *after*
+  `mksquashfs`, so the build walked `${ROOTFS}/proc`, `${ROOTFS}/sys` and
+  `${ROOTFS}/dev` while they were still bind mounts into the host. That is what
+  the two cancelled ISO jobs were: ninety minutes inside "Build the image", then
+  the job timeout. Torn down first now, with a mountpoint check and a
+  `--self-check` assertion on the order.
+- Every step prints its elapsed time, and the three steps that can wait on
+  something outside the machine - `apk` in the chroot, `mksquashfs`,
+  `grub-mkrescue` - are bounded and say so when they time out.
+
 ### Also in this version
 - **The Zig engine has CI.** `cli.sh`, `unit.sh`, `net.sh`, `health.sh` and
   `thermal.sh` ran only on the machine that wrote them; they are a job in
