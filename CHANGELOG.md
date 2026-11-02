@@ -47,9 +47,31 @@ Measured here (2 vCPU, keep-alive, warm cache, 300 samples):
 Nothing has been measured on Render itself; a different CPU and a real network sit
 between these numbers and a user.
 
-When GitHub cannot be reached the page says so, keeps the last known links, and
-`/iso/*` answers `404` instead of redirecting into nothing. Nothing 500s because a
-third party is down.
+When GitHub cannot be reached the page says so — and says *what to fix*, walking
+the `cause` chain Node hides behind `fetch failed` to name a DNS failure, a
+refused connection, a timeout or an intercepted TLS certificate — keeps the last
+known links, and `/iso/*` answers `404` instead of redirecting into nothing.
+Nothing 500s because a third party is down.
+
+Four things that were wrong and are not any more:
+
+* a `.br`/`.gz` sidecar older than the file it belongs to is ignored rather than
+  served, so a stale deploy artefact cannot pin a page to last build's content
+  under this build's `ETag`;
+* `Accept-Encoding` is read as the weighted list it is: `br;q=0` is a refusal,
+  and `identity;q=0` gets a compressed body instead of an empty `406`;
+* `/download` and `/api/releases.json` carry `Content-Security-Policy:
+  default-src 'none'` — they are one HTML file and no script at all — while the
+  documentation is left alone;
+* `/docs` answers `301 /docs/intro` on the host. The build ships a `docs.html`
+  stub whose meta refresh points at `/ZMRIG/docs/intro`, which is correct on
+  GitHub Pages and a 404 on a service that serves from its own root.
+
+`scripts/latest-iso.sh --host https://your-host` asks the web host instead of
+`api.github.com`, for a network where GitHub is blocked and your own service is
+not; the hash arrives with the document, so no second download is needed to print
+it. `serve/.env.example` lists every setting, and the README carries a deploy
+button.
 
 ## Releases that are links
 
@@ -80,14 +102,15 @@ nothing had been published.
 
 | | |
 | --- | ---: |
-| `serve` `npm test` | 40 passed |
+| `serve` `npm test` | 45 passed |
 | `fleet` `npm test` | 58 passed |
 | `site` `npm test` | 67 passed |
 | `tests/docs/pages.sh` | 22 passed (26 sidebar pages, 2808 local links) |
-| `tests/docs/links.sh` | 97 passed |
+| `tests/docs/links.sh` | 99 passed |
 | `tests/docs/identity.sh` | 25 passed |
 | `os/tests/control.sh` | 141 passed |
 | `os/tests/fleet.sh` | 26 passed |
+| `tests/releases/latest-iso.test.sh` | 29 passed (was 17) |
 
 The CI site job now also builds the documentation for the web host's base URL and
 serves it, so a configuration that only works on GitHub Pages fails a pull request

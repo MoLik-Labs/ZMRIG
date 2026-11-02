@@ -29,6 +29,17 @@ RELEASES_TTL=600000       # ten minutes
 PUBLIC_URL=https://zmrig.example.com   # what /download prints as copyable links
 ```
 
+Every one of them has a default, so an empty environment is a working
+configuration; [`serve/.env.example`](../serve/.env.example) is the same list
+with the details, and
+
+```bash
+cd serve && cp .env.example .env
+set -a; . ./.env; set +a; npm start
+```
+
+is the whole local setup.
+
 ## Deploy on Render
 
 `render.yaml` in the repository root is a blueprint with two services: the pool
@@ -55,6 +66,7 @@ five minutes.
 | `/api/releases.json` | the same data for a script |
 | `/iso/v3` `.../v2` `.../beta` | 302 to the newest asset on that channel |
 | `/healthz` | file count, bytes, RSS, uptime — small and uncached |
+| `/docs` | `301` to `/docs/intro`, because that is what a hand-typed URL means |
 
 `/iso/*` reads the release feed, which is cached, so a redirect costs one Map
 lookup. Point a script at it and it never has to know a version:
@@ -62,6 +74,19 @@ lookup. Point a script at it and it never has to know a version:
 ```bash
 curl -L -O https://zmrig.example.com/iso/v3
 ```
+
+A rig or a script that cannot reach `api.github.com` can ask this service
+instead; the answer is the same one the page shows:
+
+```bash
+./scripts/latest-iso.sh --host https://zmrig.example.com          # newest stable
+./scripts/latest-iso.sh --host https://zmrig.example.com --beta   # the rolling beta
+./scripts/latest-iso.sh --host https://zmrig.example.com --json   # for a script
+```
+
+The hash comes with the document, so the helper prints it without downloading
+160 MB first. If the host itself has never reached GitHub, it says so and the
+helper repeats that reason instead of claiming nothing has been published.
 
 ## Why it is fast
 
@@ -81,6 +106,10 @@ keeps a pre-built header set for each. After that:
   next page load.
 * **Keep-alive is held for 65 seconds**, so a page and its twelve assets use one
   connection.
+* **A compressed copy older than its file is ignored**, not served: a sidecar
+  left behind by a previous build would otherwise pin a page to content that no
+  longer exists while the `ETag` matched the new file — the site would be one
+  release behind and nothing would say so.
 * **The release feed is fetched once per ten minutes**, not once per visit, and
   the rendered download page is cached against the feed's timestamp.
 
@@ -107,9 +136,19 @@ and nothing here has been measured there.
 The first three numbers are the table this process loaded; `rss_mb` is the whole
 Node process and depends on the instance.
 
+The two pages this process renders itself — `/download` and the release feed —
+carry `Content-Security-Policy: default-src 'none'` with only inline styles
+allowed, because they are one HTML file with no script at all. The documentation
+is left alone: it is a Docusaurus build with scripts of its own.
+
+`Accept-Encoding` is read as the weighted list it is. `br;q=0` is a refusal, not a
+preference, and `identity;q=0` gets a compressed body rather than an empty `406`.
+
 ## When GitHub is unreachable
 
-The feed keeps the last good answer and says so on the page. If GitHub has never
+The feed keeps the last good answer and says so on the page, with what to fix
+(`name lookup failed`, `timed out`, `TLS certificate rejected`) rather than
+Node's `fetch failed`. If GitHub has never
 been reachable since the process started, `/download` says that too and the links
 it has still work; `/iso/*` answers `404` rather than redirecting into nothing.
 Nothing 500s because a third party is down.
@@ -117,10 +156,11 @@ Nothing 500s because a third party is down.
 ## Tests
 
 ```bash
-cd serve && npm test        # 40 checks
+cd serve && npm test        # 45 checks
 ```
 
 The suite covers the file table, negotiation, the 304 path, traversal attempts,
 HTML escaping of anything that comes from GitHub, a `javascript:` URL in a
-release asset, the three redirects, a feed that fails, and the real process
-booting and shutting down on a socket.
+release asset, the three redirects, a feed that fails and explains why, a stale
+precompressed sidecar, `q=0` in `Accept-Encoding`, the policy on the pages this
+process renders, and the real process booting and shutting down on a socket.

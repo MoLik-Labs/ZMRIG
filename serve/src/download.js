@@ -133,7 +133,7 @@ function logo() {
   return `<svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true"><path d="M4 5h24v5l-13 12h13v5H4v-5l13-12H4z" fill="currentColor"/></svg>`;
 }
 
-function layout({ title, description, body, host }) {
+function layout({ title, description, body, host, version }) {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -157,14 +157,14 @@ function layout({ title, description, body, host }) {
 ${body}
 </main>
 <footer><div class="wrap">
-  ZMRIG OS — built by CI from every release, hosted on your own infrastructure.
+  ${version ? `ZMRIG ${escape(version)} — ` : ''}built by CI from every release, hosted on your own infrastructure.
   ${host ? `Links on this host: <code>${escape(host)}/iso/v3</code>, <code>/iso/v2</code>, <code>/iso/beta</code>.` : ''}
 </div></footer>
 </body>
 </html>`;
 }
 
-function page({ data, now = Date.now(), host = '' }) {
+function page({ data, now = Date.now(), host = '', version = '' }) {
   const stable = data.stable;
   const beta = data.beta;
   const trouble = data.error
@@ -217,6 +217,7 @@ curl -LO ${escape(host || 'https://your-host')}/iso/beta</code></pre>
     description: 'The current ZMRIG OS image, its checksum, and permanent links that always point at the newest release.',
     body,
     host,
+    version,
   });
 }
 

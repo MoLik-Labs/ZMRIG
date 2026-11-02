@@ -15,8 +15,12 @@ Một tiến trình Node, không phụ thuộc gì, không có bước build ri�
 
 ```bash
 cd site && npm install && npm run build && cd ..
-cd serve && npm start          # http://localhost:8080
+cd serve && cp .env.example .env && npm start   # http://localhost:8080
 ```
+
+Mọi thiết lập đều có mặc định, nên `.env.example` là để tra chứ không bắt buộc:
+nó liệt kê cổng, thư mục site, repository lấy release, thời gian cache của feed và
+URL công khai mà `/download` in ra.
 
 ## Nó trả lời những gì
 
@@ -33,14 +37,23 @@ cd serve && npm start          # http://localhost:8080
 curl -L -O https://your-host/iso/v3     # luôn là bản v3 mới nhất
 ```
 
+Và script tải về có thể hỏi chính service này thay vì GitHub — đó mới là điểm
+đáng giá trên mạng lưới chặn `api.github.com`:
+
+```bash
+./scripts/latest-iso.sh --host https://your-host          # bản stable mới nhất
+./scripts/latest-iso.sh --host https://your-host --beta   # bản beta cuốn chiếu
+```
+
 `/iso/*` đọc feed releases đã cache, nên một lần chuyển hướng chỉ là tra Map rồi
 trả `302`. Đó là toàn bộ ý tưởng: một script, một menu Ventoy hay một tờ giấy ghi
 chú có thể dùng đúng một URL suốt cả năm.
 
 ## Triển khai trên Render
 
-`render.yaml` là blueprint gồm hai service — pool và host này. *New → Blueprint*,
-chọn repository, Render sẽ:
+`render.yaml` là blueprint gồm hai service — pool và host này.
+[Nút deploy](https://render.com/deploy?repo=https://github.com/MoLik-Labs/ZMRIG)
+đọc đúng file đó; *New → Blueprint* rồi chọn repository là cùng một việc. Render sẽ:
 
 1. build tài liệu với `SITE_BASE_URL=/`, vì host này phục vụ từ gốc tên miền của
    nó chứ không phải từ `/ZMRIG/`;
@@ -66,7 +79,12 @@ Mọi thứ site phục vụ được đọc vào bộ nhớ một lần, lúc k
   vào body;
 - asset có hash trong tên thì `immutable` một năm, HTML thì xác thực lại;
 - một kết nối giữ mở 65 giây, nên một trang và các asset của nó dùng chung;
-- feed releases lấy mỗi mười phút một lần, không phải mỗi lượt truy cập.
+- feed releases lấy mỗi mười phút một lần, không phải mỗi lượt truy cập;
+- bản nén cũ hơn file gốc bị bỏ qua, nên một file nén sót lại từ lần build trước
+  không thể ghim site vào nội dung của tuần trước.
+
+Hai trang do tiến trình này tự dựng (`/download` và feed JSON) mang
+`Content-Security-Policy: default-src 'none'` — một file HTML, không có script.
 
 Đo tại đây (2 vCPU, keep-alive, cache ấm): `/` 0,25 ms p50 và 0,81 ms p95,
 `/docs/intro` 0,19 ms, một asset 0,35 ms, tám request đồng thời 0,89 ms p50.
@@ -75,7 +93,9 @@ mạng thật phía trước; chưa có số nào được đo trên đó.
 
 ## Khi GitHub sập
 
-Feed giữ câu trả lời tốt cuối cùng và trang nói rõ điều đó. Nếu từ lúc khởi động
+Feed giữ câu trả lời tốt cuối cùng và trang nói rõ điều đó — kèm việc cần sửa
+(`name lookup failed`, `timed out`, `TLS certificate rejected`) thay vì câu
+`fetch failed` của Node. Nếu từ lúc khởi động
 GitHub chưa từng trả lời, trang cũng nói vậy, các link đang có vẫn dùng được, và
 `/iso/*` trả `404` thay vì chuyển hướng vào hư không. Không có chỗ nào trả 500 chỉ
 vì bên thứ ba không sẵn sàng.
@@ -83,12 +103,14 @@ vì bên thứ ba không sẵn sàng.
 ## Kiểm thử
 
 ```bash
-cd serve && npm test      # 40 kiểm tra
+cd serve && npm test      # 45 kiểm tra
 ```
 
 Bảng file, thương lượng nén, đường `304`, thử đi ngược thư mục, escape mọi thứ đến
 từ GitHub — kể cả một URL `javascript:` trong asset của release — ba lần chuyển
-hướng, feed lỗi, và tiến trình thật khởi động rồi dừng trên socket.
+hướng, feed lỗi và tự giải thích lý do, một file nén cũ sót lại, `q=0` trong
+`Accept-Encoding`, policy trên các trang tự dựng, và tiến trình thật khởi động rồi
+dừng trên socket.
 
 Ghi chú vận hành đầy đủ — từng biến môi trường, thời gian cache và cách chỉnh —
 nằm trong

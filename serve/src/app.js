@@ -16,6 +16,13 @@ const assets = require('./assets');
 const download = require('./download');
 const { ARCHES } = require('./arches');
 
+// The only pages this process renders are its own HTML and JSON, so they can
+// carry a policy that forbids everything. The documentation is left out: it is
+// a Docusaurus build with scripts of its own, and a policy that fits it would
+// have to be permissive enough to be pointless.
+const PAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'";
+const JSON_CSP = "default-src 'none'; frame-ancestors 'self'";
+
 const BASE_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
@@ -27,11 +34,10 @@ const BASE_HEADERS = {
 function encode(body, acceptEncoding, cache) {
   if (body.length < 1024) return { body, encoding: null };
   if (cache && cache.body) return cache;
-  const value = String(acceptEncoding || '').toLowerCase();
   let result = { body, encoding: null };
-  if (/(^|,)\s*br\b/.test(value) || value.includes('*')) {
+  if (assets.accepts(acceptEncoding, 'br')) {
     result = { body: zlib.brotliCompressSync(body, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 9 } }), encoding: 'br' };
-  } else if (/(^|,)\s*gzip\b/.test(value)) {
+  } else if (assets.accepts(acceptEncoding, 'gzip')) {
     result = { body: zlib.gzipSync(body, { level: 9 }), encoding: 'gzip' };
   }
   return result;
@@ -114,18 +120,17 @@ function createApp({
     return rendered;
   }
 
-  function dynamic(req, res, body, { type, cache, etag }) {
+  function dynamic(req, res, body, { type, cache, etag, csp = PAGE_CSP }) {
     const accept = req.headers['accept-encoding'];
     let out = { body, encoding: null };
-    const value = String(accept || '').toLowerCase();
     if (body.length >= 1024) {
-      if (rendered.br && body === rendered.html && (/(^|,)\s*br\b/.test(value) || value.includes('*'))) {
+      if (rendered.br && body === rendered.html && assets.accepts(accept, 'br')) {
         out = { body: rendered.br, encoding: 'br' };
-      } else if (rendered.gz && body === rendered.html && /(^|,)\s*gzip\b/.test(value)) {
+      } else if (rendered.gz && body === rendered.html && assets.accepts(accept, 'gzip')) {
         out = { body: rendered.gz, encoding: 'gzip' };
       }
     }
-    send(req, res, { body: out.body, encoding: out.encoding, type, cache, etag });
+    send(req, res, { body: out.body, encoding: out.encoding, type, cache, etag, extra: { 'Content-Security-Policy': csp } });
   }
 
   async function handler(req, res) {
@@ -164,6 +169,7 @@ function createApp({
         type: 'application/json; charset=utf-8',
         cache: 'public, max-age=300',
         etag: state.etag,
+        csp: JSON_CSP,
       });
       return;
     }
@@ -200,6 +206,18 @@ function createApp({
     if (url === '/releases') {
       // The old name for the same page, and the one people type.
       res.writeHead(301, { ...BASE_HEADERS, Location: '/download', 'Cache-Control': 'public, max-age=86400', 'Content-Length': 0 });
+      res.end();
+      return;
+    }
+
+    // `/docs` is not a page in the build: Docusaurus writes `/docs/intro`, and
+    // the build ships a `docs.html` stub that meta-refreshes to
+    // `/ZMRIG/docs/intro` — correct on GitHub Pages, wrong on a host that
+    // serves from its own root. Answering with a real redirect here means the
+    // stub is never what a visitor on this host gets.
+    const moved = { '/docs': '/docs/intro', '/docs/': '/docs/intro', '/docs.html': '/docs/intro', '/vi/docs': '/vi/docs/intro', '/vi/docs/': '/vi/docs/intro', '/vi/docs.html': '/vi/docs/intro' }[url];
+    if (moved) {
+      res.writeHead(301, { ...BASE_HEADERS, Location: moved, 'Content-Length': 0, 'Cache-Control': 'public, max-age=86400' });
       res.end();
       return;
     }

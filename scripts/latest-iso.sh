@@ -5,6 +5,7 @@
 #   ./scripts/latest-iso.sh --arch v2       # one instruction level
 #   ./scripts/latest-iso.sh --beta          # the rolling pre-release
 #   ./scripts/latest-iso.sh --json          # for a script, or the dashboard
+#   ./scripts/latest-iso.sh --host URL      # ask your own serve/ instead of GitHub
 #
 # CI publishes a release on every push to master and BETA, replacing the assets
 # of that version in place, so this is always the image built from the current
@@ -19,8 +20,12 @@ REPO="${ZMRIG_REPO:-MoLik-Labs/ZMRIG}"
 ARCH=""
 CHANNEL="stable"
 AS_JSON=0
+# Empty means "ask GitHub directly". A host that runs `serve/` answers the same
+# question from its own cache, which is the only way to get an image on a
+# network where api.github.com is blocked but your host is not.
+HOST="${ZMRIG_HOST:-}"
 
-usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; }
 
 die() { printf '%s\n' "$*" >&2; exit 1; }
 
@@ -33,6 +38,8 @@ while [ $# -gt 0 ]; do
         --json)    AS_JSON=1 ;;
         --repo)    REPO="${2:?}"; shift ;;
         --repo=*)  REPO="${1#*=}" ;;
+        --host|--from)   HOST="${2:?}"; shift ;;
+        --host=*|--from=*) HOST="${1#*=}" ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option: $1 (try --help)" ;;
     esac
@@ -47,12 +54,21 @@ case "$ARCH" in
     *) die "unknown architecture: $ARCH (v3 or v2)" ;;
 esac
 [ -n "$ARCH" ] || ARCH="all"
+HOST="${HOST%/}"
 
 # A fixture in ZMRIG_RELEASES_JSON makes this testable without the network, and
 # lets a mirror answer the same question.
 json() {
     if [ -n "${ZMRIG_RELEASES_JSON:-}" ]; then
         cat "$ZMRIG_RELEASES_JSON"
+    elif [ -n "$HOST" ]; then
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL --max-time 20 -H 'accept: application/json' "$HOST/api/releases.json"
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q -T 20 -O - "$HOST/api/releases.json"
+        else
+            return 1
+        fi
     elif command -v curl >/dev/null 2>&1; then
         curl -fsSL --max-time 20 -H 'accept: application/vnd.github+json' \
             -H 'user-agent: ZMRIG-latest-iso' \
@@ -66,21 +82,55 @@ json() {
 }
 
 PAYLOAD=$(json) || {
-    printf 'cannot reach GitHub.\nDownload from https://github.com/%s/releases\n' "$REPO"
+    if [ -n "$HOST" ]; then
+        printf 'cannot reach %s.\nDownload from https://github.com/%s/releases\n' "$HOST" "$REPO"
+    else
+        printf 'cannot reach GitHub.\nDownload from https://github.com/%s/releases\n' "$REPO"
+    fi
     exit 1
 }
 
 # The filter is one expression away from being a jq call, and jq is not installed
 # on a rig. This is the whole of the JSON the script needs.
 FILTER='
+// `latest-iso.sh | head` closes the pipe on us; that is not an error worth a
+// stack trace.
+process.stdout.on("error", (error) => { if (error.code === "EPIPE") process.exit(0); });
 let data;
 try { data = JSON.parse(require("node:fs").readFileSync(0, "utf8")); }
 catch (error) { process.stderr.write("unreadable release list\n"); process.exit(2); }
 const channel = process.argv[1];
 const arch = process.argv[2];
 const wantJson = process.argv[3] === "json";
+const host = process.argv[4] || "";
 
-const releases = (Array.isArray(data) ? data : []).filter((release) => !release.draft);
+// Two shapes arrive here: the GitHub API list, and the smaller document
+// `serve/api/releases.json` publishes. The second one already carries the
+// sha256 next to each image, so it needs no separate download to check a hash.
+const normalize = (input) => {
+  if (Array.isArray(input)) return input;
+  // A serve/ feed that is up but has never reached GitHub answers with both
+  // channels empty and `error` set: say so rather than "nothing published".
+  if (input && input.error && !input.stable && !input.beta) {
+    process.stderr.write(String(input.error) + "\n");
+    process.exit(5);
+  }
+  return [input && input.stable, input && input.beta].filter(Boolean).map((release) => ({
+    tag_name: release.tag,
+    name: release.name,
+    prerelease: Boolean(release.prerelease),
+    published_at: release.published_at,
+    html_url: (host || "") + "/download",
+    assets: (release.assets || []).map((asset) => ({
+      name: asset.name,
+      size: asset.size,
+      browser_download_url: asset.url,
+      known_sha: asset.sha256 || null,
+    })),
+  }));
+};
+
+const releases = normalize(data).filter((release) => !release.draft);
 const pick = releases.find((release) => (channel === "beta" ? release.prerelease : !release.prerelease));
 if (!pick) { process.stderr.write("no " + channel + " release published yet\n"); process.exit(3); }
 
@@ -92,6 +142,7 @@ const assets = (pick.assets || [])
     size: asset.size,
     url: asset.browser_download_url,
     sha: (pick.assets || []).find((other) => other.name === asset.name + ".sha256"),
+    sha256: asset.known_sha || undefined,
   }));
 
 if (assets.length === 0) { process.stderr.write("no image for that architecture in " + pick.tag_name + "\n"); process.exit(4); }
@@ -100,7 +151,8 @@ const mb = (bytes) => (bytes / 1048576).toFixed(1) + " MB";
 
 (async () => {
   for (const asset of assets) {
-    if (!asset.sha) continue;
+    // Already hashed by the host that answered: nothing to fetch.
+    if (asset.sha256 || !asset.sha) continue;
     try {
       const response = await fetch(asset.sha.browser_download_url, { signal: AbortSignal.timeout(5000) });
       if (!response.ok) continue;
@@ -136,7 +188,7 @@ const mb = (bytes) => (bytes / 1048576).toFixed(1) + " MB";
 '
 
 if command -v node >/dev/null 2>&1; then
-    printf '%s' "$PAYLOAD" | node -e "$FILTER" "$CHANNEL" "$ARCH" "$([ "$AS_JSON" = 1 ] && printf json || printf text)"
+    printf '%s' "$PAYLOAD" | node -e "$FILTER" "$CHANNEL" "$ARCH" "$([ "$AS_JSON" = 1 ] && printf json || printf text)" "$HOST"
 else
     # No node: the honest answer is the release page, not a hand-rolled parser
     # that works on today's JSON and not on tomorrow's.

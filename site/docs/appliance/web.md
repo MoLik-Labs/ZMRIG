@@ -16,8 +16,12 @@ One Node process, no dependencies, no build step of its own.
 
 ```bash
 cd site && npm install && npm run build && cd ..
-cd serve && npm start          # http://localhost:8080
+cd serve && cp .env.example .env && npm start   # http://localhost:8080
 ```
+
+Every setting has a default, so `.env.example` is a reference rather than a
+requirement; it lists the port, the site root, the repository the releases come
+from, how long the feed is cached, and the public URL that `/download` prints.
 
 ## What it answers
 
@@ -34,14 +38,24 @@ cd serve && npm start          # http://localhost:8080
 curl -L -O https://your-host/iso/v3     # always the newest v3 image
 ```
 
+And the helper can ask this service instead of GitHub, which is the point on a
+network where `api.github.com` is blocked:
+
+```bash
+./scripts/latest-iso.sh --host https://your-host          # newest stable
+./scripts/latest-iso.sh --host https://your-host --beta   # the rolling beta
+```
+
 `/iso/*` resolves through the release feed, which is cached, so a redirect is a
 Map lookup and a `302`. That is the whole point: a script, a Ventoy menu or a
 sticky note can name the same URL for a year.
 
 ## Deploy on Render
 
-`render.yaml` is a blueprint with two services — the pool and this host. *New →
-Blueprint*, pick the repository, and Render:
+`render.yaml` is a blueprint with two services — the pool and this host. The
+[deploy button](https://render.com/deploy?repo=https://github.com/MoLik-Labs/ZMRIG)
+reads the same file; *New → Blueprint* and picking the repository does the same
+thing. Render:
 
 1. builds the documentation with `SITE_BASE_URL=/`, because this host serves from
    the root of its own domain rather than from `/ZMRIG/`;
@@ -66,7 +80,12 @@ raw, 1.63 MB compressed. After that a request is a Map lookup and one `end()`.
   before the body is touched;
 - fingerprinted assets are `immutable` for a year, HTML revalidates;
 - one connection stays open for 65 seconds, so a page and its assets share it;
-- the release feed is fetched once per ten minutes, not once per visit.
+- the release feed is fetched once per ten minutes, not once per visit;
+- a compressed copy older than the page it belongs to is ignored, so a stale
+  sidecar from an earlier build cannot pin the site to last week's content.
+
+The two pages this process renders itself (`/download` and the JSON feed) carry
+`Content-Security-Policy: default-src 'none'` — one HTML file, no script at all.
 
 Measured here (2 vCPU, keep-alive, warm): `/` at 0.25 ms p50 and 0.81 ms p95,
 `/docs/intro` at 0.19 ms, an asset at 0.35 ms, eight concurrent requests at
@@ -76,7 +95,9 @@ measured there.
 
 ## When GitHub is down
 
-The feed keeps the last good answer and the page says so. If GitHub has never
+The feed keeps the last good answer and the page says so — and says what to fix
+(`name lookup failed`, `timed out`, `TLS certificate rejected`) rather than
+Node's `fetch failed`. If GitHub has never
 answered since the process started, the page says that too and the links it has
 still work, and `/iso/*` answers `404` instead of redirecting into nothing.
 Nothing 500s because a third party is unavailable.
@@ -84,12 +105,14 @@ Nothing 500s because a third party is unavailable.
 ## Tests
 
 ```bash
-cd serve && npm test      # 40 checks
+cd serve && npm test      # 45 checks
 ```
 
 File table, negotiation, `304`, traversal attempts, escaping of everything that
 comes from GitHub — including a `javascript:` URL in a release asset — the three
-redirects, a failing feed, and the real process booting and stopping on a socket.
+redirects, a failing feed that explains itself, a stale precompressed sidecar,
+`q=0` in `Accept-Encoding`, the policy on the pages this process renders, and the
+real process booting and stopping on a socket.
 
 The full operator notes — every environment variable, the cache lifetimes and how
 to tune them — are in

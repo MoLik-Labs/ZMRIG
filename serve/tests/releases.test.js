@@ -95,12 +95,26 @@ test('a failure says what to fix, not just that something failed', async () => {
   dns.cause = { code: 'ENOTFOUND' };
   assert.match(describe(dns), /name lookup failed/);
 
-  const cert = new Error('unable to verify the first certificate');
+  // The shape Node actually produces here: `fetch failed` on top, the code one
+  // level down, and nothing in the top-level message.
+  const cert = new Error('fetch failed');
+  cert.cause = Object.assign(new Error('unable to verify the first certificate'), { code: 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' });
   assert.match(describe(cert), /TLS certificate rejected/);
 
   const timeout = new Error('fetch failed');
   timeout.cause = { code: 'UND_ERR_CONNECT_TIMEOUT' };
-  assert.match(describe(timeout), /timed out/);
+  assert.match(describe(timeout), /did not answer in time/);
+
+  const reset = new Error('fetch failed');
+  reset.cause = { code: 'ECONNRESET' };
+  assert.match(describe(reset), /reset before a reply/);
+
+  // Every address of a name failed: Node aggregates them under `errors`.
+  const aggregate = new Error('fetch failed');
+  aggregate.cause = Object.assign(new Error('connect ECONNREFUSED 140.82.121.6:443'), {
+    errors: [Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' })],
+  });
+  assert.match(describe(aggregate), /connection refused/);
 
   // Anything unrecognised is passed through rather than replaced by a guess.
   assert.equal(describe(new Error('socket hang up')), 'socket hang up');

@@ -386,7 +386,13 @@ short version.
 
 The image is published by CI: every push that touches `os/` builds it, and a push
 to `master` or a tag publishes it with its checksum and the manifest
-`zmrig-os update` reads. The release job then asks GitHub for every asset it just
+`zmrig-os update` reads.
+
+[![Deploy the documentation and the download page](https://img.shields.io/badge/Render-deploy%20the%20web%20host-46E3B7?logo=render&logoColor=white)](https://render.com/deploy?repo=https://github.com/MoLik-Labs/ZMRIG)
+
+That button reads `render.yaml` and starts the host on a free instance: the
+documentation, `/download`, and the `/iso/*` links, with no account on this
+project and nothing to configure. The release job then asks GitHub for every asset it just
 uploaded and fails if one does not answer, so a broken link is a red build, not a
 support question.
 
@@ -407,7 +413,11 @@ and the permanent links:
 
 ```bash
 cd serve && npm start          # reads site/build, port 8080
+./scripts/latest-iso.sh --host https://your-host   # same answer, no GitHub
 ```
+
+`--host` asks your own service instead of `api.github.com`, which is what makes
+the whole thing usable on a network where GitHub is blocked but your host is not.
 
 It holds every file in memory at boot — 238 routes, 6.3 MB, 1.6 MB compressed — so
 a page is a Map lookup and one `write`, with Brotli, `ETag` and `304`. Measured on
@@ -526,10 +536,10 @@ checks while two of the rows are wrong.
 | `zmrig/tests/health.sh` | 7 | the watchdog, both directions: an honest pool is not a fault, an all-reject pool is |
 | `tests/oneclick/*.sh` | 70 | plan, config, governor, purge (removes only its own paths), branch switching, `--coin` mapping and the algorithm-name guard |
 | `fleet` `npm test` | 58 | the control plane without a token: Device ID derivation, the store's atomic writes and corrupt-file rescue, enrolment rules, every command's validation and refusals, the HTTP protocol end to end, the Telegram and Discord renderers, configuration that refuses to start half-done, and the dashboard — login and throttling, CSRF refusal, queued actions, escaping, Brotli/`ETag`/`304`, and a GitHub releases call that fails without taking the page down |
-| `tests/releases/latest-iso.test.sh` | 17 | the download helper against a recorded GitHub reply: asset selection by CPU variant, `--beta`, `--json`, a checksum that travels with the image, and an API that is down |
-| `serve` `npm test` | 40 | the web host over a real socket: the file table, byte-for-byte negotiation, the 304 path, traversal attempts, HTML escaping of everything GitHub returns (including a `javascript:` asset URL), the three permanent redirects, a release feed that fails, and the process booting and stopping on SIGTERM |
+| `tests/releases/latest-iso.test.sh` | 29 | the download helper against a recorded reply — the GitHub list and the smaller document `serve/` publishes: asset selection by CPU variant, `--beta`, `--json`, `--host`, a checksum that travels with the image, and an API that is down |
+| `serve` `npm test` | 45 | the web host over a real socket: the file table, byte-for-byte negotiation, the 304 path, traversal attempts, HTML escaping of everything GitHub returns (including a `javascript:` asset URL), the three permanent redirects, a release feed that fails, a stale precompressed copy, `q=0` in `Accept-Encoding`, the policy on the only page this process renders, and the process booting and stopping on SIGTERM |
 | `os/tests/fleet.sh` | 26 | the shell agent against that real server: key generation and stability, a wallet applied to `os.conf` and acknowledged, a bad wallet refused with nothing written, stop on a real process, a log request round trip, pacing, and an unreachable server that is not an error |
-| `tests/docs/links.sh` | 97 | every relative link and every `#anchor` in the documentation resolves, including `/docs/…` site routes |
+| `tests/docs/links.sh` | 99 | every relative link and every `#anchor` in the documentation resolves, including `/docs/…` site routes |
 | `site` `npm test` | 67 | command builder and its blocked states, calculator arithmetic against hand-computed numbers including break-even, pool table vs `oneclick.sh` and `doc/POOLS.md`, coin matrix and ranking (a missing number is never a zero, no invented pool or price), en/vi key parity and no dead or duplicated message |
 | `tests/docs/pages.sh` | 22 | the published site as Pages serves it: Docusaurus entry point, 26 sidebar pages in both locales, all 2808 local `href`/`src`, both sitemaps, language and theme controls, one localised social card per page, a title/description/lang on every page with no leaked placeholder, old-URL redirects, committed build not stale |
 | `zmrig/tests/thermal.sh` | 10 | the safe mode against a real process and a real pool: cool is not throttled, heat sheds threads, one thread and hot stops hashing, cooling resumes, no sensor changes nothing |

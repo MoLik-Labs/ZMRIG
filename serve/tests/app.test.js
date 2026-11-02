@@ -12,10 +12,10 @@ const http = require('node:http');
 const { createApp } = require('../src/app');
 const { makeSite, removeSite, fakeReleases, data, STABLE, EMPTY } = require('./fixture');
 
-function start(releaseData = data(), root = null) {
+function start(releaseData = data(), root = null, version = '') {
   const siteRoot = root || makeSite();
   const releases = fakeReleases(releaseData);
-  const app = createApp({ root: siteRoot, releases, host: 'https://zmrig.example.com', now: () => Date.parse('2026-11-02T00:00:00Z') });
+  const app = createApp({ root: siteRoot, releases, host: 'https://zmrig.example.com', now: () => Date.parse('2026-11-02T00:00:00Z'), version });
   const server = http.createServer(app.handler);
   return new Promise((resolve) => {
     server.listen(0, '127.0.0.1', () => {
@@ -66,12 +66,12 @@ test('a page, its extensionless twin and its assets', async () => {
 test('a directory without a trailing slash is redirected once', async () => {
   const site = await start();
   try {
-    // `docs/index.html` answers at both spellings, so neither a hand-typed
+    // `guide/index.html` answers at both spellings, so neither a hand-typed
     // URL nor a link from the sidebar can 404 on a directory.
-    for (const path of ['/docs', '/docs/']) {
+    for (const path of ['/guide', '/guide/']) {
       const page = await get(site, path);
       assert.equal(page.status, 200, path);
-      assert.match(page.text, /Documentation/);
+      assert.match(page.text, /The guide/);
     }
   } finally {
     await site.close();
@@ -310,6 +310,65 @@ test('an empty table still answers instead of crashing', async () => {
     const page = await get(site, '/download');
     assert.equal(page.status, 200);
     assert.match(page.text, /releases/);
+  } finally {
+    await site.close();
+  }
+});
+
+test('the page this process renders carries a policy that forbids everything', async () => {
+  const site = await start();
+  try {
+    const page = await get(site, '/download');
+    assert.equal(page.status, 200);
+    const csp = page.headers.get('content-security-policy');
+    assert.match(csp, /default-src 'none'/);
+    assert.match(csp, /style-src 'unsafe-inline'/, 'the stylesheet is inline and there is nothing else');
+    assert.match(csp, /form-action 'none'/);
+    assert.doesNotMatch(csp, /unsafe-eval|script-src/, 'the page runs no script at all');
+    assert.equal(page.headers.get('x-content-type-options'), 'nosniff');
+
+    const feed = await get(site, '/api/releases.json');
+    assert.match(feed.headers.get('content-security-policy'), /default-src 'none'/);
+    assert.doesNotMatch(feed.headers.get('content-security-policy'), /unsafe-inline/);
+  } finally {
+    await site.close();
+  }
+});
+
+test('/docs lands on the introduction instead of the GitHub Pages stub', async () => {
+  // The build ships docs.html, whose meta refresh is hard-coded to
+  // /ZMRIG/docs/intro. On a host serving from its own root that is a 404, so
+  // the host answers with a redirect and never serves the stub.
+  const root = makeSite({
+    'docs.html': '<meta http-equiv="refresh" content="2; url=/ZMRIG/docs/intro">',
+    'vi/docs.html': '<meta http-equiv="refresh" content="2; url=/ZMRIG/vi/docs/intro">',
+  });
+  const site = await start(data(), root);
+  try {
+    for (const [from, to] of [
+      ['/docs', '/docs/intro'],
+      ['/docs/', '/docs/intro'],
+      ['/docs.html', '/docs/intro'],
+      ['/vi/docs', '/vi/docs/intro'],
+      ['/vi/docs.html', '/vi/docs/intro'],
+    ]) {
+      const response = await get(site, from);
+      assert.equal(response.status, 301, from);
+      assert.equal(response.headers.get('location'), to, from);
+    }
+    const stub = await get(site, '/docs');
+    assert.doesNotMatch(stub.text, /ZMRIG\/docs/, 'the stub is never the answer');
+    assert.equal((await get(site, '/docs/intro')).status, 200);
+  } finally {
+    await site.close();
+  }
+});
+
+test('the footer says which build this is', async () => {
+  const site = await start(data(), null, '6.38.0');
+  try {
+    const page = await get(site, '/download');
+    assert.match(page.text, /ZMRIG 6\.38\.0/);
   } finally {
     await site.close();
   }

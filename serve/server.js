@@ -39,7 +39,16 @@ function main() {
   const ttl = Number(process.env.RELEASES_TTL || 600000);
   const api = process.env.GITHUB_API || undefined;
   const host = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, '');
-  const version = process.env.ZMRIG_VERSION || '';
+  // The footer's version: the environment if it is set, otherwise the version
+  // this checkout is, so `npm start` on a fresh clone does not print nothing.
+  let version = process.env.ZMRIG_VERSION || '';
+  if (!version) {
+    try {
+      version = require(path.join(__dirname, '..', 'package.json')).version || '';
+    } catch {
+      version = '';
+    }
+  }
 
   if (!fs.existsSync(path.join(root, 'index.html'))) {
     log(`no site at ${root}: run "npm run build" in site/ first (SITE_ROOT overrides)`);

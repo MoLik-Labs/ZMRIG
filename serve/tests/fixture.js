@@ -11,6 +11,7 @@ const FILES = {
   'index.html': '<!doctype html><html lang="en"><head><title>ZMRIG</title><link rel="stylesheet" href="/assets/css/main.abc123.css"></head><body><h1>ZMRIG</h1></body></html>',
   '404.html': '<!doctype html><html lang="en"><body><h1>Page not found</h1></body></html>',
   'docs/index.html': '<!doctype html><html lang="en"><body><h1>Documentation</h1></body></html>',
+  'guide/index.html': '<!doctype html><html lang="en"><body><h1>The guide</h1></body></html>',
   'docs/intro.html': '<!doctype html><html lang="en"><body><h1>Introduction</h1></body></html>',
   'docs/fleet/dashboard.html': '<!doctype html><html lang="en"><body><h1>The browser dashboard</h1></body></html>',
   'vi/docs/intro.html': '<!doctype html><html lang="vi"><body><h1>Giới thiệu</h1></body></html>',
@@ -27,6 +28,9 @@ function makeSite(overrides = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'zmrig-site-'));
   const files = { ...FILES, ...overrides };
   for (const [name, body] of Object.entries(files)) {
+    // `undefined` deletes a fixture file: a build without docs/index.html is a
+    // shape the server has to handle, and the only way to produce one.
+    if (body === undefined) continue;
     const full = path.join(root, name);
     fs.mkdirSync(path.dirname(full), { recursive: true });
     fs.writeFileSync(full, body);

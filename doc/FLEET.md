@@ -195,10 +195,14 @@ the size and leaves the comparison to `sha256sum -c`:
 ./scripts/latest-iso.sh --beta          # newest beta
 ./scripts/latest-iso.sh --arch v3       # force x86-64-v3
 ./scripts/latest-iso.sh --json          # just the facts, for a script
+./scripts/latest-iso.sh --host https://your-fleet   # ask your own host, not GitHub
 ```
 
 It needs `node` (which the rig already has) and falls back to printing the
-releases page when it is missing. The same table is at `/downloads` in the
+releases page when it is missing. `--host` is for a network where GitHub is
+blocked: the same service that runs the bot can run the web host
+([`doc/WEB.md`](WEB.md)), and its `/api/releases.json` answers the same question
+from its own cache. The same table is at `/downloads` in the
 dashboard.
 
 ## 4. Point a rig at it

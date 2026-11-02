@@ -10,6 +10,7 @@ always point at the newest image — in one Node process with no dependencies.
 /api/releases.json     the same data for a script
 /iso/v3 /iso/v2        -> 302 to the newest asset on that channel
 /iso/beta
+/docs                  -> 301 to /docs/intro (what people type)
 /healthz               file count, bytes, RSS, uptime
 ```
 
@@ -17,9 +18,15 @@ always point at the newest image — in one Node process with no dependencies.
 
 ```bash
 cd ../site && npm install && npm run build && cd ../serve
+cp .env.example .env          # every value in it is already the default
 npm start                     # http://localhost:8080
-npm test                      # 40 checks, no network
+npm test                      # 45 checks, no network
 ```
+
+`npm run build` writes the `.br`/`.gz` copies at deploy time so the first request
+after a restart does not pay for compression; without it they are made at boot,
+once, in memory. A sidecar older than its file is ignored either way, so a stale
+one cannot serve last build's HTML under this build's `ETag`.
 
 The site is built for GitHub Pages under `/ZMRIG/`. This host serves from the
 root of its own domain, so build it with the base URL overridden:
@@ -40,9 +47,17 @@ cd ../site && SITE_BASE_URL=/ SITE_URL=https://zmrig.example.com \
 | `GITHUB_API` | `https://api.github.com` | for tests and GitHub Enterprise |
 | `RELEASES_TTL` | `600000` | ten minutes, well inside the anonymous rate limit |
 | `PUBLIC_URL` | `RENDER_EXTERNAL_URL` | what `/download` prints as copyable links |
-| `ZMRIG_VERSION` | | shown in the page footer |
+| `ZMRIG_VERSION` | `package.json` | shown in the page footer |
 
-No secrets: the release feed is read anonymously.
+No secrets: the release feed is read anonymously. `.env.example` is the same
+table with the details; copy it and nothing else is needed.
+
+A rig or a script on a network where `api.github.com` is blocked can ask this
+service instead:
+
+```bash
+./scripts/latest-iso.sh --host https://your-host
+```
 
 ## Why it is fast
 

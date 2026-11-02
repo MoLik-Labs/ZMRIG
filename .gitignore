@@ -38,3 +38,6 @@ __pycache__/
 /fleet/data
 /fleet/.env
 /fleet/node_modules
+
+# the site built for the web host (site/ root base URL), not published
+/site/build-root

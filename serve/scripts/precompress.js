@@ -38,13 +38,27 @@ function main() {
   let br = 0;
   let gz = 0;
 
+  let pruned = 0;
+  const drop = (file) => {
+    try {
+      fs.unlinkSync(file);
+      pruned += 1;
+    } catch {}
+  };
+
   for (const file of walk(root, [])) {
+    const brotli = `${file}.br`;
+    const gzip = `${file}.gz`;
     if (!COMPRESSIBLE.has(path.extname(file).toLowerCase())) continue;
     const body = fs.readFileSync(file);
-    if (body.length < MIN) continue;
-
-    const brotli = path.join(path.dirname(file), `${path.basename(file)}.br`);
-    const gzip = path.join(path.dirname(file), `${path.basename(file)}.gz`);
+    if (body.length < MIN) {
+      // A page that shrank below the threshold, or stopped being text: the
+      // copy from the previous build would otherwise travel to the next deploy
+      // and be dead weight on the disk.
+      drop(brotli);
+      drop(gzip);
+      continue;
+    }
 
     const brotliBody = zlib.brotliCompressSync(body, {
       params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 11, [zlib.constants.BROTLI_PARAM_SIZE_HINT]: body.length },
@@ -53,7 +67,9 @@ function main() {
 
     // Never write a copy that is bigger than the original.
     if (brotliBody.length < body.length) fs.writeFileSync(brotli, brotliBody);
+    else drop(brotli);
     if (gzipBody.length < body.length) fs.writeFileSync(gzip, gzipBody);
+    else drop(gzip);
 
     files += 1;
     raw += body.length;
@@ -62,7 +78,7 @@ function main() {
   }
 
   const mb = (n) => (n / 1048576).toFixed(1);
-  console.log(`precompressed ${files} files: ${mb(raw)} MB -> ${mb(br)} MB brotli / ${mb(gz)} MB gzip`);
+  console.log(`precompressed ${files} files: ${mb(raw)} MB -> ${mb(br)} MB brotli / ${mb(gz)} MB gzip${pruned ? ` (${pruned} stale copies removed)` : ''}`);
 }
 
 main();

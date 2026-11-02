@@ -87,8 +87,14 @@ function walk(dir, out, root) {
   return out;
 }
 
-function readSidecar(file, suffix) {
+function readSidecar(file, suffix, source) {
   try {
+    const stat = fs.statSync(`${file}${suffix}`);
+    // A sidecar older than the file it belongs to came from a previous build.
+    // Serving it would pin a page to content that no longer exists, with an
+    // ETag that matches the new file - the worst of both, and invisible until
+    // somebody notices the site is a version behind.
+    if (source && stat.mtimeMs < source.mtimeMs) return null;
     return fs.readFileSync(`${file}${suffix}`);
   } catch {
     return null;
@@ -122,13 +128,13 @@ function load(root, { log = () => {}, compress = true } = {}) {
 
     if (compress && COMPRESSIBLE.has(kind) && body.length >= MIN_COMPRESS) {
       try {
-        entry.br = readSidecar(file, '.br') || zlib.brotliCompressSync(body, {
+        entry.br = readSidecar(file, '.br', stat) || zlib.brotliCompressSync(body, {
           params: {
             [zlib.constants.BROTLI_PARAM_QUALITY]: 11,
             [zlib.constants.BROTLI_PARAM_SIZE_HINT]: body.length,
           },
         });
-        entry.gz = readSidecar(file, '.gz') || zlib.gzipSync(body, { level: 9 });
+        entry.gz = readSidecar(file, '.gz', stat) || zlib.gzipSync(body, { level: 9 });
         // A compressed copy that is not smaller is a copy that makes the
         // response slower; drop it.
         if (entry.br.length >= body.length) entry.br = null;
@@ -161,18 +167,58 @@ function load(root, { log = () => {}, compress = true } = {}) {
   return { files, notFound, raw, packed, count: files.size };
 }
 
+// `Accept-Encoding` is a weighted list: `br;q=0` means "anything but brotli",
+// and `*` is the fallback for encodings that are not named. Matching on the
+// bare word is easy and wrong - a client that says `gzip;q=0, identity` must
+// get the uncompressed body, and a proxy that says `gzip;q=0.1, identity;q=0`
+// has to get gzip even though it asked for it last.
+function weights(header) {
+  const out = new Map();
+  if (!header) return out;
+  for (const part of String(header).toLowerCase().split(',')) {
+    const [rawName, ...params] = part.split(';');
+    const name = rawName.trim();
+    if (!name) continue;
+    let q = 1;
+    for (const param of params) {
+      const [key, value] = param.split('=');
+      if (String(key).trim() !== 'q') continue;
+      const parsed = Number.parseFloat(value);
+      q = Number.isFinite(parsed) ? Math.min(Math.max(parsed, 0), 1) : 0;
+    }
+    out.set(name, q);
+  }
+  return out;
+}
+
 function accepts(header, encoding) {
-  if (!header) return false;
-  const value = String(header).toLowerCase();
-  if (encoding === 'br') return /(^|,)\s*br\b/.test(value) || value.includes('*');
-  return /(^|,)\s*gzip\b/.test(value) || value.includes('*');
+  const map = weights(header);
+  const direct = map.get(encoding);
+  if (direct !== undefined) return direct > 0;
+  const star = map.get('*');
+  return star !== undefined && star > 0;
+}
+
+/** RFC 9110 12.5.3: identity is acceptable unless it is refused by name or by `*`. */
+function identityAllowed(header) {
+  const map = weights(header);
+  const direct = map.get('identity');
+  if (direct !== undefined) return direct > 0;
+  if (map.has('*')) return map.get('*') > 0;
+  return true;
 }
 
 /** Pick the smallest representation the client can take. */
 function pick(entry, acceptEncoding) {
   if (entry.br && accepts(acceptEncoding, 'br')) return { body: entry.br, encoding: 'br' };
   if (entry.gz && accepts(acceptEncoding, 'gzip')) return { body: entry.gz, encoding: 'gzip' };
+  // `identity;q=0` with nothing else acceptable: a compressed body the client
+  // very likely still decodes beats a 406 with nothing in it.
+  if (!identityAllowed(acceptEncoding)) {
+    if (entry.br) return { body: entry.br, encoding: 'br' };
+    if (entry.gz) return { body: entry.gz, encoding: 'gzip' };
+  }
   return { body: entry.body, encoding: null };
 }
 
-module.exports = { load, pick, accepts, cacheControl, contentType, etagOf, IMMUTABLE, HTML, MEDIA, DATA };
+module.exports = { load, pick, accepts, identityAllowed, weights, cacheControl, contentType, etagOf, IMMUTABLE, HTML, MEDIA, DATA };

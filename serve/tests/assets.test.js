@@ -120,3 +120,56 @@ test('the table refuses to walk out of its root', () => {
     removeSite(root);
   }
 });
+
+test('a precompressed copy older than its page is not served', () => {
+  const root = makeSite();
+  try {
+    const css = path.join(root, 'assets/css/main.abc123.css');
+    // A sidecar from a previous build: correct brotli, wrong content.
+    const stale = require('node:zlib').brotliCompressSync(Buffer.from('/* the previous build */'));
+    fs.writeFileSync(`${css}.br`, stale);
+    const old = new Date('2020-01-01T00:00:00Z');
+    fs.utimesSync(`${css}.br`, old, old);
+    fs.utimesSync(css, new Date('2026-01-01T00:00:00Z'), new Date('2026-01-01T00:00:00Z'));
+
+    const table = assets.load(root);
+    const entry = table.files.get('/assets/css/main.abc123.css');
+    assert.notEqual(entry.br, stale, 'the stale sidecar is ignored');
+    assert.ok(entry.br.length > stale.length, 'a fresh copy was made from the file itself');
+    assert.equal(require('node:zlib').brotliDecompressSync(entry.br).toString(), entry.body.toString());
+
+    // The same sidecar, newer than the page, is used as-is: that is the point
+    // of shipping them, and it is what makes a deploy skip the compression.
+    fs.writeFileSync(css, entry.body);
+    fs.utimesSync(css, new Date('2020-01-01T00:00:00Z'), new Date('2020-01-01T00:00:00Z'));
+    fs.writeFileSync(`${css}.br`, entry.br);
+    const reloaded = assets.load(root).files.get('/assets/css/main.abc123.css');
+    assert.deepEqual(reloaded.br, entry.br);
+  } finally {
+    removeSite(root);
+  }
+});
+
+test('q=0 is a refusal, not a preference', () => {
+  const root = makeSite();
+  try {
+    const entry = assets.load(root).files.get('/assets/css/main.abc123.css');
+
+    assert.equal(assets.pick(entry, 'gzip;q=0, identity').encoding, null);
+    assert.equal(assets.pick(entry, 'br;q=0, gzip').encoding, 'gzip');
+    assert.equal(assets.pick(entry, 'br;q=0.4, gzip;q=0.9').encoding, 'br', 'brotli is preferred when acceptable at all');
+    assert.equal(assets.pick(entry, 'gzip;q=0.5').encoding, 'gzip');
+    assert.equal(assets.pick(entry, '*').encoding, 'br');
+    assert.equal(assets.pick(entry, '').encoding, null);
+    assert.equal(assets.pick(entry, 'deflate').encoding, null);
+
+    // Nothing acceptable at all: send the compressed body rather than an empty
+    // 406 - the client can almost certainly still decode it.
+    assert.equal(assets.pick(entry, 'identity;q=0').encoding, 'br');
+    assert.equal(assets.identityAllowed('identity;q=0'), false);
+    assert.equal(assets.identityAllowed('*;q=0'), false);
+    assert.equal(assets.identityAllowed('gzip'), true);
+  } finally {
+    removeSite(root);
+  }
+});
