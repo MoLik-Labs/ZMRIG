@@ -40,7 +40,7 @@ work        release     stable tags
 
 Practically:
 
-* `BETA` is the default branch, so `curl …/raw.githubusercontent.com/NggKhaiz/ZMRIG/BETA/oneclick.sh`
+* `BETA` is the default branch, so `curl …/raw.githubusercontent.com/MoLik-Labs/ZMRIG/BETA/oneclick.sh`
   and a plain `git clone` both give the stable tree. Nothing in the repository
   hard-codes any other branch name — `oneclick.sh` defaults to `BETA` and honours
   `MINER_BRANCH` for everything else.
@@ -63,7 +63,7 @@ Practically:
 Check the invariants at any time:
 
 ```bash
-gh api repos/NggKhaiz/ZMRIG --jq .default_branch        # BETA
+gh api repos/MoLik-Labs/ZMRIG --jq .default_branch        # BETA
 git ls-remote --heads origin                            # ALPHA, BETA, master
 git diff --stat origin/BETA origin/master               # empty after a release
 grep -rn "arena/" --include='*.md' --include='*.sh' --include='*.js' --include='*.html' . \
@@ -502,7 +502,7 @@ price, or if a missing number is silently treated as zero.
 On the box that mines, as a user with `sudo`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NggKhaiz/ZMRIG/BETA/oneclick.sh \
+curl -fsSL https://raw.githubusercontent.com/MoLik-Labs/ZMRIG/BETA/oneclick.sh \
   | sudo bash -s -- install --wallet 4YourMoneroAddress... --engine zmrig
 ```
 

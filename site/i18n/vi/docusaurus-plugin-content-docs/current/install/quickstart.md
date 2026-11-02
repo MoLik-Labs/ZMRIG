@@ -7,7 +7,7 @@ image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 # Cài trong một lệnh
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NggKhaiz/ZMRIG/BETA/oneclick.sh \
+curl -fsSL https://raw.githubusercontent.com/MoLik-Labs/ZMRIG/BETA/oneclick.sh \
   | sudo bash -s -- --wallet 4YourMoneroAddress
 ```
 

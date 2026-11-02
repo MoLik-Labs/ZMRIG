@@ -21,7 +21,7 @@ import { POOLS, findPool } from "./pools.mjs";
 import { COINS, coinOrDefault, findCoin } from "./coins.mjs";
 
 export const RAW_URL =
-  "https://raw.githubusercontent.com/NggKhaiz/ZMRIG/BETA/oneclick.sh";
+  "https://raw.githubusercontent.com/MoLik-Labs/ZMRIG/BETA/oneclick.sh";
 
 const SAFE = /^[A-Za-z0-9._:@%+=,/\-]+$/;
 

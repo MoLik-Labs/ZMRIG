@@ -13,8 +13,8 @@ by **[@nggkhaiz](https://github.com/NggKhaiz)**
 [![dev fee](https://img.shields.io/badge/developer%20fee-1%25%20%C2%B7%20off%20switch-f2763f)](doc/FEE.md)
 [![platform](https://img.shields.io/badge/platform-Linux%20x86--64%20%C2%B7%20macOS%20%C2%B7%20Windows-lightgrey)](#build-from-source)
 [![tests](https://img.shields.io/badge/tests-12%20suites-46b17b)](#tests)
-[![stars](https://img.shields.io/github/stars/NggKhaiz/ZMRIG?style=flat&color=f2763f)](https://github.com/MoLik-Labs/ZMRIG/stargazers)
-[![last commit](https://img.shields.io/github/last-commit/NggKhaiz/ZMRIG)](https://github.com/MoLik-Labs/ZMRIG/commits/BETA)
+[![stars](https://img.shields.io/github/stars/MoLik-Labs/ZMRIG?style=flat&color=f2763f)](https://github.com/MoLik-Labs/ZMRIG/stargazers)
+[![last commit](https://img.shields.io/github/last-commit/MoLik-Labs/ZMRIG)](https://github.com/MoLik-Labs/ZMRIG/commits/BETA)
 
 [Install](#install-in-one-command) · [Docs](https://molik-labs.github.io/ZMRIG/docs/intro) · [Documentation](#documentation) · [Performance](#performance) · [Credits](#credits) · [Donate (optional)](#support)
 
@@ -91,7 +91,7 @@ they happen:
 ## Install in one command
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NggKhaiz/ZMRIG/BETA/oneclick.sh \
+curl -fsSL https://raw.githubusercontent.com/MoLik-Labs/ZMRIG/BETA/oneclick.sh \
   | sudo bash -s -- --wallet 4YourMoneroAddress...
 ```
 
@@ -528,7 +528,7 @@ only the one above is.
 
 <div align="center">
 
-[![Star History Chart](https://api.star-history.com/svg?repos=NggKhaiz/ZMRIG&type=Date)](https://star-history.com/#NggKhaiz/ZMRIG&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=MoLik-Labs/ZMRIG&type=Date)](https://star-history.com/#MoLik-Labs/ZMRIG&Date)
 
 <sub>ZMRIG · made by <a href="https://github.com/NggKhaiz">@nggkhaiz</a> · GPL-3.0 · no tracking, no accounts · 1 % developer fee on Monero time, switchable off</sub>
 

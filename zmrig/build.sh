@@ -30,7 +30,7 @@ BUILD_ZIG=1
 MARCH="-march=native"
 MCPU="native"
 STATIC=0
-ZIG="${ZIG:-zig}"
+ZIG="${ZIG:-zig}"   # replaced by scripts/find-zig.sh when left as the default
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -50,6 +50,17 @@ while [ $# -gt 0 ]; do
 done
 
 command -v g++ >/dev/null || { echo "g++ is required" >&2; exit 1; }
+
+# Zig 0.13, from PATH, from ZIG=..., or from the `ziglang` pip wheel. Resolved
+# here, before the static path asks for it. The search is version-aware on
+# purpose: a newer Zig on PATH is not a usable Zig for this code, and silently
+# using it produces a compile error that looks like a broken source tree.
+if [ "$ZIG" = "zig" ]; then
+    ZIG=$("${ROOT}/scripts/find-zig.sh") || {
+        echo "zig 0.13 not found (set ZIG=/path/to/zig, or pip install ziglang==0.13.0)" >&2
+        exit 1
+    }
+fi
 
 # A static build has to come from one toolchain: gcc links glibc, and glibc
 # cannot be dropped into a musl image. `zig c++` is clang plus a musl sysroot,
@@ -256,17 +267,6 @@ if [ "$BUILD_ZIG" -eq 0 ]; then
     exit 0
 fi
 
-# Zig can come from PATH, from ZIG=..., or from the `ziglang` pip package
-# (the usual way to get it on a machine without a package manager).
-if ! command -v "$ZIG" >/dev/null; then
-    if python3 -c "import ziglang" >/dev/null 2>&1; then
-        ZIG=$(python3 -c "import ziglang, os; print(os.path.join(os.path.dirname(ziglang.__file__), 'zig'))")
-
-        [ -x "$ZIG" ] || chmod +x "$ZIG" 2>/dev/null || true
-    fi
-fi
-
-command -v "$ZIG" >/dev/null || [ -x "$ZIG" ] || { echo "zig not found (set ZIG=/path/to/zig, or pip install ziglang==0.13.0)" >&2; exit 1; }
 
 echo "==> building zmrig ($($ZIG version))"
 

@@ -137,6 +137,7 @@ if [ "$SELF_CHECK" = "1" ]; then
         "${HERE}/overlay/etc/zmrig/banner.txt" \
         "${HERE}/overlay/etc/issue" \
         "${ROOT}/zmrig/build.sh" \
+        "${ROOT}/scripts/find-zig.sh" \
         "${ROOT}/scripts/tune-linux.sh" \
         "${ROOT}/zmrig/src/main.zig"; do
         want "$f"
@@ -153,7 +154,8 @@ if [ "$SELF_CHECK" = "1" ]; then
     [ -x "${HERE}/init" ] && printf '  ok    init is executable\n' || { printf '  BAD   init is not executable\n'; fail=1; }
 
     # Every script referenced by the workflows has to exist.
-    for f in os/build-iso.sh os/deps.sh os/smoke-qemu.sh os/tests/control.sh .github/workflows/os.yml; do
+    for f in os/build-iso.sh os/deps.sh os/smoke-qemu.sh os/tests/control.sh \
+             scripts/find-zig.sh .github/workflows/os.yml; do
         want "${ROOT}/${f}"
     done
 
@@ -176,16 +178,9 @@ if [ ${#missing[@]} -gt 0 ]; then
     die "missing tools: ${missing[*]} - run ./os/deps.sh (Debian/Ubuntu) or install the equivalents"
 fi
 
-# zig is needed for the static cross build; accept a pip-installed copy.
-ZIG_BIN=${ZIG:-}
-if [ -z "$ZIG_BIN" ]; then
-    if command -v zig >/dev/null; then
-        ZIG_BIN=$(command -v zig)
-    elif python3 -c "import ziglang" >/dev/null 2>&1; then
-        ZIG_BIN=$(python3 -c "import ziglang, os; print(os.path.join(os.path.dirname(ziglang.__file__), 'zig'))")
-    fi
-fi
-[ -n "$ZIG_BIN" ] || die "zig 0.13 not found (pip install ziglang==0.13.0, or set ZIG=/path/to/zig)"
+# zig 0.13 is needed for the static cross build. Whatever is on PATH is not
+# automatically it - see scripts/find-zig.sh.
+ZIG_BIN=$("${ROOT}/scripts/find-zig.sh") || die "zig 0.13 not found (pip install ziglang==0.13.0, or set ZIG=/path/to/zig)"
 
 if [ "$CLEAN" = "1" ]; then
     step "cleaning ${WORK}"
@@ -442,7 +437,7 @@ step "checksums and manifest"
 (cd "$OUT" && sha256sum "$(basename "$ISO_PATH")" > "$(basename "$ISO_PATH").sha256")
 ISO_SHA=$(cut -d' ' -f1 "${ISO_PATH}.sha256")
 ISO_SIZE=$(stat -c %s "$ISO_PATH" 2>/dev/null || stat -f %z "$ISO_PATH")
-REPO_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-NggKhaiz/ZMRIG}/releases/latest/download"
+REPO_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-MoLik-Labs/ZMRIG}/releases/latest/download"
 
 cat > "${OUT}/${ISO_NAME}.json" <<EOF
 {

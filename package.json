@@ -12,11 +12,12 @@
     "test:web": "node --test legacy/tests/*.test.js",
     "test:pool": "node --test pool/tests/*.test.js",
     "test:oneclick": "bash tests/oneclick/plan.sh && bash tests/oneclick/config.sh && bash tests/oneclick/governor.sh && bash tests/oneclick/purge.sh",
-    "test:docs": "bash tests/docs/links.sh",
+    "test:docs": "bash tests/docs/links.sh && bash tests/docs/pages.sh && bash tests/docs/identity.sh",
     "test:pages": "bash tests/docs/pages.sh",
     "build:site": "cd site && npm run build",
     "publish:site": "bash scripts/publish-site.sh",
-    "test:site": "cd site && npm test"
+    "test:site": "cd site && npm test",
+    "test:identity": "bash tests/docs/identity.sh"
   },
   "repository": {
     "type": "git",

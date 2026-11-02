@@ -2,7 +2,7 @@
 #
 # oneclick.sh - build, tune, install and supervise this miner with one command.
 #
-#   curl -fsSL https://raw.githubusercontent.com/NggKhaiz/ZMRIG/BETA/oneclick.sh | sudo bash -s -- --wallet 4...
+#   curl -fsSL https://raw.githubusercontent.com/MoLik-Labs/ZMRIG/BETA/oneclick.sh | sudo bash -s -- --wallet 4...
 #
 #   sudo ./oneclick.sh                     # full install, asks for the wallet
 #   sudo ./oneclick.sh --wallet 4... --yes  # fully unattended

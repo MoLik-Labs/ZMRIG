@@ -53,7 +53,10 @@ test("hostState takes host:port and full pool URLs, rejects junk", () => {
 test("the default answer produces a runnable one-click command", () => {
   const result = build({ wallet: WALLET, pool: "moneroocean" });
   assert.equal(result.blocked, null);
-  assert.match(result.install, /^curl -fsSL https:\/\/raw\.githubusercontent\.com\/NggKhaiz\/ZMRIG\/BETA\/oneclick\.sh/);
+  // The owner is not asserted here: it moved once already, and this test is
+  // about the shape of the command. tests/docs/identity.sh is what holds the
+  // owner to the git remote.
+  assert.match(result.install, /^curl -fsSL https:\/\/raw\.githubusercontent\.com\/[^/]+\/ZMRIG\/BETA\/oneclick\.sh/);
   assert.match(result.install, /install --wallet 46SQLW7D/);
   assert.match(result.install, /--pool gulf\.moneroocean\.stream:10001/);
   // --yes is last so nothing after it can be read as an answer to a prompt.

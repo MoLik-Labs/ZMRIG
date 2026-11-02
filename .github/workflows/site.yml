@@ -30,3 +30,18 @@ jobs:
 
       - name: Run site tests
         run: npm run test:web
+
+      # The builder, the coin table and the donation copy are plain modules with
+      # no DOM and no Docusaurus in their import graph, so they run on a bare
+      # Node: no install step, no second copy of the lockfile to keep in sync.
+      - name: Run builder and copy tests
+        run: node --test site/tests/*.test.mjs
+
+      # These three walk the repository, not the built site, so they need no
+      # npm at all: link targets, published-page consistency, and the install
+      # URL that a repository rename silently breaks.
+      - name: Run documentation tests
+        run: |
+          bash tests/docs/links.sh
+          bash tests/docs/pages.sh
+          bash tests/docs/identity.sh

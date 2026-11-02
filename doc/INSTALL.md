@@ -5,7 +5,7 @@ One command, no manual steps, safe to re-run.
 
 ```bash
 # on a fresh machine (clones the repository for you)
-curl -fsSL https://raw.githubusercontent.com/NggKhaiz/ZMRIG/BETA/oneclick.sh \
+curl -fsSL https://raw.githubusercontent.com/MoLik-Labs/ZMRIG/BETA/oneclick.sh \
   | sudo bash -s -- --wallet 4YourMoneroAddress...
 
 # or inside a checkout
@@ -234,7 +234,7 @@ sudo /usr/local/bin/zmrig -c /etc/zmrig/config.json --rebench-algo
 
 ```bash
 for host in rig01 rig02 rig03; do
-  ssh "$host" "curl -fsSL https://raw.githubusercontent.com/NggKhaiz/ZMRIG/BETA/oneclick.sh \
+  ssh "$host" "curl -fsSL https://raw.githubusercontent.com/MoLik-Labs/ZMRIG/BETA/oneclick.sh \
     | sudo bash -s -- --yes --wallet 4... --rig-id $host"
 done
 ```
