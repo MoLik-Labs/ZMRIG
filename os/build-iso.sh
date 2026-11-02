@@ -79,7 +79,14 @@ VERSION=$(sed -n 's/^pub const version = "\(.*\)";/\1/p' "${ROOT}/zmrig/src/main
 ISO_NAME="zmrig-os-${VERSION}-${ARCH_LEVEL}"
 ISO_PATH="${OUT}/${ISO_NAME}.iso"
 
-step() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
+# Every step is timed. A build that spends 40 minutes somewhere should say so
+# in one glance at the log, because the job timeout only reports the total.
+step() {
+    local now elapsed=0
+    now=$(date +%s)
+    [ -z "${START:-}" ] || elapsed=$((now - START))
+    printf '\n\033[1;36m==> %s\033[0m \033[2m(+%ss)\033[0m\n' "$*" "$elapsed"
+}
 say()  { printf '    %s\n' "$*"; }
 die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
 
@@ -152,6 +159,18 @@ if [ "$SELF_CHECK" = "1" ]; then
     # The initramfs init is PID 1: it must be executable in the archive, and the
     # archive is assembled from a chroot, so the mode matters.
     [ -x "${HERE}/init" ] && printf '  ok    init is executable\n' || { printf '  BAD   init is not executable\n'; fail=1; }
+
+    # The mount teardown must come before mksquashfs. It did not once, and the
+    # image build then read a live /proc and a live /sys until the job timed out
+    # at ninety minutes with nothing to show for it.
+    sq=$(grep -n '^step "building rootfs.squashfs"' "${HERE}/build-iso.sh" | head -1 | cut -d: -f1)
+    un=$(grep -n '^cleanup_mounts$' "${HERE}/build-iso.sh" | head -1 | cut -d: -f1)
+    if [ -n "$sq" ] && [ -n "$un" ] && [ "$un" -lt "$sq" ]; then
+        printf '  ok    mounts are torn down before mksquashfs\n'
+    else
+        printf '  BAD   mksquashfs would run with /proc, /sys or /dev still mounted\n'
+        fail=1
+    fi
 
     # Every script referenced by the workflows has to exist.
     for f in os/build-iso.sh os/deps.sh os/smoke-qemu.sh os/tests/control.sh \
@@ -255,8 +274,11 @@ mount --bind /dev "${ROOTFS}/dev"
 mkdir -p "${ROOTFS}/dev/pts"
 mount --bind /dev/pts "${ROOTFS}/dev/pts"
 
-chroot "$ROOTFS" /bin/sh /tmp/chroot-setup.sh "$KERNEL_PKG" "$CHANNEL" ||
-    die "the chroot setup failed"
+# apk is the only step that talks to a package mirror, and a mirror that stops
+# answering hangs a job rather than failing it. 40 minutes is generous: the same
+# install takes two to four on a loaded runner.
+timeout 2400 chroot "$ROOTFS" /bin/sh /tmp/chroot-setup.sh "$KERNEL_PKG" "$CHANNEL" ||
+    die "the chroot setup failed or timed out after 2400 s (apk: ${ALPINE_MIRROR})"
 
 [ -s "${ROOTFS}/tmp/chroot-kver" ] ||
     die "the chroot did not record its kernel version (/tmp/chroot-kver is empty or missing)"
@@ -319,6 +341,22 @@ rm -rf "${ROOTFS}/tmp"/*
 : > "${ROOTFS}/etc/mtab" 2>/dev/null || true
 
 # ------------------------------------------------------------------ 6. squashfs
+
+# This has to happen *before* mksquashfs, not after. With /proc, /sys and /dev
+# still bind-mounted the image build recurses into a live kernel interface: it
+# reads /sys entries that block, follows /proc into whatever the host is doing,
+# and never finishes. That is what "Build the image" looked like from outside -
+# ninety minutes, then the job timeout - and it also put host device nodes in
+# the image.
+cleanup_mounts
+for m in proc sys dev dev/pts; do
+    # `cmd && die` as the last statement of the body would return 1 under
+    # `set -e` whenever the answer is the good one; ask as a question instead.
+    if mountpoint -q "${ROOTFS}/${m}"; then
+        die "${ROOTFS}/${m} is still mounted: mksquashfs would follow it into the host"
+    fi
+done
+
 step "building rootfs.squashfs"
 
 # zstd is the smallest-and-fastest of the compressors squashfs-tools supports
@@ -326,16 +364,16 @@ step "building rootfs.squashfs"
 # boot of every rig.
 rm -f "${ISODIR}/zmrig/rootfs.squashfs"
 if mksquashfs -help 2>&1 | grep -q -- '-comp'; then
-    mksquashfs "$ROOTFS" "${ISODIR}/zmrig/rootfs.squashfs" \
+    timeout 900 mksquashfs "$ROOTFS" "${ISODIR}/zmrig/rootfs.squashfs" \
         -noappend -no-progress -all-root -b 1M -comp zstd >/dev/null ||
-        mksquashfs "$ROOTFS" "${ISODIR}/zmrig/rootfs.squashfs" \
-            -noappend -no-progress -all-root -b 1M >/dev/null
+        timeout 900 mksquashfs "$ROOTFS" "${ISODIR}/zmrig/rootfs.squashfs" \
+            -noappend -no-progress -all-root -b 1M >/dev/null ||
+        die "mksquashfs failed or timed out after 900 s"
 else
-    mksquashfs "$ROOTFS" "${ISODIR}/zmrig/rootfs.squashfs" -noappend -no-progress >/dev/null
+    timeout 900 mksquashfs "$ROOTFS" "${ISODIR}/zmrig/rootfs.squashfs" -noappend -no-progress >/dev/null ||
+        die "mksquashfs failed or timed out after 900 s"
 fi
 say "rootfs.squashfs: $(du -h "${ISODIR}/zmrig/rootfs.squashfs" | cut -f1)"
-
-cleanup_mounts
 
 if [ "$KEEP_ROOTFS" = "0" ]; then
     rm -rf "$ROOTFS"
@@ -443,9 +481,9 @@ mkdir -p "${ISODIR}/.disk"
 printf 'ZMRIG OS %s %s\n' "$VERSION" "$ARCH_LEVEL" > "${ISODIR}/.disk/info"
 
 rm -f "$ISO_PATH"
-grub-mkrescue -o "$ISO_PATH" "$ISODIR" \
+timeout 600 grub-mkrescue -o "$ISO_PATH" "$ISODIR" \
     -- -volid ZMRIGOS >"${WORK}/iso.log" 2>&1 ||
-    { tail -20 "${WORK}/iso.log"; die "grub-mkrescue failed"; }
+    { tail -20 "${WORK}/iso.log"; die "grub-mkrescue failed or timed out after 600 s"; }
 
 # ------------------------------------------------------------------ 8. publish
 step "checksums and manifest"
