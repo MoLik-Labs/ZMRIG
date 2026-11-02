@@ -111,7 +111,7 @@ ZMRIG OS ${VERSION} (${ARCH_LEVEL}, channel ${CHANNEL}, kernel ${KERNEL_PKG})
   5. squashfs: mksquashfs rootfs -comp zstd -b 1M -all-root
   6. initramfs: busybox + the 30 modules needed to find the media
   7. ISO: GRUB BIOS + UEFI, five boot entries (max/balanced/eco/light/debug)
-  8. checksums + ${ISO_NAME}.json manifest
+  8. checksums + ${ISO_NAME}.iso.json manifest
 EOF
 }
 
@@ -169,6 +169,16 @@ if [ "$SELF_CHECK" = "1" ]; then
         printf '  ok    mounts are torn down before mksquashfs\n'
     else
         printf '  BAD   mksquashfs would run with /proc, /sys or /dev still mounted\n'
+        fail=1
+    fi
+
+    # The workflow uploads and publishes dist/*.iso.json; the build used to
+    # write dist/<name>.json, so the artifact step found nothing to upload and
+    # the release job found nothing to describe. One name, asserted here.
+    if grep -q '"${OUT}/${ISO_NAME}.iso.json"' "${HERE}/build-iso.sh"; then
+        printf '  ok    the manifest is named *.iso.json, as the workflow expects\n'
+    else
+        printf '  BAD   the manifest name does not match dist/*.iso.json\n'
         fail=1
     fi
 
@@ -492,7 +502,7 @@ ISO_SHA=$(cut -d' ' -f1 "${ISO_PATH}.sha256")
 ISO_SIZE=$(stat -c %s "$ISO_PATH" 2>/dev/null || stat -f %z "$ISO_PATH")
 REPO_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-MoLik-Labs/ZMRIG}/releases/latest/download"
 
-cat > "${OUT}/${ISO_NAME}.json" <<EOF
+cat > "${OUT}/${ISO_NAME}.iso.json" <<EOF
 {
   "product": "zmrig-os",
   "channel": "${CHANNEL}",
@@ -512,7 +522,7 @@ ELAPSED=$(( $(date +%s) - START ))
 step "done in ${ELAPSED}s"
 say "image     ${ISO_PATH} ($(du -h "$ISO_PATH" | cut -f1))"
 say "sha256    ${ISO_SHA}"
-say "manifest  ${OUT}/${ISO_NAME}.json"
+say "manifest  ${OUT}/${ISO_NAME}.iso.json"
 say "write it  sudo dd if=${ISO_PATH} of=/dev/sdX bs=4M status=progress conv=fsync"
 
 if [ "$SMOKE" = "1" ]; then
