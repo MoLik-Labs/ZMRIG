@@ -1,3 +1,65 @@
+# 6.35.0 — safe mode: mine without cooking the machine
+
+Every mode until now answered "how fast can this box go". `safe` answers the
+question a laptop, an office box or a rig in somebody's bedroom actually asks:
+how fast can it go *for months*.
+
+### The governor (`zmrig/src/thermal.zig`)
+- **One number**: `--max-temp=72`. The bands are derived from it, so they cannot
+  be set into an order that makes no sense: step down at the target, step down
+  immediately at target + 8, stop hashing at target + 15, resume at target − 7.
+- **Reads the hottest CPU sensor** once a second from `/sys/class/hwmon`
+  (`coretemp`, `k10temp`, `zenpower`, `cpu_thermal`, `acpitz`, Super I/O) and
+  `/sys/class/thermal`, ignoring GPUs, disks and batteries: a warm NVMe must not
+  cost a thread.
+- **Moves the thread count, not the clock.** A worker above the allowed count
+  parks; it keeps its VM and the dataset stays in RAM, so a throttle costs the
+  shares that were not computed and nothing else - the pool connection stays
+  open and a resume does not pay the 20-40 s rebuild.
+- **Two speeds, on purpose.** At the target it sheds one thread per 30 s (a
+  boost spike is not a policy failure); at the hard cap it sheds one per 5 s.
+  Stepping back up needs two minutes below target − 5, because cooling for two
+  minutes and heating up in ten seconds is how a fan bearing dies.
+- **No sensor is not a reason to stop earning**: it says so once and keeps the
+  thread count it was given. `--thermal-file=PATH` points the governor at a file
+  for boards whose sensor lives behind a BMC.
+- 15 unit tests over the state machine (every edge, every hysteresis window) plus
+  `zmrig/tests/thermal.sh`, which drives the real binary through a real pool and
+  a file whose number it changes: cool, hot, one thread, pause, cool, resume.
+- `--check` gained a `thermal` line, because "it throttled" and "it has no sensor
+  and never could" are different answers to the same complaint.
+
+### The appliance
+- **`zmrig-os mode safe [TEMP]`**: one core left for the OS and the fan
+  controller, nice 19, watt profile, MSR untouched, governor armed at 72 C.
+- A GRUB entry for it, and `zmrig.os.maxtemp=` on the kernel command line for a
+  fleet. The old "safe mode" troubleshooting entry is now called
+  "troubleshooting", which is what it always was.
+- `zmrig-os status` prints the current temperature next to the mode, read from
+  the same sensors the miner uses.
+
+### The installer
+- `oneclick.sh --max-temp=70` writes `"max-temp": 70` into `config.json`; the
+  plan output shows the policy before it is applied, and a value outside 45-95
+  is refused rather than silently clamped.
+
+### Also in this version
+- **The Zig engine has CI.** `cli.sh`, `unit.sh`, `net.sh`, `health.sh` and
+  `thermal.sh` ran only on the machine that wrote them; they are a job in
+  `.github/workflows/test.yml` now.
+- **`scripts/find-zig.sh`**: the build requires Zig 0.13 and the CI runner ships
+  a newer one, which it treated as satisfied. The resolver checks the version,
+  and every caller - miner build, image build, deps, unit tests - uses it.
+- **AVX-512 translation units carry their own flags.** Clang 19 split 512-bit
+  EVEX out of `-mavx512f`, so `-march=x86-64-v2` silently disabled it in the
+  three files that use `_mm512_*`. Probed, not assumed.
+- **`--max-temp` parsing no longer leaks** on a rejected value: `parseArgs` frees
+  what it read before the error.
+- **The image build no longer deletes its own output** (`/tmp/chroot-kver` was
+  removed by the tidy step two hundred lines later), and a failed compile now
+  names the file and the command instead of printing "compilation failed".
+- 79 appliance checks (was 66), 19 Zig modules (was 18), 33 option tests (was 29).
+
 # 6.34.0 — ZMRIG OS: a miner you boot instead of install
 
 A rig should not be a general-purpose computer. `os/` now builds a bootable

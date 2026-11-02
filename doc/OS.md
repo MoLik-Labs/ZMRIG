@@ -83,10 +83,41 @@ changed.
 | `max` | cache-aware, all cores | 5 | free | `always` | the default: highest hashrate |
 | `balanced` | cores − 1 (4+ cores) | 3 | free | `always` | still ssh-able during a full load |
 | `eco` | half the cores | 1 | watt | `madvise` | quiet, cool, best hashrate per watt |
+| `safe` | cores − 1 (4+ cores) | 19 (nice) | watt | `always` | a machine that must not break |
 | `light` | all cores, 256 MiB cache | 2 | free | `always` | under 2.5 GiB of RAM, ~10× slower |
 
 On a two-core machine `balanced` deliberately behaves like `max`: there is no
 core to spare, and pretending otherwise would just cost hashrate.
+
+### `safe`: the machine survives the mode
+
+Every other mode answers "how fast can this box go". `safe` answers "how fast can
+it go for months". It leaves one core for the OS and the fan controller, drops to
+the lowest scheduling priority there is (nice 19, which nothing else in this
+image competes with), never writes the MSR registers, and arms the miner's
+thermal governor — `--max-temp`, default 72 °C, `zmrig-os mode safe 68` to change
+it.
+
+The governor reads the hottest CPU sensor once a second and moves the thread
+count, not the clock:
+
+| reading | action | at most |
+| --- | --- | --- |
+| below 72 °C | nothing | — |
+| at 72 °C | park one thread | every 30 s |
+| at 80 °C (target + 8) | park one thread | every 5 s |
+| at 87 °C (target + 15) | stop hashing | until it is below 65 °C |
+| below 67 °C for two minutes | start one thread again | every 30 s |
+
+A parked thread keeps its VM, the dataset stays in RAM and the pool connection
+stays open, so a pause costs the shares that were not computed and nothing else.
+`zmrig-os status` prints the current reading next to the mode, and the miner logs
+every change with the sensor name, because "which sensor was at 84 °C" is the
+question asked six months later.
+
+Only CPU sensors are read (`coretemp`, `k10temp`, `zenpower`, `cpu_thermal`,
+`acpitz`, Super I/O), so a warm NVMe never costs a thread. A machine with no
+sensor at all says so once and keeps the thread count it was given.
 
 ## Measuring this machine
 
@@ -135,7 +166,8 @@ line).
 zmrig.os.wallet=4...          wallet, skips the wizard
 zmrig.os.pool=host:port       pool
 zmrig.os.worker=rig-01        worker name
-zmrig.os.mode=max|balanced|eco|light
+zmrig.os.mode=max|balanced|eco|light|safe
+zmrig.os.maxtemp=72           safe mode: hold the CPU at or below this
 zmrig.os.hugepages=N          0 disables the reservation
 zmrig.os.data=/dev/sdX1       partition that keeps the config
 zmrig.os.debug=1              shell in the initramfs instead of the miner

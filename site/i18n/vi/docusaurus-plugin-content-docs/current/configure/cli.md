@@ -50,6 +50,9 @@ hiện trong ngoặc vuông.
     --scratchpad-prefetch=N 0 nop, 1 prefetcht0 [mặc định], 2 prefetchnta, 3 load
     --no-optimized-init    bộ khởi tạo dataset di động
     --autotune[=SECONDS]   đo các phương án số thread, không cần pool
+    --max-temp=C           giữ cảm biến CPU nóng nhất ở mức ≤ C độ
+    --thermal-file=PATH    đọc nhiệt độ từ FILE thay vì sysfs
+    --no-thermal           tắt bộ điều tiết
 ```
 
 ## Log và vòng đời
@@ -87,6 +90,54 @@ sudo ./oneclick.sh install --wallet 4YourMoneroAddress                 # = auto
 
 `auto` đọc pin: laptop đang dùng pin thành `watt`, còn lại thành `free`. Miner
 đọc lại profile lúc khởi động, nên rút sạc rồi restart service là đủ để đổi.
+
+## Chế độ an toàn: đào mà không nướng máy
+
+`--max-temp` là con số duy nhất của chế độ này. Nó bật một bộ điều tiết chạy mỗi
+giây, đọc cảm biến CPU nóng nhất và trả lại thread khi máy nóng lên:
+
+```bash
+sudo zmrig -o gulf.moneroocean.stream:10001 -u 4YourMoneroAddress \
+    --max-temp=72 --profile watt
+```
+
+| chuyện gì xảy ra | khi nào |
+| --- | --- |
+| không gì cả | dưới 72 °C |
+| treo một thread | ở 72 °C, tối đa 30 giây một lần |
+| treo thread ngay | ở 80 °C (đích + 8), tối đa 5 giây một lần |
+| dừng đào | ở 87 °C (đích + 15) dù chỉ còn một thread |
+| đào lại bằng một thread | khi cảm biến xuống dưới 65 °C |
+| trả lại một thread | sau hai phút ở dưới 67 °C (đích − 5) |
+
+Hai tốc độ khác nhau là cố ý. Ở mức đích, một cú nhảy nhiệt là bình thường — một
+nhịp turbo, một đợt share — nên nó chờ. Ở mức trần cứng thì phần cứng đã tự bảo
+vệ, nên nó phản ứng ngay. Chiều tăng thì cố ý chậm: nguội hai phút rồi nóng lại
+trong mười giây là cách giết vòng bi quạt, và cũng làm hashrate trung bình tệ hơn
+là giữ bớt một thread.
+
+Không có gì bị dựng lại trong lúc này. Thread bị treo vẫn giữ VM và dataset nằm
+nguyên trong RAM, nên một lần dừng chỉ mất đúng số share không tính được — kết nối
+pool vẫn mở.
+
+```text
+thermal: holding 72 C max - k10temp/Tctl reads 61.5 C now; 8 thread(s), step down at 72 C, pause above 87 C
+thermal: 73.4 C on k10temp/Tctl -> 7 of 8 threads (target 72 C; 1 step-down(s), 0 step-up(s) so far)
+```
+
+`zmrig --check` in ra bộ điều tiết có bật hay không và nó nhìn thấy gì — đó là
+khác biệt giữa "nó đã hạ tải" và "nó không có cảm biến và không bao giờ hạ được":
+
+```text
+  thermal hold 72 C: k10temp/Tctl 61.5 C now, step down at 72 C, pause above 87 C (--no-thermal turns it off)
+  thermal off (no --max-temp: nothing throttles, however hot the box gets)
+```
+
+Chỉ cảm biến của CPU được dùng — `coretemp`, `k10temp`, `zenpower`, `cpu_thermal`,
+`acpitz` và các chip Super I/O — nên NVMe hay GPU ấm không làm mất một thread
+nào. Máy không có cảm biến thì nói một lần rồi vẫn đào với số thread được giao:
+một nhiệt kế hỏng không phải lý do để ngừng kiếm tiền. `--thermal-file=PATH`
+trỏ bộ điều tiết sang một file khác, cho board mà cảm biến nằm sau BMC.
 
 ## Số thread: đo, không đoán
 

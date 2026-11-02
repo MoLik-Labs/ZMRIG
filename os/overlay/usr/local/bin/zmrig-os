@@ -28,7 +28,7 @@
 
 set -eu
 
-VERSION="6.34.0"
+VERSION="6.35.0"
 MANIFEST_URL="https://github.com/MoLik-Labs/ZMRIG/releases/latest/download"
 # A full URL wins over the derived one, so the test suite can serve a manifest
 # from a file:// path and a fleet can pin an exact release.

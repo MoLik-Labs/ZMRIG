@@ -51,7 +51,8 @@ Mức "hung hăng" của miner là một từ, đổi được khi đang chạy:
 
 ```bash
 zmrig-os mode eco       # khởi động lại với nửa số core và profile watt
-zmrig-os status         # đang đào gì, tốc độ bao nhiêu, ví nào
+zmrig-os mode safe 70   # ... và không để CPU vượt 70 C
+zmrig-os status         # đang đào gì, tốc độ bao nhiêu, nóng bao nhiêu độ
 ```
 
 | Chế độ | Thread | Ưu tiên | Profile | Huge pages | Dùng khi |
@@ -59,10 +60,40 @@ zmrig-os status         # đang đào gì, tốc độ bao nhiêu, ví nào
 | `max` | theo cache, tất cả core | 5 | free | đặt trước lúc boot | mặc định |
 | `balanced` | core − 1 nếu từ 4 core | 3 | free | đặt trước lúc boot | máy bạn còn ssh vào |
 | `eco` | nửa số core | 1 | watt | THP `madvise` | êm và mát |
+| `safe` | core − 1 nếu từ 4 core | 19 (nice) | watt | đặt trước lúc boot | máy không được phép hỏng |
 | `light` | tất cả core, cache 256 MiB | 2 | free | không | máy dưới 2,5 GiB RAM |
 
 Mỗi chế độ có một mục GRUB riêng, nên máy không mạng và không bàn phím vẫn đổi
 được: chế độ đi theo dòng lệnh nhân và được áp ngay lúc boot.
+
+### Chế độ an toàn
+
+`safe` là chế độ duy nhất coi nhiệt độ của máy là **giới hạn**, không phải hệ quả.
+Nó để một core cho hệ điều hành và bộ điều khiển quạt, hạ xuống mức ưu tiên thấp
+nhất có thể, không bao giờ ghi vào thanh ghi MSR, và bật bộ điều tiết nhiệt của
+miner ở 72 °C (đổi bằng `zmrig-os mode safe 68`):
+
+```text
+zmrig-os status
+  mode           safe (max 72 C)
+  thermal        64 C
+```
+
+Bộ điều tiết chạy mỗi giây trên thread monitor của miner. Ở 72 °C nó treo một
+thread (tối đa 30 giây một lần), ở 80 °C treo ngay (tối đa 5 giây một lần), ở
+87 °C thì dừng đào hẳn, và khi máy nguội thì leo lại từng thread một, mỗi bước
+cần hai phút mát. Không có gì bị dựng lại: thread bị treo giữ nguyên VM, dataset
+nằm trong RAM và kết nối pool vẫn mở — một buổi chiều nóng chỉ mất đúng số share
+không tính được, không mất gì khác.
+
+Nó chỉ đọc cảm biến của CPU (`coretemp`, `k10temp`, `zenpower`, `cpu_thermal`,
+`acpitz`, chip Super I/O), nên NVMe ấm không làm mất thread nào. Máy không có
+cảm biến thì nói một lần rồi giữ nguyên số thread được giao.
+
+Với laptop, máy dùng chung ở cơ quan, hay bất kỳ rig nào mà chủ máy sẽ nhận ra
+khi nó hỏng, đây là chế độ nên chạy. Nó mất vài phần trăm hashrate đỉnh lúc 20 °C
+và đổi lại là không phải sống những giờ nóng trong trạng thái bị phần cứng tự hạ
+xung mà mình không kiểm soát được.
 
 ## Ảnh làm những gì mà distro thường không làm
 
@@ -101,7 +132,7 @@ Chạy lâu không phải một tính năng mà là một chuỗi:
 `zmrig-os doctor` in ra mọi kiểm tra mà lúc boot đã làm, kèm giá trị đọc được:
 
 ```
-  PASS  binary                 zmrig 6.34.0 - ZMRIG by @nggkhaiz
+  PASS  binary                 zmrig 6.35.0 - ZMRIG by @nggkhaiz
   PASS  wallet                 46SQLW7D...ysb5tJ
   PASS  memory                 32044 MB total, need 2400 MB
   PASS  hugepages              1168 x 2 MB reserved

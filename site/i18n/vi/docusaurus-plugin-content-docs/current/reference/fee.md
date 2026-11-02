@@ -34,7 +34,7 @@ hai lần:
 Đây không phải thiết lập âm thầm. Tất cả những chỗ sau đều nói mức phí và địa chỉ:
 
 ```text
-ZMRIG 6.34.0 - RandomX miner by @nggkhaiz
+ZMRIG 6.35.0 - RandomX miner by @nggkhaiz
 1% of Monero mining time goes to the developer (--donate-level=0 turns it off), GPL-3.0, https://github.com/MoLik-Labs/ZMRIG
 ```
 

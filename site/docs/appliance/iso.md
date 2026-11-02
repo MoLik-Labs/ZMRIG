@@ -53,7 +53,8 @@ The miner's aggressiveness is a single word, changeable while it runs:
 
 ```bash
 zmrig-os mode eco       # restart with half the cores and the watt profile
-zmrig-os status         # what is hashing, at what rate, with which wallet
+zmrig-os mode safe 70   # ... and never let the CPU past 70 C
+zmrig-os status         # what is hashing, at what rate, at what temperature
 ```
 
 | Mode | Threads | Priority | Profile | Huge pages | For |
@@ -61,11 +62,43 @@ zmrig-os status         # what is hashing, at what rate, with which wallet
 | `max` | cache-aware, all cores | 5 | free | reserved at boot | the default |
 | `balanced` | cores − 1 on 4+ cores | 3 | free | reserved at boot | a rig you also log into |
 | `eco` | half the cores | 1 | watt | THP `madvise` | quiet and cool |
+| `safe` | cores − 1 on 4+ cores | 19 (nice) | watt | reserved at boot | a machine that must not break |
 | `light` | all cores, 256 MiB cache | 2 | free | none | under 2.5 GiB of RAM |
 
 There are GRUB entries for each one, so a machine with no network and no
 keyboard can still be changed: the mode travels on the kernel command line and
 is applied at boot.
+
+### Safe mode
+
+`safe` is the only mode that treats the machine's temperature as a limit rather
+than a side effect. It leaves one core for the OS and the fan controller, drops
+to the lowest scheduling priority there is, never writes the MSR registers, and
+arms the miner's thermal governor at 72 °C (change it with
+`zmrig-os mode safe 68`):
+
+```text
+zmrig-os status
+  mode           safe (max 72 C)
+  thermal        64 C
+```
+
+The governor runs once a second on the miner's own monitor thread. At 72 °C it
+parks one thread (at most every 30 s), at 80 °C it parks one immediately (at most
+every 5 s), at 87 °C it stops hashing altogether, and it comes back down the
+ladder — one thread at a time, two minutes of cool per step — as the box cools.
+Nothing is rebuilt on the way: a parked thread keeps its VM, the dataset stays in
+RAM and the pool connection stays open, so a hot afternoon costs the shares it
+did not compute and nothing else.
+
+It reads only CPU sensors (`coretemp`, `k10temp`, `zenpower`, `cpu_thermal`,
+`acpitz`, Super I/O), so a warm NVMe never costs a thread. On a machine with no
+sensor at all it says so once and keeps the thread count it was given.
+
+For a laptop, a shared office box, or any rig whose owner would notice it
+breaking, this is the mode to run. It gives up a few percent of peak hashrate at
+20 °C and it does not spend the hot hours hardware-throttled at a rate it cannot
+control.
 
 ## What the image does that a normal distribution does not
 
@@ -106,7 +139,7 @@ Long uptime is not one feature, it is a chain of them:
 `zmrig-os doctor` prints every check the boot makes, with the value it found:
 
 ```
-  PASS  binary                 zmrig 6.34.0 - ZMRIG by @nggkhaiz
+  PASS  binary                 zmrig 6.35.0 - ZMRIG by @nggkhaiz
   PASS  wallet                 46SQLW7D...ysb5tJ
   PASS  memory                 32044 MB total, need 2400 MB
   PASS  hugepages              1168 x 2 MB reserved

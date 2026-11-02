@@ -8,11 +8,11 @@
 
 by **[@nggkhaiz](https://github.com/NggKhaiz)**
 
-[![release](https://img.shields.io/badge/release-6.34.0-f2763f)](CHANGELOG.md)
+[![release](https://img.shields.io/badge/release-6.35.0-f2763f)](CHANGELOG.md)
 [![licence](https://img.shields.io/badge/licence-GPL--3.0-blue)](LICENSE)
 [![dev fee](https://img.shields.io/badge/developer%20fee-1%25%20%C2%B7%20off%20switch-f2763f)](doc/FEE.md)
 [![platform](https://img.shields.io/badge/platform-Linux%20x86--64%20%C2%B7%20macOS%20%C2%B7%20Windows-lightgrey)](#build-from-source)
-[![tests](https://img.shields.io/badge/tests-12%20suites-46b17b)](#tests)
+[![tests](https://img.shields.io/badge/tests-14%20suites-46b17b)](#tests)
 [![stars](https://img.shields.io/github/stars/MoLik-Labs/ZMRIG?style=flat&color=f2763f)](https://github.com/MoLik-Labs/ZMRIG/stargazers)
 [![last commit](https://img.shields.io/github/last-commit/MoLik-Labs/ZMRIG)](https://github.com/MoLik-Labs/ZMRIG/commits/BETA)
 
@@ -75,16 +75,22 @@ they happen:
    installer detects the CPU, the RAM, the hypervisor and the battery, then picks
    the engine, the thread count, the huge-page strategy and the CPU governor,
    and prints the reason for each choice before it acts.
-3. **It tells you when it stops earning.** A miner whose pool rejects every
+3. **It mines without cooking the machine.** `--max-temp=72` arms a governor
+   that reads the hottest CPU sensor once a second and gives back threads as the
+   box warms, stops hashing above 87 °C, and climbs again once it is cool —
+   without rebuilding anything, because a parked thread keeps its VM and the
+   dataset stays in RAM. The appliance calls it `zmrig-os mode safe`.
+   [`doc/OS.md`](doc/OS.md#safe-the-machine-survives-the-mode).
+4. **It tells you when it stops earning.** A miner whose pool rejects every
    share looks perfectly healthy from outside. `zmrig` judges its own numbers
    once a second and exits so the supervisor can restart it — 20 seconds of
    lost hashrate instead of a night of zero.
-4. **A refusal is a decision, not a retry loop.** A banned IP, a wrong wallet,
+5. **A refusal is a decision, not a retry loop.** A banned IP, a wrong wallet,
    a rate limit: each is classified, each gets its own cooldown per pool, and
    reconnects are jittered so a rack of rebooting rigs does not arrive in the
    same millisecond. This is the difference between one bad evening and a
    permanent block.
-5. **One command that can be undone.** `purge --dry-run` lists every path the
+6. **One command that can be undone.** `purge --dry-run` lists every path the
    tool created, with sizes, before anything is deleted, and a test asserts it
    never touches a file it did not make.
 
@@ -108,6 +114,18 @@ the site are generated from one module, and `site/tests/pools.test.mjs` fails if
 that table ever disagrees with `oneclick.sh` or `doc/POOLS.md`. The step-by-step
 wizard it replaced was folded into that page; `web/wizard.html` now redirects
 into the documentation.
+
+A laptop, or a machine somebody else needs tomorrow:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MoLik-Labs/ZMRIG/BETA/oneclick.sh \
+  | sudo bash -s -- --wallet 4YourMoneroAddress --max-temp 70
+```
+
+`--max-temp` tells the miner the highest CPU temperature it may use. It gives
+back threads as the machine warms and stops above 85 °C until it cools, so the
+hours it would have spent hardware-throttled are spent at a rate it controls.
+[`doc/OS.md`](doc/OS.md#safe-the-machine-survives-the-mode) has the exact bands.
 
 ### Other coins
 
@@ -378,7 +396,7 @@ NOTICE                 attribution and upstream lineage
 
 ## Tests
 
-Twelve suites, no mocks where a socket will do. Run them all:
+Fourteen suites, no mocks where a socket will do. Run them all:
 
 ```bash
 sudo apt install -y build-essential cmake nodejs python3   # once
@@ -391,6 +409,7 @@ npm run test:site && npm run test:docs && npm run test:pages
 cd proxy && npm test
 cd .. && ./zmrig/tests/unit.sh && ./zmrig/tests/cli.sh && ./zmrig/tests/health.sh
 ./zmrig/tests/net.sh --soak
+./zmrig/tests/thermal.sh                   # the safe mode, ~2 min
 ```
 
 Each suite prints its own count when it runs, and the count in this table is
@@ -402,15 +421,16 @@ checks while two of the rows are wrong.
 | `web` `node --test legacy/tests/` | 57 | the archived site: wizard and builder produced the same command, pool table matched `oneclick.sh`, branch names, donation address |
 | `proxy` `npm test` | 60 | extranonce allocation, vardiff, real sockets, WebSocket rig, banned pool left alone |
 | `pool` `npm test` | 29 | PPLNS in BigInt, share verification, payouts, audit log, end-to-end with a real miner |
-| `zmrig/tests/unit.sh` | 18 modules | options, hashing, health, report codes, stratum parsing, proxy handshakes, and the per-algorithm memory rule |
+| `zmrig/tests/unit.sh` | 19 modules | options, hashing, health, report codes, stratum parsing, proxy handshakes, the per-algorithm memory rule, and the thermal governor's every edge |
 | `zmrig/tests/cli.sh` | 49 | flags, exit codes, `--help` covers the parser, `--check` reports the memory of the coin it was asked about and which huge-page mechanism backs it |
 | `zmrig/tests/net.sh` | 29 | TCP/TLS/WS/WSS against a fake pool, ban and refusal handling, failover, seed change |
 | `zmrig/tests/health.sh` | 7 | the watchdog, both directions: an honest pool is not a fault, an all-reject pool is |
-| `tests/oneclick/*.sh` | 63 | plan, config, governor, purge (removes only its own paths), branch switching, `--coin` mapping and the algorithm-name guard |
+| `tests/oneclick/*.sh` | 70 | plan, config, governor, purge (removes only its own paths), branch switching, `--coin` mapping and the algorithm-name guard |
 | `tests/docs/links.sh` | 90 | every relative link and every `#anchor` in the documentation resolves, including `/docs/…` site routes |
 | `site` `npm test` | 67 | command builder and its blocked states, calculator arithmetic against hand-computed numbers including break-even, pool table vs `oneclick.sh` and `doc/POOLS.md`, coin matrix and ranking (a missing number is never a zero, no invented pool or price), en/vi key parity and no dead or duplicated message |
 | `tests/docs/pages.sh` | 22 | the published site as Pages serves it: Docusaurus entry point, 23 sidebar pages in both locales, all 2494 local `href`/`src`, both sitemaps, language and theme controls, one localised social card per page, a title/description/lang on every page with no leaked placeholder, old-URL redirects, committed build not stale |
-| `os/tests/control.sh` | 66 | the appliance tool: wallet validation (length, base58 alphabet, prefix), a command line per mode, kernel-command-line overrides, the supervisor waiting for a wallet, and an updater that refuses a checksum mismatch — all with no root, no miner and no network |
+| `zmrig/tests/thermal.sh` | 10 | the safe mode against a real process and a real pool: cool is not throttled, heat sheds threads, one thread and hot stops hashing, cooling resumes, no sensor changes nothing |
+| `os/tests/control.sh` | 79 | the appliance tool: wallet validation (length, base58 alphabet, prefix), a command line per mode, kernel-command-line overrides, the supervisor waiting for a wallet, and an updater that refuses a checksum mismatch — all with no root, no miner and no network |
 
 ## Documentation
 
