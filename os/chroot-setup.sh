@@ -139,15 +139,20 @@ if grep -q '^tty1::' /etc/inittab 2>/dev/null; then
 fi
 
 # ---------------------------------------------------------------- accounts
-# doas rather than sudo: one binary, no PAM stack, and the only user is root.
-printf 'permit persist :wheel\n' > /etc/doas.d/doas.conf 2>/dev/null || true
-
+# No sudo, no doas: nothing in this image runs as anyone but root, and a
+# privilege-escalation config for a tool that is not installed is a line that
+# reads like a feature. The console is root on tty1 and OpenRC runs the rest.
 passwd -l root >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------- tidy
 # Nothing in the image should be able to pull a package at runtime: an appliance
 # that installs things is an appliance whose state nobody can reproduce.
-rm -rf /var/cache/apk/* /tmp/* 2>/dev/null || true
+#
+# /tmp/chroot-kver is this script's only output to the host, and it lives in the
+# directory being emptied, so `rm -rf /tmp/*` deleted it on the way out and the
+# caller failed with "No such file or directory" 200 lines later.
+rm -rf /var/cache/apk/* 2>/dev/null || true
+find /tmp -mindepth 1 -maxdepth 1 ! -name chroot-kver -exec rm -rf {} + 2>/dev/null || true
 mkdir -p /var/cache/apk
 
 mkdir -p /etc/zmrig

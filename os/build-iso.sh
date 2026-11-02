@@ -258,6 +258,8 @@ mount --bind /dev/pts "${ROOTFS}/dev/pts"
 chroot "$ROOTFS" /bin/sh /tmp/chroot-setup.sh "$KERNEL_PKG" "$CHANNEL" ||
     die "the chroot setup failed"
 
+[ -s "${ROOTFS}/tmp/chroot-kver" ] ||
+    die "the chroot did not record its kernel version (/tmp/chroot-kver is empty or missing)"
 KVER=$(cat "${ROOTFS}/tmp/chroot-kver")
 say "kernel modules ${KVER}"
 
