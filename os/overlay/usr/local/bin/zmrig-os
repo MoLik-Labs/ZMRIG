@@ -492,10 +492,14 @@ cmd_tune() {
         return 1
     fi
 
+    # THP is `always` for max and balanced, matching the GRUB entries: with the
+    # reserved pool the policy matters little, but when the reservation fails
+    # (too little RAM, a container) it is worth ~28 % and `madvise` is not
+    # enough for every mapping the miner creates.
     case "$MODE" in
         eco)   run "$tune" --profile watt --thp madvise --swappiness 10 ;;
         light) run "$tune" --hugepages off --thp always --swappiness 10 ;;
-        *)     run "$tune" --profile free --thp madvise --swappiness 1 ;;
+        *)     run "$tune" --profile free --thp always --swappiness 1 ;;
     esac
 }
 

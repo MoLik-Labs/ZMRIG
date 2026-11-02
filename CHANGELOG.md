@@ -1,4 +1,4 @@
-# Unreleased — ZMRIG OS: a miner you boot instead of install
+# 6.34.0 — ZMRIG OS: a miner you boot instead of install
 
 A rig should not be a general-purpose computer. `os/` now builds a bootable
 image — GRUB (BIOS and UEFI), a kernel, a 10 MB initramfs and a read-only Alpine
@@ -28,7 +28,7 @@ the whole installation.
   costs nothing measurable.
 - **A control tool instead of a hundred instructions** (`zmrig-os`, POSIX sh):
   `setup`, `mode`, `status`, `logs`, `bench`, `doctor`, `update`, `persist`,
-  `ssh-key`, `boot`, `args`. 53 tests, no root, no miner, no network.
+  `ssh-key`, `boot`, `args`. 66 tests, no root, no miner, no network.
 - **Four modes** — `max`, `balanced`, `eco`, `light` — as config, as a command
   (`zmrig-os mode eco`), and as separate GRUB entries so a headless rig can be
   switched with a keyboard and no network.
@@ -58,7 +58,7 @@ the whole installation.
   and a per-architecture manifest for the updater. Releases keep every past
   version; `BETA` publishes a rolling pre-release.
 
-# Unreleased — the fee is real, visible, and switchable off
+# 6.33.0 — the fee is real, visible, and switchable off
 
 The miner was fee-free by construction, which was easy to verify and impossible
 to fund. `zmrig` now mines **1 % of its Monero time** to the developer wallet on
@@ -95,7 +95,7 @@ and `--donate-level=0` removes it entirely.
   `login … user=46SQLW7D…` (fee), `login … user=4AdUnd…` (back), with the debt
   spent exactly.
 
-# Unreleased — huge pages, measured instead of assumed
+## huge pages, measured instead of assumed
 
 The miner used to treat "no reserved huge pages" as "4 KiB pages", and tell
 unprivileged users to take a root action they did not need. It also built the
@@ -145,7 +145,7 @@ from `site/tools/make-logo.py`: `logo.svg`, `logo-dark.svg`, `favicon.svg`, thre
 PNGs and the social cards. Diagonal cut thinner than the bars, two corners
 chamfered on that axis, symmetric under a 180° rotation.
 
-# Unreleased — every coin sized and tuned for itself
+## every coin sized and tuned for itself
 
 Both engines hashed seven coins; only Monero decided how much memory they used.
 The miner reserved 2416 MB of huge pages, refused to start without them and fell
@@ -214,7 +214,7 @@ light mode on that coin crash.
   Light pages get black, dark pages get white, the favicon follows
   `prefers-color-scheme`.
 
-# Unreleased — seven coins, one installer
+## seven coins, one installer
 
 Monero was the only coin the site offered, while both engines hashed six more the
 whole time. The installer, the builder, the wizard and the calculator now cover
@@ -260,7 +260,7 @@ pretend about the rest.
 - **The builder documents its coin rule** (en + vi); the calculator page explains
   the comparison and links to the coin page.
 
-# Unreleased — the documentation site is the site
+## the documentation site is the site
 
 `https://nggkhaiz.github.io/ZMRIG/` used to serve the hand-written site in
 `web/`. It now serves the Docusaurus build, at the same URL, with the same
@@ -314,7 +314,7 @@ content in both languages. No binary changed.
   checks that guard branch names, the donation address and the pool table are
   still cheap and still true.
 
-# Unreleased — the documentation site
+## the documentation site
 
 The site is no longer hand-written HTML. It is Docusaurus 3, in `site/`, with
 21 pages in English and 21 in Vietnamese, and the three calculators live inside
