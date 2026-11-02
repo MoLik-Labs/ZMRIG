@@ -10,6 +10,7 @@ const gate = require('./gate');
 const commands = require('./commands');
 const alerts = require('./alerts');
 const httpApi = require('./http');
+const { Releases } = require('./releases');
 const { Telegram } = require('./telegram');
 const { Discord } = require('./discord');
 const format = require('./format');
@@ -29,6 +30,9 @@ function build(env = process.env) {
   const config = configLoader.load(env);
   const store = new Store(config.state).load();
   const log = makeLog(config.quiet);
+  // GitHub releases, cached: the download page asks for them on every visit and
+  // the answer changes a few times a week.
+  const releases = new Releases({ log });
 
   const platform = {
     telegram: config.telegram_token ? new Telegram({ token: config.telegram_token, log }) : null,
@@ -91,7 +95,7 @@ function build(env = process.env) {
     onCallback: (payload) => reply(commands.press, payload, { store, config }),
   };
 
-  return { config, store, log, platform, handlers, broadcast, onEvent, limiter };
+  return { config, store, log, platform, handlers, broadcast, onEvent, limiter, releases };
 }
 
 function start(env = process.env) {
@@ -107,10 +111,11 @@ function start(env = process.env) {
   }
 
   const app = build(env);
-  const { server } = httpApi.createServer({
+  const { server, web } = httpApi.createServer({
     config: app.config,
     store: app.store,
     log: app.log,
+    releases: app.releases,
     onEvent: app.onEvent,
   });
 
@@ -120,6 +125,7 @@ function start(env = process.env) {
     app.log(`rigs     ${app.store.devices().filter((device) => device.owner).length} enrolled`);
     app.log(`admins   ${config.admins.join(' ') || 'none'}`);
     app.log(`interval ${config.interval}s, offline after ${config.offline_after}s`);
+    app.log(`web      ${web ? 'enabled at /' : 'off (no FLEET_WEB_PASSWORD)'}`);
   });
 
   server.on('error', (error) => {
@@ -172,6 +178,7 @@ function check(env = process.env) {
   process.stdout.write(`state      ${path.resolve(config.state)}\n`);
   process.stdout.write(`rigs       ${devices.filter((device) => device.owner).length} enrolled, ${devices.length} known\n`);
   process.stdout.write(`interval   ${config.interval}s\n`);
+  process.stdout.write(`web        ${config.web_password ? 'enabled' : 'off (FLEET_WEB_PASSWORD unset)'}\n`);
   process.stdout.write(`total      ${format.hashrate(devices.reduce((sum, device) => sum + (Number(device.status && device.status.hashrate) || 0), 0))}\n`);
 
   for (const warning of warnings) process.stdout.write(`warning    ${warning}\n`);

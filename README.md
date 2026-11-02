@@ -8,11 +8,11 @@
 
 by **[@nggkhaiz](https://github.com/NggKhaiz)**
 
-[![release](https://img.shields.io/badge/release-6.37.0-f2763f)](CHANGELOG.md)
+[![release](https://img.shields.io/badge/release-6.38.0-f2763f)](CHANGELOG.md)
 [![licence](https://img.shields.io/badge/licence-GPL--3.0-blue)](LICENSE)
 [![dev fee](https://img.shields.io/badge/developer%20fee-1%25%20%C2%B7%20off%20switch-f2763f)](doc/FEE.md)
 [![platform](https://img.shields.io/badge/platform-Linux%20x86--64%20%C2%B7%20macOS%20%C2%B7%20Windows-lightgrey)](#build-from-source)
-[![tests](https://img.shields.io/badge/tests-16%20suites-46b17b)](#tests)
+[![tests](https://img.shields.io/badge/tests-17%20suites-46b17b)](#tests)
 [![stars](https://img.shields.io/github/stars/MoLik-Labs/ZMRIG?style=flat&color=f2763f)](https://github.com/MoLik-Labs/ZMRIG/stargazers)
 [![last commit](https://img.shields.io/github/last-commit/MoLik-Labs/ZMRIG)](https://github.com/MoLik-Labs/ZMRIG/commits/BETA)
 
@@ -30,8 +30,9 @@ ZMRIG is a complete Monero mining setup, not a loose collection of scripts:
 | **Proxy** — `proxy/` | One pool connection for a farm: extranonce per rig, per-rig difficulty, tunnels for rigs in another building | free |
 | **Pool** — `pool/`, `worker/`, `deploy/` | Self-hosted Monero pool: stratum over TCP and WebSocket, PPLNS, every share re-hashed before it is paid | 1 % of each block, and nothing else |
 | **Image** — `os/` | A bootable ZMRIG OS: kernel, read-only Alpine root, `zmrig`, a wallet wizard, four hashrate modes, verified updates, and CI that rebuilds the ISO on every change | free |
-| **Fleet** — `fleet/` | Telegram and Discord control: enrol a rig by its Device ID, then set the wallet, pool, coin and mode from a chat, with alerts when one goes quiet | free, self-hosted |
+| **Fleet** — `fleet/` | Telegram and Discord control, plus a one-password browser dashboard: enrol a rig by its Device ID, then set the wallet, pool, coin and mode from a chat or a phone, with alerts when one goes quiet | free, self-hosted |
 | **Docs** — `site/` | Docusaurus site: command builder, profitability calculator, pool table, every guide — English and Vietnamese | free to host |
+| **Web host** — `serve/` | The same documentation, a download page built from the releases API, a JSON feed and three links that always point at the newest image — one Node process, no dependencies | free to host |
 
 Point the miner at any pool. If you point it at the pool in this repository,
 the 1 % fee is what keeps the project alive; the miner itself takes nothing
@@ -367,11 +368,51 @@ cd fleet && cp config.example.env .env    # TELEGRAM_BOT_TOKEN, FLEET_ADMIN_IDS
 set -a; . ./.env; set +a; npm start
 ```
 
+Prefer a page to a chat? Set `FLEET_WEB_PASSWORD` and the same fleet is a
+server-rendered dashboard on the same port — fleet total, one row per rig, per-rig
+controls, enrolment, and a download page for the ISO. One password, no accounts,
+CSRF on every form, Brotli plus `ETag`/`304`. Clear the variable and the bot runs
+exactly as before with no HTML surface at all.
+
 Rig side, once: `zmrig-os fleet --url https://your-fleet` — or
 `zmrig.os.fleet=https://your-fleet` on the kernel command line for a stick that
 boots a hundred machines. [`doc/FLEET.md`](doc/FLEET.md) is the operator manual
-and [the site](https://molik-labs.github.io/ZMRIG/docs/fleet/telegram) is the
+and [the site](https://molik-labs.github.io/ZMRIG/docs/fleet/dashboard) is the
 short version.
+
+---
+
+## Downloads that do not rot
+
+The image is published by CI: every push that touches `os/` builds it, and a push
+to `master` or a tag publishes it with its checksum and the manifest
+`zmrig-os update` reads. The release job then asks GitHub for every asset it just
+uploaded and fails if one does not answer, so a broken link is a red build, not a
+support question.
+
+`serve/` puts a stable name in front of all of that:
+
+```
+https://<your-host>/iso/v3      -> the newest x86-64-v3 image
+https://<your-host>/iso/v2      -> the newest x86-64-v2 image
+https://<your-host>/iso/beta    -> the rolling beta
+https://<your-host>/download    -> both channels, sizes, checksums, dd line
+https://<your-host>/api/releases.json
+```
+
+Those redirects read the release feed, cached for ten minutes, so they never need
+a redeploy when a version changes. The same process also serves this
+documentation, so a single Render service gives you the docs, the download page
+and the permanent links:
+
+```bash
+cd serve && npm start          # reads site/build, port 8080
+```
+
+It holds every file in memory at boot — 238 routes, 6.3 MB, 1.6 MB compressed — so
+a page is a Map lookup and one `write`, with Brotli, `ETag` and `304`. Measured on
+a 2 vCPU machine: 0.25 ms p50 for the home page, 0.19 ms for a docs page. The
+blueprint is in `render.yaml`, the details in [`doc/WEB.md`](doc/WEB.md).
 
 ---
 
@@ -434,6 +475,8 @@ os/                    the bootable image (initramfs init, Alpine chroot, zmrig-
 src/                   the C++ miner (XMRig 6.26.0, donation code removed)
 proxy/                 one pool connection for a farm (node, no dependencies)
 fleet/                 Telegram/Discord control plane for rigs (node, no dependencies)
+serve/                 web host: the docs, /download, /api/releases.json, /iso/* links
+lib/                   code both Node services share (the GitHub releases client)
 pool/                  self-hosted Monero pool (node, no dependencies)
   worker/              Cloudflare Worker: WebSocket -> TCP bridge
 site/                  documentation site (Docusaurus, en + vi) — the only site now
@@ -448,7 +491,7 @@ NOTICE                 attribution and upstream lineage
 
 ## Tests
 
-Sixteen suites, no mocks where a socket will do. Run them all:
+Seventeen suites, no mocks where a socket will do. Run them all:
 
 ```bash
 sudo apt install -y build-essential cmake nodejs python3   # once
@@ -461,6 +504,8 @@ npm run test:web && npm run test:pool && npm run test:oneclick
 npm run test:site && npm run test:docs && npm run test:pages
 cd proxy && npm test
 cd fleet && npm test && cd ..
+cd serve && npm test && cd ..
+./tests/releases/latest-iso.test.sh        # the download helper, against a recorded API reply
 cd .. && ./zmrig/tests/unit.sh && ./zmrig/tests/cli.sh && ./zmrig/tests/health.sh
 ./zmrig/tests/net.sh --soak
 ./zmrig/tests/thermal.sh                   # the safe mode, ~2 min
@@ -480,11 +525,13 @@ checks while two of the rows are wrong.
 | `zmrig/tests/net.sh` | 29 | TCP/TLS/WS/WSS against a fake pool, ban and refusal handling, failover, seed change |
 | `zmrig/tests/health.sh` | 7 | the watchdog, both directions: an honest pool is not a fault, an all-reject pool is |
 | `tests/oneclick/*.sh` | 70 | plan, config, governor, purge (removes only its own paths), branch switching, `--coin` mapping and the algorithm-name guard |
-| `fleet` `npm test` | 42 | the control plane without a token: Device ID derivation, the store's atomic writes and corrupt-file rescue, enrolment rules, every command's validation and refusals, the HTTP protocol end to end, the Telegram and Discord renderers, and configuration that refuses to start half-done |
+| `fleet` `npm test` | 58 | the control plane without a token: Device ID derivation, the store's atomic writes and corrupt-file rescue, enrolment rules, every command's validation and refusals, the HTTP protocol end to end, the Telegram and Discord renderers, configuration that refuses to start half-done, and the dashboard — login and throttling, CSRF refusal, queued actions, escaping, Brotli/`ETag`/`304`, and a GitHub releases call that fails without taking the page down |
+| `tests/releases/latest-iso.test.sh` | 17 | the download helper against a recorded GitHub reply: asset selection by CPU variant, `--beta`, `--json`, a checksum that travels with the image, and an API that is down |
+| `serve` `npm test` | 39 | the web host over a real socket: the file table, byte-for-byte negotiation, the 304 path, traversal attempts, HTML escaping of everything GitHub returns (including a `javascript:` asset URL), the three permanent redirects, a release feed that fails, and the process booting and stopping on SIGTERM |
 | `os/tests/fleet.sh` | 26 | the shell agent against that real server: key generation and stability, a wallet applied to `os.conf` and acknowledged, a bad wallet refused with nothing written, stop on a real process, a log request round trip, pacing, and an unreachable server that is not an error |
-| `tests/docs/links.sh` | 96 | every relative link and every `#anchor` in the documentation resolves, including `/docs/…` site routes |
+| `tests/docs/links.sh` | 97 | every relative link and every `#anchor` in the documentation resolves, including `/docs/…` site routes |
 | `site` `npm test` | 67 | command builder and its blocked states, calculator arithmetic against hand-computed numbers including break-even, pool table vs `oneclick.sh` and `doc/POOLS.md`, coin matrix and ranking (a missing number is never a zero, no invented pool or price), en/vi key parity and no dead or duplicated message |
-| `tests/docs/pages.sh` | 22 | the published site as Pages serves it: Docusaurus entry point, 24 sidebar pages in both locales, all 2494 local `href`/`src`, both sitemaps, language and theme controls, one localised social card per page, a title/description/lang on every page with no leaked placeholder, old-URL redirects, committed build not stale |
+| `tests/docs/pages.sh` | 22 | the published site as Pages serves it: Docusaurus entry point, 26 sidebar pages in both locales, all 2808 local `href`/`src`, both sitemaps, language and theme controls, one localised social card per page, a title/description/lang on every page with no leaked placeholder, old-URL redirects, committed build not stale |
 | `zmrig/tests/thermal.sh` | 10 | the safe mode against a real process and a real pool: cool is not throttled, heat sheds threads, one thread and hot stops hashing, cooling resumes, no sensor changes nothing |
 | `os/tests/control.sh` | 141 | the appliance tool: wallet validation (length, base58 alphabet, prefix), a command line per mode, kernel-command-line overrides, the supervisor waiting for a wallet, an updater that refuses a checksum mismatch, the installer's partition table and its refusals, A/B slot arithmetic and the 1024-byte GRUB environment block — all with no root, no miner, no disk and no network |
 
@@ -507,6 +554,9 @@ checks while two of the rows are wrong.
 * [`doc/FLEET.md`](doc/FLEET.md) — the control plane: making the bot, hosting it,
   every environment variable, the wire format, what the Device ID is and is not,
   and the troubleshooting table.
+* [`doc/WEB.md`](doc/WEB.md) — the web host: `serve/`, the Render blueprint,
+  every endpoint and environment variable, why a request costs a Map lookup, and
+  the measured latency numbers.
 * [`doc/PERFORMANCE.md`](doc/PERFORMANCE.md) · [`doc/BENCHMARKS.md`](doc/BENCHMARKS.md)
   — every lever that affects hashrate, with the measurements.
 * [`doc/POOLS.md`](doc/POOLS.md) — pool fees and policies, and how to keep

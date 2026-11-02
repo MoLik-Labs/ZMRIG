@@ -29,6 +29,11 @@ on:
       - 'zmrig/**'
       - 'scripts/tune-linux.sh'
       - '.github/workflows/os.yml'
+  # A weekly rebuild, because the image resolves `latest-stable` Alpine and a
+  # kernel that disappears upstream should break a scheduled build rather than a
+  # user's first boot. It only publishes from master; see the `publish` job.
+  schedule:
+    - cron: '17 4 * * 1'
   pull_request:
     paths:
       - 'os/**'
@@ -199,10 +204,19 @@ jobs:
   publish:
     name: Publish the images
     needs: iso
+    # A push to master publishes the release for the version in the source, and
+    # a push to BETA updates the rolling pre-release. Both replace their assets
+    # in place (--clobber), so the download link for a version never goes stale
+    # and nobody has to cut a tag to get an image to test. The header of this
+    # file claimed that was already true; it was not - only tags and a manual run
+    # with publish=true ever reached this job, so an ordinary merge built an
+    # image, uploaded an artifact that expires in 14 days, and published nothing.
     if: |
       github.event_name != 'pull_request' && (
         (github.event_name == 'workflow_dispatch' && inputs.publish) ||
-        startsWith(github.ref, 'refs/tags/v')
+        startsWith(github.ref, 'refs/tags/v') ||
+        github.ref == 'refs/heads/master' ||
+        github.ref == 'refs/heads/BETA'
       )
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -286,9 +300,112 @@ jobs:
             cp "$meta" "dist/zmrig-os-${CHANNEL}-${arch}.json"
           done
 
-          gh release upload "$TAG" \
-            dist/*.iso dist/*.iso.sha256 dist/zmrig-os-*-*.json \
-            --clobber
+          # Only the channel manifests are re-uploaded: a bare
+          # `dist/zmrig-os-*-*.json` also matches `*.iso.json`, which would
+          # upload every manifest twice under two names. `ls` is used instead of
+          # globs directly so a channel that was not built in this run (a beta
+          # dispatch has no stable manifest) does not turn into a literal
+          # filename handed to `gh`.
+          files=$(ls dist/*.iso dist/*.iso.sha256 \
+                       dist/zmrig-os-stable-*.json dist/zmrig-os-beta-*.json 2>/dev/null || true)
+          if [ -z "$files" ]; then
+            echo "::error title=Nothing to upload::the build produced no images"
+            exit 1
+          fi
+
+          # shellcheck disable=SC2086
+          gh release upload "$TAG" $files --clobber
+
+      # A release is only a release if the link works. This asks GitHub for
+      # every asset over HTTPS, the same way a user does, and fails the job when
+      # one is missing -- otherwise the first person to notice is somebody
+      # following the download link in the docs.
+      - name: Verify every download link
+        run: |
+          set -u
+          TAG="${{ steps.tag.outputs.tag }}"
+          bad=0
+
+          for iso in dist/*.iso; do
+            name=$(basename "$iso")
+            url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${name}"
+            code=$(curl -sIL -o /dev/null -w '%{http_code}' "$url" || echo 000)
+            size=$(curl -sIL "$url" | tr -d '\r' | awk 'BEGIN{IGNORECASE=1} /^content-length:/{v=$2} END{print v+0}')
+            local_size=$(stat -c %s "$iso")
+            if [ "$code" != "200" ]; then
+              echo "::error title=Missing release asset::$name answered $code"
+              bad=1
+            elif [ "$size" != "$local_size" ]; then
+              # GitHub occasionally reports the compressed transfer size for
+              # HEAD; report it, but do not fail a release over it.
+              echo "note: $name is $local_size bytes locally, $size over the wire"
+            else
+              echo "ok   $name -> $code, $size bytes"
+            fi
+          done
+
+          for manifest in $(ls dist/zmrig-os-stable-*.json dist/zmrig-os-beta-*.json 2>/dev/null || true); do
+            name=$(basename "$manifest")
+            url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${name}"
+            code=$(curl -sIL -o /dev/null -w '%{http_code}' "$url" || echo 000)
+            [ "$code" = "200" ] || { echo "::error title=Missing manifest::$name answered $code"; bad=1; }
+          done
+
+          exit "$bad"
+
+      # The release notes are written twice on purpose: before the upload they
+      # say what the image is, and after it they say where it is. A note with a
+      # link in it that 404s is worse than no note at all, which is why this runs
+      # after the step above.
+      - name: Put the download links in the release notes
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          NOTES=$(mktemp)
+
+          {
+            printf 'Bootable ZMRIG OS image, built from `%s`.\n\n' "${GITHUB_SHA:0:8}"
+            cat <<'EOF'
+          Write it to a stick and boot it:
+
+          ```
+          dd if=zmrig-os-*.iso of=/dev/sdX bs=4M status=progress conv=fsync
+          ```
+
+          The wizard asks for your wallet on the console on the first boot, or
+          pass `zmrig.os.wallet=4...` on the kernel command line. Nothing is
+          installed to any disk, and nothing on the stick is modified.
+
+          x86-64-v3 needs AVX2 (any x86 CPU since about 2015); x86-64-v2 runs on
+          everything since Nehalem. The `.json` next to each image is the
+          manifest `zmrig-os update` reads.
+          EOF
+            echo
+            echo '## Downloads'
+            echo
+            echo '| image | size | sha256 |'
+            echo '| --- | ---: | --- |'
+            for iso in dist/*.iso; do
+              name=$(basename "$iso")
+              sum=$(cut -d' ' -f1 "$iso.sha256")
+              echo "| [$name](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${name}) | $(du -h "$iso" | cut -f1) | \`$sum\` |"
+            done
+            echo
+            # `releases/latest` follows the newest *stable* release, so on the
+            # rolling beta tag that URL would point somewhere else entirely.
+            if [ "${{ steps.tag.outputs.prerelease }}" != "true" ]; then
+              echo 'This release is the newest stable one, so these URLs always'
+              echo 'work without knowing the version:'
+              echo
+              for iso in dist/*.iso; do
+                echo "<https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/$(basename "$iso")>"
+              done
+              echo
+            fi
+            echo 'Or serve them from your own host — `serve/` redirects `/iso/v3`,'
+            echo '`/iso/v2` and `/iso/beta` to the newest asset on each channel.'
+          } > "$NOTES"
+
+          gh release edit "$TAG" --notes-file "$NOTES"
 
       - name: Summarise
         run: |

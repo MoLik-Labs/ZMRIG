@@ -1,3 +1,99 @@
+# 6.38.0 — a web host that serves the docs and the downloads, and releases that are links
+
+Two conveniences that were missing from 6.37.0: the site and the images now live
+on a host you control, and the release job proves its own links work before
+anybody clicks one.
+
+## `serve/` — the web host
+
+One Node process, no dependencies, no build step of its own. It serves the
+documentation Docusaurus produces, a download page built from the GitHub releases
+API, that data as JSON, and three links that never change:
+
+| path | |
+| --- | --- |
+| `/` · `/vi/` | the documentation, in both locales |
+| `/download` | stable and beta, sizes, checksums, `dd` and `sha256sum` |
+| `/api/releases.json` | the same data for a script |
+| `/iso/v3` `/iso/v2` `/iso/beta` | `302` to the newest asset on that channel |
+| `/healthz` | file count, bytes, RSS, uptime |
+
+That last group is the point: a Ventoy menu, a shell script or a note stuck to a
+rig can name `/iso/v3` for a year and keep landing on the current image.
+
+`render.yaml` gained a second service for it. The build compiles the documentation
+with `SITE_BASE_URL=/` (the host serves from its own root, not from `/ZMRIG/`),
+writes the Brotli and gzip copies once, and starts the server. No secret, no
+database, no dependency install for the server itself.
+
+### Why it is fast
+
+Every file is read into memory at boot — 238 routes, 6.31 MB, 1.63 MB compressed —
+so a request is a Map lookup and one `end()`: no `stat`, no `open`, no `readdir`.
+`ETag` on everything, and a conditional request is answered `304` before the body
+is touched. Fingerprinted assets are `immutable` for a year; HTML revalidates.
+Brotli takes the home page from 16 KB to 3.9 KB. The release feed is fetched once
+per ten minutes and the rendered page is cached against it.
+
+Measured here (2 vCPU, keep-alive, warm cache, 300 samples):
+
+| path | p50 | p95 |
+| --- | ---: | ---: |
+| `/` | 0.25 ms | 0.81 ms |
+| `/docs/intro` | 0.19 ms | 0.34 ms |
+| a fingerprinted asset | 0.35 ms | 0.63 ms |
+| eight at a time | 0.89 ms | 4.92 ms |
+
+Nothing has been measured on Render itself; a different CPU and a real network sit
+between these numbers and a user.
+
+When GitHub cannot be reached the page says so, keeps the last known links, and
+`/iso/*` answers `404` instead of redirecting into nothing. Nothing 500s because a
+third party is down.
+
+## Releases that are links
+
+The publish job already uploaded the images. Three things were wrong or missing:
+
+* the channel manifests were uploaded with a glob (`dist/zmrig-os-*-*.json`) that
+  also matched every `*.iso.json`, so each manifest was uploaded twice under two
+  names;
+* nothing checked that the asset URLs actually answered, so a broken upload was
+  discovered by the first person to follow the docs;
+* the release notes said what the image was, not where it was.
+
+Now the job asks GitHub for every asset over HTTPS after uploading and fails when
+one is missing or the size disagrees, and it rewrites the release notes with a
+table of direct links and checksums, plus the `releases/latest/download/...` URLs
+on stable releases (never on the rolling beta, where `latest` points somewhere
+else).
+
+## Shared release client
+
+`fleet/src/releases.js` and the host needed the same answers, so the client moved
+to `lib/releases.js`; `fleet/` re-exports it and nothing on that side changed. One
+fix came with the move: a first failure used to be reported as an empty feed
+rather than "GitHub could not be reached", which made a download page claim
+nothing had been published.
+
+## Measured
+
+| | |
+| --- | ---: |
+| `serve` `npm test` | 39 passed |
+| `fleet` `npm test` | 58 passed |
+| `site` `npm test` | 67 passed |
+| `tests/docs/pages.sh` | 22 passed (26 sidebar pages, 2808 local links) |
+| `tests/docs/links.sh` | 97 passed |
+| `tests/docs/identity.sh` | 25 passed |
+| `os/tests/control.sh` | 141 passed |
+| `os/tests/fleet.sh` | 26 passed |
+
+The CI site job now also builds the documentation for the web host's base URL and
+serves it, so a configuration that only works on GitHub Pages fails a pull request
+rather than a deploy. The Telegram and Discord network paths are still the only
+parts not exercised here: there is no token and no route to those hosts.
+
 # 6.37.0 — a bot that enrols a rig by the ID on its console
 
 The complaint this answers is "every machine needs its wallet typed in, and I
@@ -53,18 +149,49 @@ The agent validates every instruction again on the machine — a wallet that fai
 `zmrig-os`'s own validator is refused there, nothing is written, and the refusal
 is reported — so the bot is a convenience, not the security boundary.
 
+## The same fleet in a browser
+
+Not everybody wants to configure a farm from a chat window. Set
+`FLEET_WEB_PASSWORD` and the fleet is a server-rendered dashboard on the same
+port: fleet totals, one row per rig, per-rig controls, enrolment with your URL
+already filled in, and a downloads page. Clear the variable and the bot runs
+exactly as before with no HTML surface at all.
+
+One password, no accounts, no directory of users to leak. The password is
+compared with `timingSafeEqual`, ten failed logins from one address in fifteen
+minutes is a `429`, every form carries a session-bound CSRF token, the cookie is
+`HttpOnly`/`SameSite=Lax`, and the CSP is `default-src 'none'`. Actions are the
+same *queued* instructions the bot sends, so a browser cannot push anything a rig
+would not also accept from the chat.
+
+It is cheap: pages are cached in memory against the store's revision, 6.4 KB of
+CSS and under 1 KB of JS are served `immutable` and cached for a year, and every
+page over 768 bytes is Brotli- or gzip-compressed behind a weak `ETag` that
+answers `304 Not Modified` when nothing moved.
+
+## An image without the bot
+
+`scripts/latest-iso.sh` asks the releases API and downloads the current image for
+the machine's CPU: `--arch v3`, `--beta`, `--json`. It prints the checksum and the
+size and leaves the comparison to `sha256sum -c`. The dashboard's `/downloads`
+page shows the same table, and both exist so that nobody has to set up a bot to
+get an ISO.
+
 ## Measured
 
 | | |
 | --- | ---: |
-| `fleet` `npm test` | 42 passed |
+| `fleet` `npm test` | 58 passed (was 42) |
 | `os/tests/fleet.sh` (shell agent against the real server) | 26 passed |
+| `tests/releases/latest-iso.test.sh` | 17 passed |
 | `os/tests/control.sh` | 141 passed (was 126) |
 
-Neither the Telegram nor the Discord network path is exercised in this
-environment (no token, and outbound calls to those hosts are not available here);
-what is tested is everything on both sides of the socket: the handlers, the
-renderers, the protocol, and the agent.
+The Telegram and Discord network paths are not exercised in this environment (no
+token, and outbound calls to those hosts are not available here); what is tested
+is everything on both sides of the socket: the handlers, the renderers, the
+protocol and the agent. The dashboard is tested over a real socket, including
+compression, `304`, the CSRF refusal and the login throttle. The GitHub releases
+call is tested against a recorded reply, and against GitHub being unreachable.
 
 # 6.36.0 — the image installs itself, updates itself, and fits in less RAM
 

@@ -86,7 +86,16 @@ npm run check                   # what the environment says, no socket opened
 ```
 
 On [Render](https://render.com): *New → Blueprint*, pick this repository, and
-choose `fleet/render.yaml`. Render asks for the four secrets.
+choose `fleet/render.yaml`. Render asks for the secrets it needs — the two bot
+tokens, your admin ids, and `FLEET_WEB_PASSWORD` if you want the dashboard.
+
+### The dashboard (optional)
+
+Set `FLEET_WEB_PASSWORD` (twelve characters or more) and the same process serves a
+server-rendered dashboard: fleet totals, per-rig controls, enrolment, and the
+current ISO with its checksum. One password, no accounts; leave the variable
+empty and no HTML exists at all. `doc/FLEET.md` §3 walks through every page, and
+the same page on the site is `docs/fleet/dashboard`.
 
 A free instance **sleeps after 15 minutes without traffic**, and a sleeping bot
 does not answer. Either point a free uptime pinger at `https://<service>/healthz`
@@ -128,13 +137,17 @@ Then `zmrig-os id` prints the ID and the code, and `/enroll` does the rest.
 ## Tests
 
 ```bash
-npm test                        # 42: identity, store, commands, HTTP, rendering
+npm test                        # 58: identity, store, commands, HTTP, dashboard, rendering
 bash ../os/tests/fleet.sh       # 26: the shell agent against this server
 ```
 
 `os/tests/fleet.sh` starts this server on loopback with a test-only control port
 and drives the real `zmrig-os`, including the refusals: a bad wallet is refused
 and nothing is written, an unknown mode is refused, a failed command is reported.
+
+`npm test` also drives the dashboard over a real socket — login throttle, CSRF
+refusal, queued actions, escaping, Brotli, `ETag`/`304`, and a GitHub releases
+call that fails without taking `/downloads` down.
 
 ## Layout
 
@@ -149,4 +162,6 @@ fleet/
   src/telegram.js    long polling, HTML rendering, inline keyboards
   src/discord.js     gateway, buttons, DMs, no dependency
   src/index.js       wiring, permissions, rate limits, shutdown
+  src/releases.js    GitHub releases, cached, never throws
+  src/web/           the optional dashboard: router, pages, session, theme
 ```

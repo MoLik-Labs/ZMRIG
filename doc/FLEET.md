@@ -2,7 +2,7 @@
 
 This is the page for somebody who has more than one rig, or one rig they do not
 want to walk over to. It covers making the bot, hosting it, pointing rigs at it,
-and what it can and cannot do.
+the browser dashboard that comes with it, and what it can and cannot do.
 
 Everything here is optional. A rig with no `FLEET_URL` behaves exactly as it did
 before: it mines and it never contacts anything.
@@ -75,12 +75,15 @@ npm start
 ```
 
 The service listens on `PORT`, answers `GET /healthz`, serves a read-only status
-page at `/`, and accepts rigs at `POST /v1/hello`.
+page at `/` (or the dashboard, if you set a password — §3), and accepts rigs at
+`POST /v1/hello`.
 
 ### Render
 
 `fleet/render.yaml` is a blueprint: *New → Blueprint* in Render, pick the
-repository, choose that file, and it asks for the four secrets.
+repository, choose that file, and it asks for the secrets it needs — they are
+marked `sync: false`, so they are typed into Render once and never read from the
+repository.
 
 Two things the free plan does that matter:
 
@@ -114,11 +117,91 @@ Any other host works the same way: Node 20+, one port, two environment variables
 | `FLEET_ALERT_COOLDOWN` | `1800` | seconds before the same rig may repeat an alert |
 | `FLEET_RATE_LIMIT` | `30` | commands per window per operator |
 | `FLEET_QUEUE_LIMIT` | `10` | instructions a rig may have waiting |
+| `FLEET_WEB_PASSWORD` | - | password for the browser dashboard; empty means no dashboard |
 
 With no admin id the process refuses to start: a bot nobody owns would accept
 commands from an Internet stranger.
 
-## 3. Point a rig at it
+## 3. The browser dashboard
+
+The bot is the fast path. The dashboard is the one you can hand to a laptop, a
+phone, or somebody who is not in your chat: same fleet, same commands, rendered
+as a page. It is off until you give it a password.
+
+```bash
+FLEET_WEB_PASSWORD='at-least-twelve-characters'
+```
+
+With that set, `GET /` is the overview instead of the read-only status page.
+With it empty, nothing HTML exists — `/` stays the old public page and every
+dashboard path is a 404. There are no accounts, no email addresses, no invites:
+**one password, one operator**. Rigs enrolled in the browser are attributed to
+the primary chat admin, so the bot and the page see the same fleet.
+
+| path | |
+| --- | --- |
+| `/` | fleet total: hashrate, rigs mining, offline count, hottest, and what needs attention |
+| `/rigs` | one row per machine: state, hashrate, temperature, last seen |
+| `/rig/<id>` | everything about one rig, plus its controls |
+| `/enrol` | the three-step enrolment, with your URL already filled in |
+| `/downloads` | the current ISO and the checksum file, straight from the releases API |
+| `/docs` | the commands it accepts, for reference |
+
+What a rig page can do is what the bot can do: **Start, Stop, Restart, Update,
+Fetch log, Reboot**, a wallet-and-pool form, a coin/mode/heat-cap/threads/worker
+form, and rename. Everything is *queued*: the rig applies it on the next
+check-in — 60 seconds by default — and reports the result back to the page and to
+the chat. Nothing is pushed down a live connection, so a dashboard click cannot
+wedge a miner mid-share.
+
+Two details worth knowing:
+
+* An empty wallet or pool field means **leave it alone**, never "clear it". The
+  only way to change a wallet is to type a different one.
+* Enrolling from the browser ties the rig to the primary chat admin, not to
+  "the web", so `/devices` in Telegram still lists everything you own.
+
+It is server-rendered HTML with 5.3 KB of CSS and under 1 KB of JS, both cached
+by the browser for a year (`immutable`). Pages are compressed with Brotli or gzip
+when the browser asks for it and the page is over 512 bytes, carry an ETag,
+and answer `304 Not Modified` when the fleet has not changed — a phone on mobile
+data refreshes the fleet for a few hundred bytes. A rendered page is cached in
+memory and rebuilt only when the store's revision counter moves, so a refresh
+with no new check-ins never touches the templating code at all.
+
+Security, in the order it matters:
+
+* the password is compared with `timingSafeEqual` against `FLEET_WEB_PASSWORD`;
+* ten failed logins from one address in fifteen minutes ⇒ `429` for that address;
+* every form carries a CSRF token bound to the session; a form without one is
+  `403` and does nothing;
+* the session cookie is `HttpOnly`, `SameSite=Lax`, seven days, and `Secure` when
+  the request arrived over HTTPS;
+* `Content-Security-Policy: default-src 'none'` — no third-party script, font,
+  or image can load, so a compromised CDN cannot see your fleet.
+
+The dashboard is a convenience over the same store the bot writes to. If it is
+switched off, the bot keeps working; if the bot is switched off, the dashboard
+keeps working.
+
+### Getting an image without the bot
+
+`scripts/latest-iso.sh` asks the GitHub releases API for the current image and
+downloads it, verifying nothing it cannot verify — it prints the checksum and
+the size and leaves the comparison to `sha256sum -c`:
+
+```bash
+./scripts/latest-iso.sh                 # newest stable, your CPU's variant
+./scripts/latest-iso.sh --beta          # newest beta
+./scripts/latest-iso.sh --arch v3       # force x86-64-v3
+./scripts/latest-iso.sh --json          # just the facts, for a script
+```
+
+It needs `node` (which the rig already has) and falls back to printing the
+releases page when it is missing. The same table is at `/downloads` in the
+dashboard.
+
+## 4. Point a rig at it
 
 Once per rig, or once per stick:
 
@@ -146,7 +229,7 @@ The rig checks in within a minute (`zmrig-os sync --now` forces one now), and
 If the bot says **no rig has checked in with that ID**, the URL is wrong, the rig
 is offline, or it has not restarted since `zmrig-os fleet --url` was set.
 
-## 4. Run the fleet
+## 5. Run the fleet
 
 ```
 /wallet ZMR-1A2B-3C4D-5E6F 4YourAddress...
@@ -180,7 +263,7 @@ One request a minute from the rig:
 ```json
 POST /v1/hello
 Authorization: Bearer <64 hex characters: the device key>
-{"device":"ZMR-1A2B-3C4D-5E6F","version":"6.37.0",
+{"device":"ZMR-1A2B-3C4D-5E6F","version":"6.38.0",
  "status":{"state":"mining","hashrate":1201.4,"temp":64,"uptime":86400,
            "mode":"max","wallet":"4...","pool":"gulf.moneroocean.stream:10001",
            "coin":"xmr","threads":"8","slot":"a","installed":true},
@@ -215,6 +298,10 @@ reported.
   else is told their own id and nothing else.
 * Losing the state file (a free-host redeploy) loses the enrolment records, not
   the rigs: they keep mining, and re-enrolling is two strings per rig.
+* The dashboard adds no way in that the bot does not already have: one password
+  compared in constant time, a login throttle, CSRF on every form, and a CSP that
+  forbids every third-party origin. Delete `FLEET_WEB_PASSWORD` and the surface
+  is gone.
 
 ## Troubleshooting
 
@@ -226,6 +313,9 @@ reported.
 | a command stays "waiting" | the rig is offline; it applies on the next check-in |
 | alerts are silent | `FLEET_NOTIFY` set to a chat the bot cannot write to, or the free instance is asleep |
 | `another process is polling this bot token` | two deployments of the same bot; stop one |
+| the dashboard 404s | `FLEET_WEB_PASSWORD` is empty, or the deploy has not restarted since it was set |
+| `429` on the login form | ten wrong passwords from that address in fifteen minutes; wait, or restart the service to clear it |
+| `/downloads` says nothing is published | GitHub was unreachable when the page was rendered, or the release has no ISO asset yet; the page retries after ten minutes |
 
 `zmrig-os status` on the rig shows the fleet URL and the last check-in, and
 `zmrig-os sync` (without `--quiet`) says what it did.

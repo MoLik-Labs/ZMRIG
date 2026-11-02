@@ -336,7 +336,10 @@ function route(message, { store, config, actor, now = Date.now() }) {
       );
     }
 
-    store.enrol(id, actor.key, label);
+    // The web dashboard enrols rigs on behalf of the operator's chat account, so
+    // a rig enrolled in the browser is also visible in the bot.
+    const owner = actor.enrolAs || actor.key;
+    store.enrol(id, owner, label);
     store.audit({ actor: actor.key, action: 'enrol', device: id });
     return ok(
       [

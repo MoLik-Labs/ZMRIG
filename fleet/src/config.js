@@ -49,6 +49,11 @@ function load(env = process.env) {
     state: text(env, 'FLEET_STATE', './data/fleet.json'),
     public_url: text(env, 'FLEET_PUBLIC_URL', ''),
 
+    // The dashboard. Empty means no dashboard at all: the service then only
+    // answers rigs and /healthz, which is the right default for a bot-only host.
+    web_password: text(env, 'FLEET_WEB_PASSWORD', ''),
+    web_enabled: text(env, 'FLEET_WEB_PASSWORD', '') !== '',
+
     telegram_token: text(env, 'TELEGRAM_BOT_TOKEN', ''),
     discord_token: text(env, 'DISCORD_BOT_TOKEN', ''),
 
@@ -85,11 +90,17 @@ function validate(config) {
   const problems = [];
   const warnings = [];
 
-  if (!config.telegram_token && !config.discord_token) {
-    problems.push('no bot token: set TELEGRAM_BOT_TOKEN and/or DISCORD_BOT_TOKEN');
+  if (!config.telegram_token && !config.discord_token && !config.web_password) {
+    problems.push('nothing to run: set TELEGRAM_BOT_TOKEN, DISCORD_BOT_TOKEN and/or FLEET_WEB_PASSWORD');
   }
-  if (config.admins.length === 0) {
+  if (config.admins.length === 0 && !config.web_password) {
     problems.push('no admins: set FLEET_ADMIN_IDS (Telegram ids) and/or DISCORD_ADMIN_IDS');
+  }
+  if (config.admins.length === 0 && config.web_password) {
+    warnings.push('no FLEET_ADMIN_IDS: alerts have nowhere to go, and rigs enrolled by the bot have no owner');
+  }
+  if (config.web_password && config.web_password.length < 12) {
+    warnings.push('FLEET_WEB_PASSWORD is shorter than 12 characters');
   }
   if (config.telegram_token && !/^\d+:[A-Za-z0-9_-]{30,}$/.test(config.telegram_token)) {
     warnings.push('TELEGRAM_BOT_TOKEN does not look like a bot token (123456:ABC-DEF...)');

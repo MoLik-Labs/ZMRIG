@@ -130,6 +130,9 @@ jobs:
       - name: Rig agent against the real server
         run: bash os/tests/fleet.sh
 
+      - name: The download helper
+        run: bash tests/releases/latest-iso.test.sh
+
   macos:
     name: macOS ${{ matrix.arch }} build and hash tests
     runs-on: ${{ matrix.runner }}

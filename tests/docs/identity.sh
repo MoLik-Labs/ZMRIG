@@ -207,10 +207,13 @@ if [ -f "$cfg" ]; then
     done
 
     host="https://$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]').github.io"
-    if grep -qF "const SITE = \"$host\";" "$cfg"; then
-        ok "$cfg serves from $host"
+    # The value is a default now: `serve/` overrides SITE_URL for its own domain
+    # while GitHub Pages keeps using this one, so the assertion is that the host
+    # appears as the fallback and not that the line has exactly one shape.
+    if grep -qF "$host" "$cfg" && grep -qF 'process.env.SITE_URL ||' "$cfg"; then
+        ok "$cfg serves from $host unless SITE_URL overrides it"
     else
-        bad "$cfg does not declare const SITE = \"$host\";"
+        bad "$cfg does not default to $host (or lost the SITE_URL override)"
     fi
 
     if grep -qF "const REPO = \"https://github.com/$OWNER/$REPO\";" "$cfg"; then

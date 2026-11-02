@@ -26,6 +26,9 @@ class Store {
     this.dirty = false;
     this.timer = null;
     this.writes = 0;
+    // Bumped by every mutation. The dashboard caches rendered pages against it,
+    // which is how a refresh with nothing changed costs a string compare.
+    this.revision = 0;
   }
 
   load() {
@@ -62,6 +65,7 @@ class Store {
   /** Debounced: a heartbeat storm must not become a disk write storm. */
   touch() {
     this.dirty = true;
+    this.revision += 1;
     if (this.timer) return;
     this.timer = setTimeout(() => {
       this.timer = null;

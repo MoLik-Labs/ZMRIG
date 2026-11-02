@@ -14,7 +14,10 @@ services:
     plan: free
     region: frankfurt
     rootDir: fleet
-    buildCommand: echo "no build: zero dependencies"
+    # A YAML value with a colon inside it has to be quoted as a whole; the inner
+    # quotes do not protect it, and the blueprint is rejected at parse time.
+    buildCommand: 'echo "no build: zero dependencies"'
+
     startCommand: node src/index.js
     healthCheckPath: /healthz
     autoDeploy: true
@@ -24,6 +27,9 @@ services:
       - key: DISCORD_BOT_TOKEN
         sync: false
       - key: FLEET_ADMIN_IDS
+        sync: false
+      # The dashboard at /. Leave it empty to run the bot only.
+      - key: FLEET_WEB_PASSWORD
         sync: false
       - key: DISCORD_ADMIN_IDS
         sync: false

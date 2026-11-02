@@ -15,6 +15,7 @@ const ids = require('./ids');
 const format = require('./format');
 const alerts = require('./alerts');
 const { presence } = require('./store');
+const { createWeb } = require('./web');
 
 const MAX_BODY = 64 * 1024;
 
@@ -77,18 +78,29 @@ function cleanAcks(acks) {
   }));
 }
 
-function createServer({ config, store, log = () => {}, now = () => Date.now(), onEvent = () => {} }) {
+function createServer({ config, store, log = () => {}, now = () => Date.now(), onEvent = () => {}, releases = null }) {
   const lastHello = new Map();
+  // Null when no password is configured: the dashboard is opt-in, and a bot-only
+  // host has no HTML surface at all.
+  const web = createWeb({ config, store, log, releases, now });
 
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, 'http://localhost');
 
     if (url.pathname === '/healthz') return json(response, 200, { ok: true, up: true });
-    if (url.pathname === '/' && request.method === 'GET') return page(response, store, config, now());
 
-    if (url.pathname !== '/v1/hello' || request.method !== 'POST') {
+    // The dashboard owns everything that is not the device protocol or the
+    // health check, including `/`.
+    if (url.pathname !== '/v1/hello') {
+      if (web) {
+        await web.handle(request, response);
+        return;
+      }
+      if (url.pathname === '/' && request.method === 'GET' && !web) return page(response, store, config, now());
       return json(response, 404, { ok: false, error: 'not found' });
     }
+
+    if (request.method !== 'POST') return json(response, 405, { ok: false, error: 'use POST' });
 
     const secret = bearer(request);
     if (!secret) return json(response, 401, { ok: false, error: 'missing device key' });
@@ -162,7 +174,7 @@ function createServer({ config, store, log = () => {}, now = () => Date.now(), o
     if (socket.writable) socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
   });
 
-  return { server, lastHello };
+  return { server, lastHello, web };
 }
 
 function escape(text) {

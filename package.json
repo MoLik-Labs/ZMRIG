@@ -1,6 +1,6 @@
 {
   "name": "zmrig",
-  "version": "6.37.0",
+  "version": "6.38.0",
   "description": "ZMRIG - RandomX miner with a 1% developer fee that is printed and switchable off, by @nggkhaiz",
   "main": "index.js",
   "directories": {
@@ -13,6 +13,8 @@
     "test:pool": "node --test pool/tests/*.test.js",
     "test:thermal": "bash zmrig/tests/thermal.sh",
     "test:oneclick": "bash tests/oneclick/plan.sh && bash tests/oneclick/config.sh && bash tests/oneclick/governor.sh && bash tests/oneclick/purge.sh",
+    "test:releases": "bash tests/releases/latest-iso.test.sh",
+    "test:serve": "cd serve && npm test",
     "test:docs": "bash tests/docs/links.sh && bash tests/docs/pages.sh && bash tests/docs/identity.sh",
     "test:pages": "bash tests/docs/pages.sh",
     "build:site": "cd site && npm run build",

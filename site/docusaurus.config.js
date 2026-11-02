@@ -1,8 +1,12 @@
 // @ts-check
 
 const REPO = "https://github.com/MoLik-Labs/ZMRIG";
-const SITE = "https://molik-labs.github.io";
-const BASE = "/ZMRIG/";
+// Two deploy targets, one build: GitHub Pages serves the site under /ZMRIG/,
+// and `serve/` (the Render host) serves it from the root of its own domain.
+// The defaults are the Pages values, so a plain `npm run build` is unchanged;
+// the host sets SITE_BASE_URL=/ and SITE_URL=https://<service>.onrender.com.
+const SITE = process.env.SITE_URL || "https://molik-labs.github.io";
+const BASE = process.env.SITE_BASE_URL || "/ZMRIG/";
 const VERSION = require("./package.json").version;
 
 // Algolia DocSearch is the search of record for this site. The keys are issued
@@ -150,6 +154,17 @@ const config = {
             to: "/docs/reference/benchmarks",
             position: "left",
             label: "Benchmarks",
+          },
+          {
+            // On the Pages deployment this is the releases page; `serve/` sets
+            // SITE_DOWNLOAD_URL to its own https://<host>/download, which lists
+            // every asset with its checksum and stays correct without a redeploy.
+            // It has to be absolute: a bare path would be checked as an internal
+            // link against pages Docusaurus knows about, and that page is served
+            // by Node, not by Docusaurus.
+            href: process.env.SITE_DOWNLOAD_URL || `${REPO}/releases`,
+            position: "left",
+            label: "Download",
           },
           { type: "localeDropdown", position: "right" },
           {
