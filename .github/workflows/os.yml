@@ -111,6 +111,9 @@ jobs:
           echo "mksquashfs: $(mksquashfs -version 2>&1 | head -1)"
           echo "xorriso:  $(xorriso -version 2>&1 | head -1)"
           echo "grub:     $(grub-mkrescue --version 2>&1 | head -1)"
+          echo "cpus:     $(nproc)"
+          echo "memory:   $(free -m | awk '/^Mem:/ {print $2 " MiB total, " $7 " MiB available"}')"
+          echo "disk:     $(df -h --output=avail /home/runner | tail -1 | xargs) available"
 
       - name: Build the image
         run: |

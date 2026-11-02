@@ -232,9 +232,22 @@ compile_one() {
 }
 
 # A background compile must not be able to fail silently: the archive would
-# then be built from stale objects.
+# then be built from stale objects. Each object keeps its own stderr, so a
+# failure can name the file that failed and why - four compilers writing to one
+# terminal interleave their output, and a runner that kills a compiler for
+# memory prints nothing at all.
 compile_bg() {
-    compile_one "$1" "$2" || : > "${OBJ}/.failed"
+    local src="$1" obj="$2"
+    local err="${OBJ}/$(basename -- "${obj%.o}").err"
+    if ! compile_one "$src" "$obj" 2>"$err"; then
+        printf '%s\n' "$src" > "${OBJ}/.failed"
+        {
+            printf 'error: compiling %s failed\n' "${src#"${ROOT}/"}"
+            tail -n 25 "$err" 2>/dev/null || true
+        } >&2
+    else
+        rm -f "$err"
+    fi
 }
 
 rm -f "${OBJ}/.failed"
@@ -251,8 +264,9 @@ done
 wait || true
 
 if [ -f "${OBJ}/.failed" ]; then
+    failed_src=$(cat "${OBJ}/.failed")
     rm -f "${OBJ}/.failed"
-    echo "error: compilation failed" >&2
+    echo "error: compilation failed: ${failed_src}" >&2
     exit 1
 fi
 
