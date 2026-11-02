@@ -9,7 +9,8 @@
 # read without guessing where boot stopped.
 #
 # Kernel command line (all optional):
-#   zmrig.os.mode=max|balanced|eco|light   mining mode for the first boot
+#   zmrig.os.mode=max|balanced|eco|light|safe   mining mode for the first boot
+#   zmrig.os.maxtemp=C                     safe mode: hold the CPU at or below C
 #   zmrig.os.wallet=4...                   wallet, skips the wizard
 #   zmrig.os.pool=host:port                pool override
 #   zmrig.os.worker=name                   worker name
@@ -48,6 +49,7 @@ HUGEPAGES=$(getarg zmrig.os.hugepages)
 DATA=$(getarg zmrig.os.data)
 DEBUG=$(getarg zmrig.os.debug)
 NOSTART=$(getarg zmrig.os.nostart)
+MAXTEMP=$(getarg zmrig.os.maxtemp)
 
 # ------------------------------------------------------------ early mounts
 mount -t proc     proc /proc     2>/dev/null || true
@@ -182,12 +184,13 @@ if [ -n "$DATA" ]; then
     fi
 fi
 
-if [ -n "$WALLET$POOL$WORKER$MODE" ]; then
+if [ -n "$WALLET$POOL$WORKER$MODE$MAXTEMP" ]; then
     {
         [ -n "$WALLET" ] && printf 'WALLET="%s"\n' "$WALLET"
         [ -n "$POOL" ] && printf 'POOL="%s"\n' "$POOL"
         [ -n "$WORKER" ] && printf 'WORKER="%s"\n' "$WORKER"
         [ -n "$MODE" ] && printf 'MODE="%s"\n' "$MODE"
+        [ -n "$MAXTEMP" ] && printf 'SAFE_TEMP="%s"\n' "$MAXTEMP"
     } > /newroot/etc/zmrig/kernel.conf
     log "config: overrides from the kernel command line"
 fi

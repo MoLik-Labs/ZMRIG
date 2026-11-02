@@ -8,7 +8,8 @@
 #
 #   zmrig-os setup               # the wizard: wallet, pool, mode, start
 #   zmrig-os setup --wallet 4... --pool host:port --mode max --start
-#   zmrig-os mode balanced       # max | balanced | eco | light
+#   zmrig-os mode balanced       # max | balanced | eco | light | safe
+#   zmrig-os mode safe 70        # ... and keep the hottest CPU sensor at 70 C
 #   zmrig-os status | logs 40 | bench 30 | doctor | autotune 8
 #   zmrig-os update --check | update --apply | update --iso --write /dev/sdX
 #   zmrig-os persist /dev/sdb1   # keep the config on a USB stick across boots
@@ -48,6 +49,10 @@ DRYRUN="${ZMRIG_OS_DRYRUN:-0}"
 POOL_DEFAULT="gulf.moneroocean.stream:10001"
 MODE_DEFAULT="max"
 DONATE_DEFAULT="1"
+# Safe mode holds this unless told otherwise. 72 C is where a laptop CPU keeps
+# its turbo bins and where a desktop CPU is still well inside spec; the pause
+# limit is target + 15, the hard cap target + 8.
+SAFE_TEMP_DEFAULT="72"
 
 say()  { printf '%s\n' "$*"; }
 
@@ -108,6 +113,7 @@ load_conf() {
     ALGO=$(conf_default ALGO "auto")
     THREADS=$(conf_default THREADS "auto")
     DONATE=$(conf_default DONATE "$DONATE_DEFAULT")
+    SAFE_TEMP=$(conf_default SAFE_TEMP "$SAFE_TEMP_DEFAULT")
     MSR=$(conf_default MSR "auto")
     API_PORT=$(conf_default API_PORT "0")
     API_HOST=$(conf_default API_HOST "127.0.0.1")
@@ -122,6 +128,10 @@ load_conf() {
         v=$(_kc "$kc" POOL);     [ -n "$v" ] && POOL="$v"
         v=$(_kc "$kc" WORKER);   [ -n "$v" ] && WORKER="$v"
         v=$(_kc "$kc" MODE);     [ -n "$v" ] && MODE="$v"
+        # The `[ -z ] ||` form, not `[ -n ] &&`: these are the last statements
+        # of the block, and an absent key would make load_conf return 1 under
+        # `set -e` - which read as "the tool cannot read its own config".
+        v=$(_kc "$kc" SAFE_TEMP); [ -z "$v" ] || SAFE_TEMP="$v"
     fi
 }
 
@@ -144,6 +154,7 @@ MODE="${MODE}"
 ALGO="${ALGO}"
 THREADS="${THREADS}"
 DONATE="${DONATE}"
+SAFE_TEMP="${SAFE_TEMP:-$SAFE_TEMP_DEFAULT}"
 MSR="${MSR}"
 API_PORT="${API_PORT}"
 API_HOST="${API_HOST}"
@@ -200,12 +211,19 @@ validate_wallet() {
 #   eco       half the cores, watt profile: less power, less heat, most of the
 #             hashrate per watt.
 #   light     256 MiB cache mode, for boxes without 2.5 GiB of free RAM.
+#   safe      for a machine somebody also needs tomorrow: one core left for the
+#             OS and the fan control, low priority, MSR untouched, and the
+#             thermal governor armed at SAFE_TEMP. It gives up a few percent of
+#             hashrate to keep every degree it can off the silicon; on a box
+#             with poor cooling it ends up *faster* than max, because max spends
+#             the hot hours hardware-throttled at a worse rate.
 mode_threads() {
     local cores="$1"
     case "$MODE" in
         max)      printf '%s' "" ;;
         balanced) if [ "$cores" -ge 4 ]; then printf '%s' "$((cores - 1))"; else printf '%s' ""; fi ;;
         eco)      printf '%s' "$(( cores / 2 > 0 ? cores / 2 : 1 ))" ;;
+        safe)     if [ "$cores" -ge 4 ]; then printf '%s' "$((cores - 1))"; else printf '%s' ""; fi ;;
         light)    printf '%s' "" ;;
         *)        printf '%s' "" ;;
     esac
@@ -216,6 +234,10 @@ mode_priority() {
         max)      printf '%s' "5" ;;
         balanced) printf '%s' "3" ;;
         eco)      printf '%s' "1" ;;
+        # Raw nice 19, lower than any XMRig priority value: the oven's fan
+        # controller, an ssh session and the desktop all win against mining.
+        # `--priority` takes a raw nice value for exactly this.
+        safe)     printf '%s' "19" ;;
         *)        printf '%s' "2" ;;
     esac
 }
@@ -256,6 +278,7 @@ build_args() {
     case "$MODE" in
         light) args="$args --mode light" ;;
         eco)   args="$args --profile watt" ;;
+        safe)  args="$args --profile watt --max-temp ${SAFE_TEMP:-$SAFE_TEMP_DEFAULT}" ;;
         *)     args="$args --profile free" ;;
     esac
 
@@ -267,7 +290,7 @@ build_args() {
     fi
 
     case "$MSR" in
-        on)  args="$args --msr" ;;
+        on)  [ "$MODE" = "safe" ] && args="$args --no-msr" || args="$args --msr" ;;
         off) args="$args --no-msr" ;;
         auto) msr_usable && args="$args --msr" || args="$args --no-msr" ;;
     esac
@@ -385,6 +408,8 @@ cmd_setup() {
             --pool)    pool="${2:?}"; shift ;;
             --pool=*)  pool="${1#*=}" ;;
             --mode)    mode="${2:?}"; shift ;;
+            --max-temp) SAFE_TEMP="${2:?}"; shift ;;
+            --max-temp=*) SAFE_TEMP="${1#*=}" ;;
             --mode=*)  mode="${1#*=}" ;;
             --threads|--threads=*) threads="${1#*=}"; [ "$threads" = "$1" ] && { threads="${2:?}"; shift; } ;;
             --worker)  worker="${2:?}"; shift ;;
@@ -427,19 +452,26 @@ cmd_setup() {
     [ -n "$pool" ] && POOL="$pool"
     [ -n "$worker" ] && WORKER="$worker"
     [ -n "$mode" ] && MODE="$mode"
+    case "$SAFE_TEMP" in
+        ""|*[!0-9]*) : ;;
+        *)
+            [ "$SAFE_TEMP" -ge 45 ] && [ "$SAFE_TEMP" -le 95 ] ||
+                die "--max-temp must be 45..95 degrees Celsius"
+            ;;
+    esac
     [ -n "$threads" ] && THREADS="$threads"
     [ -n "$donate" ] && DONATE="$donate"
 
     case "$MODE" in
-        max|balanced|eco|light) ;;
-        *) die "unknown mode: $MODE (max, balanced, eco, light)" ;;
+        max|balanced|eco|light|safe) ;;
+        *) die "unknown mode: $MODE (max, balanced, eco, light, safe)" ;;
     esac
 
     save_conf
     say "wallet  $WALLET"
     say "pool    $POOL"
     say "worker  $WORKER"
-    say "mode    $MODE"
+    say "mode    $MODE$( [ "$MODE" = "safe" ] && printf ' (holding %s C)' "$SAFE_TEMP" )"
     say "saved to $CONF"
 
     if [ "$start" = "1" ]; then
@@ -448,14 +480,23 @@ cmd_setup() {
 }
 
 cmd_mode() {
-    local mode="${1:-}"
-    [ -n "$mode" ] || die "usage: zmrig-os mode max|balanced|eco|light"
+    local mode="${1:-}" temp="${2:-}"
+    [ -n "$mode" ] || die "usage: zmrig-os mode max|balanced|eco|light|safe [TEMP_C]"
     load_conf
 
     case "$mode" in
-        max|balanced|eco|light) ;;
-        *) die "unknown mode: $mode" ;;
+        max|balanced|eco|light|safe) ;;
+        *) die "unknown mode: $mode (max, balanced, eco, light, safe)" ;;
     esac
+
+    if [ -n "$temp" ]; then
+        case "$temp" in
+            ''|*[!0-9]*) die "not a temperature: $temp (whole degrees Celsius, 45..95)" ;;
+        esac
+        [ "$temp" -ge 45 ] && [ "$temp" -le 95 ] ||
+            die "not a usable temperature: ${temp} C (45..95; below that the rig stops for ever, above it protects nothing)"
+        SAFE_TEMP="$temp"
+    fi
 
     MODE="$mode"
     save_conf
@@ -498,6 +539,7 @@ cmd_tune() {
     # enough for every mapping the miner creates.
     case "$MODE" in
         eco)   run "$tune" --profile watt --thp madvise --swappiness 10 ;;
+        safe)  run "$tune" --profile watt --thp madvise --swappiness 10 ;;
         light) run "$tune" --hugepages off --thp always --swappiness 10 ;;
         *)     run "$tune" --profile free --thp always --swappiness 1 ;;
     esac
@@ -564,9 +606,38 @@ cmd_status() {
     printf '%-14s %s\n' "wallet"   "$(wallet_short)"
     printf '%-14s %s\n' "pool"     "$POOL"
     printf '%-14s %s\n' "worker"   "$WORKER"
-    printf '%-14s %s\n' "mode"     "$MODE"
+    printf '%-14s %s\n' "mode"     "$MODE$( [ "$MODE" = "safe" ] && printf ' (max %s C)' "$SAFE_TEMP" )"
+    printf '%-14s %s\n' "thermal"  "$(thermal_now)"
     printf '%-14s %s\n' "fee"      "${DONATE}% of Monero time (--donate-level=0 to turn off)"
     printf '%-14s %s\n' "version"  "$(image_version) ($( "$(zmrig_bin)" --version 2>/dev/null | head -1 || echo 'miner not installed'))"
+}
+
+# The temperature the governor is acting on, from the same two places the miner
+# reads: the hwmon CPU chips first, then a thermal zone. Printed by `status` so
+# a farmer can see the number the fan is fighting without ssh-ing into sysfs.
+thermal_now() {
+    local f t best=""
+    for f in /sys/class/hwmon/hwmon*/temp*_input; do
+        [ -r "$f" ] || continue
+        case "$(cat "$(dirname "$f")/name" 2>/dev/null)" in
+            coretemp|k10temp|zenpower|k8temp|cpu_thermal|cpu-thermal|soc_thermal|acpitz|it87) ;;
+            *) continue ;;
+        esac
+        t=$(cat "$f" 2>/dev/null) || continue
+        [ -n "$t" ] && { [ -z "$best" ] || [ "$t" -gt "$best" ]; }; best=$t
+    done
+    if [ -z "$best" ]; then
+        for f in /sys/class/thermal/thermal_zone*/temp; do
+            [ -r "$f" ] || continue
+            t=$(cat "$f" 2>/dev/null) || continue
+            [ -n "$t" ] && { [ -z "$best" ] || [ "$t" -gt "$best" ]; }; best=$t
+        done
+    fi
+    if [ -z "$best" ]; then
+        printf 'no sensor in /sys (the governor cannot act; see zmrig-os doctor)'
+    else
+        printf '%s C' "$((best / 1000))"
+    fi
 }
 
 wallet_short() {

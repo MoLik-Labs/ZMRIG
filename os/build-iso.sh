@@ -375,7 +375,12 @@ menuentry "ZMRIG OS ${VERSION} - light (512 MB RAM, no dataset)" {
     initrd /boot/initramfs.gz
 }
 
-menuentry "ZMRIG OS ${VERSION} - safe mode (no huge pages, no MSR)" {
+menuentry "ZMRIG OS ${VERSION} - safe (never above 72 C, one core free)" {
+    linux /boot/vmlinuz \$zmrig_params zmrig.os.mode=safe zmrig.os.maxtemp=72 transparent_hugepage=madvise
+    initrd /boot/initramfs.gz
+}
+
+menuentry "ZMRIG OS ${VERSION} - troubleshooting (no huge pages, no MSR)" {
     linux /boot/vmlinuz \$zmrig_params zmrig.os.mode=max zmrig.os.hugepages=0 transparent_hugepage=madvise nomodeset
     initrd /boot/initramfs.gz
 }
@@ -403,7 +408,15 @@ Headless / fleet
       zmrig.os.wallet=4...
       zmrig.os.pool=pool.example.com:10001
       zmrig.os.worker=rig-01
-      zmrig.os.mode=max|balanced|eco|light
+      zmrig.os.mode=max|balanced|eco|light|safe
+      zmrig.os.maxtemp=72      (safe mode: hold the CPU at or below this)
+
+Safe mode
+  For a machine somebody also needs tomorrow. One core stays free, priority is
+  the lowest there is, the MSR registers are not touched, and the miner watches
+  the CPU temperature once a second: it gives back threads as the box warms,
+  stops hashing above 87 C, and climbs again once it is cool. The dataset stays
+  in RAM the whole time, so nothing is rebuilt on the way back up.
 
 Keeping the config across reboots
   The image is read-only, so /etc/zmrig lives in RAM. Make a partition on the

@@ -104,6 +104,33 @@ contains "--priority 5" "$CHECK_MSG" && ok "max raises the priority" || bad "max
 
 expect_fail "an unknown mode is refused by 'mode'" "$TOOL" mode turbo
 
+# --- safe mode --------------------------------------------------------------
+"$TOOL" mode safe >/dev/null 2>&1
+expect_ok "safe mode builds a command line" "$TOOL" args
+contains "--max-temp 72" "$CHECK_MSG" && ok "safe arms the thermal governor at 72 C" || bad "safe arms the thermal governor at 72 C"
+contains "--profile watt" "$CHECK_MSG" && ok "safe uses the watt profile" || bad "safe uses the watt profile"
+contains "--priority 19" "$CHECK_MSG" && ok "safe runs at the lowest priority" || bad "safe runs at the lowest priority"
+contains "--no-msr" "$CHECK_MSG" && ok "safe never writes hardware registers" || bad "safe never writes hardware registers"
+
+"$TOOL" mode safe 65 >/dev/null 2>&1
+expect_ok "safe mode takes a temperature" "$TOOL" args
+contains "--max-temp 65" "$CHECK_MSG" && ok "the temperature reaches the miner" || bad "the temperature reaches the miner"
+
+expect_fail "a temperature below the floor is refused" "$TOOL" mode safe 30
+expect_fail "a temperature above the ceiling is refused" "$TOOL" mode safe 120
+expect_fail "a temperature that is not a number is refused" "$TOOL" mode safe warm
+
+"$TOOL" mode safe 72 >/dev/null 2>&1
+
+# `status` has to show the number the governor is working from, and say so when
+# there is no sensor instead of printing a plausible 0 C.
+expect_ok "status prints the thermal line" "$TOOL" status
+contains "thermal" "$CHECK_MSG" && ok "status has a thermal line" || bad "status has a thermal line"
+case "$CHECK_MSG" in
+    *"no sensor in /sys"*|*" C"*) ok "the thermal line is a reading or an honest absence" ;;
+    *) bad "the thermal line is a reading or an honest absence" ;;
+esac
+
 # The fee switch: `setup --donate 0` has to reach the miner's own flag.
 "$TOOL" setup --wallet "$WALLET" --donate 0 >/dev/null 2>&1
 expect_ok "args after turning the fee off" "$TOOL" args
