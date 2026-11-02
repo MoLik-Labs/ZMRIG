@@ -269,6 +269,7 @@ fi
 
 
 echo "==> building zmrig ($($ZIG version))"
+echo "==> compiler: $("${CXX_BIN[0]}" --version 2>/dev/null | head -1)"
 
 CPU_FLAG=()
 [ -n "$MARCH" ] && CPU_FLAG=("-mcpu=${MCPU}")

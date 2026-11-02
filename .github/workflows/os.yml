@@ -125,10 +125,18 @@ jobs:
         if: failure()
         run: |
           [ -s build.log ] || { echo "no build log was written"; exit 0; }
-          msg=$(tail -n 20 build.log \
-                | sed -e 's/%/%25/g' -e 's/\r//g' -e 's/::/#/g' -e 's/^/| /' \
-                | awk 'BEGIN{ORS=""} {print $0 "%0A"}')
-          echo "::error title=ISO build failed::${msg}"
+          # The tail alone is misleading: warnings trail the one line that
+          # matters, and a compile that spawns four processes buries it. Take
+          # the errors by name first, then the last few lines for context.
+          {
+            grep -m 12 -E 'error: |fatal error|undefined reference|cannot find' build.log || true
+            echo "---"
+            tail -n 10 build.log
+          } | sed -e 's/%/%25/g' -e 's/\r//g' -e 's/::/#/g' -e 's/^/| /' \
+            | awk 'BEGIN{ORS=""} {print $0 "%0A"}' > annotation.txt
+          echo "::error title=ISO build failed::$(cat annotation.txt)"
+          echo "---- errors ----"
+          cat annotation.txt
 
       - name: Boot it in QEMU
         # One architecture is enough to prove the image reaches userspace; the
