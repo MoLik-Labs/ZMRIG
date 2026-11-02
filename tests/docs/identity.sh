@@ -83,7 +83,8 @@ tracked() {
 # `scripts/publish-site.sh` and are checked separately, below.
 sources() {
     tracked | grep -vE '^(web|assets|docs|vi|search-index\.json|index\.html|404\.html|sitemap\.xml|robots\.txt)' \
-        | grep -vE '/assets/|/search-index\.json$|/index\.html$|/404\.html$'
+        | grep -vE '/assets/|/search-index\.json$|/index\.html$|/404\.html$' \
+        | grep -vxF 'tests/docs/identity.sh'
 }
 
 wanted="https://raw.githubusercontent.com/$OWNER/$REPO/BETA/oneclick.sh"
@@ -152,6 +153,30 @@ for needle in $stale; do
         fi
     done
 done
+
+# --- raw.githubusercontent.com, which does not redirect ----------------------
+#
+# GitHub redirects github.com/<old>/<repo> to the new owner after a transfer, so
+# a stale link there costs a round trip and nothing else. raw.githubusercontent.com
+# serves straight from a keyed store and 404s. That asymmetry is why this check
+# covers the whole repository, legacy archive included: an archived page is
+# allowed to say where the code lived in 2023, but it is not allowed to hand
+# somebody a command that cannot download anything.
+
+# Every match must carry owner *and* repository: a lone owner is what a search
+# index keeps after it splits a URL at the hyphen, not a link somebody can click.
+pairs=$(git ls-files | grep -vxF 'tests/docs/identity.sh' \
+    | xargs grep -hoIE 'raw\.githubusercontent\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+' 2>/dev/null \
+    | sed 's|raw\.githubusercontent\.com/||' | sort -u)
+
+foreign=$(printf '%s\n' "$pairs" | grep -vxF -- "$OWNER/$REPO" | grep . || true)
+
+if [ -z "$foreign" ]; then
+    ok "every raw.githubusercontent.com link belongs to $OWNER/$REPO"
+else
+    bad "raw.githubusercontent.com links point somewhere else:"
+    printf '%s\n' "$foreign" | sed 's/^/        /'
+fi
 
 # --- package metadata ---------------------------------------------------------
 

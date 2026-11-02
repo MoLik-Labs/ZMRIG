@@ -14,7 +14,7 @@ Không muốn nhớ cờ nào? [Wizard bốn bước](wizard.html) hỏi đúng 
 ## Cài một lệnh — chỉ cần địa chỉ ví
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NggKhaiz/ZMRIG/BETA/oneclick.sh \
+curl -fsSL https://raw.githubusercontent.com/MoLik-Labs/ZMRIG/BETA/oneclick.sh \
   | sudo bash -s -- --wallet YOUR_WALLET
 ```
 

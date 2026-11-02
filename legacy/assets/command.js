@@ -18,7 +18,7 @@
 (function (root) {
   "use strict";
 
-  var RAW_URL = "https://raw.githubusercontent.com/NggKhaiz/ZMRIG/BETA/oneclick.sh";
+  var RAW_URL = "https://raw.githubusercontent.com/MoLik-Labs/ZMRIG/BETA/oneclick.sh";
 
   function pools() {
     return root.zmrigPools;
