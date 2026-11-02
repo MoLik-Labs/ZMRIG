@@ -16,7 +16,7 @@ always point at the newest image — in one Node process with no dependencies.
 ## Run it
 
 ```bash
-cd ../site && npm ci && npm run build && cd ../serve
+cd ../site && npm install && npm run build && cd ../serve
 npm start                     # http://localhost:8080
 npm test                      # 39 checks, no network
 ```

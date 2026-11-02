@@ -15,7 +15,7 @@ GitHub Pages is blocked or slow.
 One Node process, no dependencies, no build step of its own.
 
 ```bash
-cd site && npm ci && npm run build && cd ..
+cd site && npm install && npm run build && cd ..
 cd serve && npm start          # http://localhost:8080
 ```
 

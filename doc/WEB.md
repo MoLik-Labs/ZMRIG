@@ -14,7 +14,7 @@ domain when GitHub Pages is blocked or too slow where your users are.
 ## Run it
 
 ```bash
-cd site && npm ci && npm run build && cd ..   # the documentation
+cd site && npm install && npm run build && cd ..   # the documentation
 cd serve && npm start                          # http://localhost:8080
 ```
 

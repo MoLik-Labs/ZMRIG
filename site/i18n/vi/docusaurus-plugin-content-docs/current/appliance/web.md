@@ -14,7 +14,7 @@ tại kèm checksum, và một site chạy được ở nơi GitHub Pages bị c
 Một tiến trình Node, không phụ thuộc gì, không có bước build riêng.
 
 ```bash
-cd site && npm ci && npm run build && cd ..
+cd site && npm install && npm run build && cd ..
 cd serve && npm start          # http://localhost:8080
 ```
 

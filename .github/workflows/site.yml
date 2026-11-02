@@ -59,7 +59,9 @@ jobs:
         run: |
           set -euo pipefail
           cd site
-          npm ci --no-audit --no-fund
+          # package-lock.json is not committed in this repository, so this is
+          # `npm install` here too, not `npm ci`.
+          npm install --no-audit --no-fund
           SITE_BASE_URL=/ \
           SITE_URL=https://zmrig.example.com \
           SITE_DOWNLOAD_URL=https://zmrig.example.com/download \

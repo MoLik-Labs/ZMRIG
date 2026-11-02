@@ -61,7 +61,7 @@ services:
     healthCheckPath: /healthz
     autoDeploy: true
     buildCommand: >-
-      npm --prefix site ci --no-audit --no-fund &&
+      npm --prefix site install --no-audit --no-fund &&
       SITE_BASE_URL=/ SITE_URL="${RENDER_EXTERNAL_URL:-https://zmrig.onrender.com}"
       SITE_DOWNLOAD_URL="${RENDER_EXTERNAL_URL:-https://zmrig.onrender.com}/download"
       npm --prefix site run build &&
