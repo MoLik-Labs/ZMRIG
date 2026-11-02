@@ -18,6 +18,7 @@ const report = @import("report.zig");
 const stratum = @import("stratum.zig");
 const topology = @import("topology.zig");
 const health = @import("health.zig");
+const thermal = @import("thermal.zig");
 const verify = @import("verify.zig");
 const util = @import("util.zig");
 
@@ -326,6 +327,26 @@ pub fn main() !void {
     // below reads `due()` before every connection.
     var fee_clock = fee.Clock.init(opts.donate_percent);
 
+    // The thermal policy, when one was asked for. `--max-temp` with no sensor
+    // to read is not a policy, so say that now instead of at 4 a.m.
+    var governor: ?thermal.Governor = null;
+    if (opts.max_temp) |target| {
+        governor = thermal.Governor.init(thermal.Config.fromTarget(target), miner.threadCount());
+
+        if (readTemperature(&opts)) |reading| {
+            logger.info("thermal: holding {d:.0} C max - {s} reads {d:.1} C now; {d} thread(s), step down at {d:.0} C, pause above {d:.0} C", .{
+                governor.?.config.target_c,
+                reading.label(),
+                reading.celsius,
+                miner.threadCount(),
+                governor.?.config.target_c,
+                governor.?.config.critical_c,
+            });
+        } else {
+            logger.warn("thermal: --max-temp={d:.0} was asked for but no CPU sensor was found in /sys/class/{{hwmon,thermal}}; the governor cannot act without one (pass --thermal-file=PATH to read it elsewhere)", .{target});
+        }
+    }
+
     var monitor = Monitor{
         .miner = &miner,
         .fee_clock = &fee_clock,
@@ -344,6 +365,8 @@ pub fn main() !void {
         .health_restart = opts.health_restart,
         .health_restart_seconds = @intCast(opts.health_restart_seconds),
         .health_tracker = .{ .config = .{ .warmup_seconds = opts.health_warmup_seconds } },
+        .governor = if (governor) |*g| g else null,
+        .thermal_file = opts.thermal_file,
     };
     monitor.thread = try std.Thread.spawn(.{ .stack_size = 256 * 1024 }, Monitor.run, .{&monitor});
     defer {
@@ -771,6 +794,14 @@ const Monitor = struct {
     health_tracker: health.Tracker = .{},
     health_state: health.State = .warming,
     health_logged: bool = false,
+    /// Armed by `--max-temp`. Null means no governor: this is the only place
+    /// the thermal policy is applied, so nothing else can throttle a machine
+    /// that did not ask to be throttled.
+    governor: ?*thermal.Governor = null,
+    /// `--thermal-file`, owned by Options for the whole run.
+    thermal_file: ?[]const u8 = null,
+    thermal_reading: ?thermal.Reading = null,
+    thermal_missing_logged: bool = false,
     /// Hashrates published to the HTTP API once a second.
     view: api_http.View = .{},
     /// The developer-fee clock, ticked once a second from this thread because
@@ -827,6 +858,7 @@ const Monitor = struct {
             );
 
             self.checkHealth(now);
+            self.checkThermal(now);
 
             if (self.report_file) |path| {
                 if (now - self.last_report_write >= self.report_interval_ms) {
@@ -872,6 +904,69 @@ const Monitor = struct {
                 self.logger.warn("pool has been silent for {d} s, dropping the connection", .{@divTrunc(now - last, 1000)});
                 std.posix.shutdown(@intCast(fd), .both) catch {};
             }
+        }
+    }
+
+    /// One second of thermal policy: read the hottest sensor, ask the governor
+    /// what to do, apply it, and say so once per change.
+    ///
+    /// Nothing here runs unless `--max-temp` armed a governor, so a machine
+    /// without the flag behaves exactly as it did before this file existed.
+    fn checkThermal(self: *Monitor, now_ms: i64) void {
+        const gov = self.governor orelse return;
+
+        const reading = if (self.thermal_file) |path| blk: {
+            const celsius = thermal.readPlainFile(path) orelse break :blk null;
+            var r = thermal.Reading{ .celsius = celsius };
+            @memcpy(r.name_buf[0..4], "file");
+            r.name_len = 4;
+            break :blk r;
+        } else thermal.readSys("/sys");
+
+        self.thermal_reading = reading;
+
+        if (reading == null and !self.thermal_missing_logged and now_ms - self.report_started_ms > 30_000) {
+            self.thermal_missing_logged = true;
+            self.logger.warn("thermal: no CPU sensor on this machine, so --max-temp cannot act; point --thermal-file at a file that holds the temperature", .{});
+        }
+
+        const celsius: ?f32 = if (reading) |r| r.celsius else null;
+        const sensor = if (reading) |r| r.label() else "no sensor";
+
+        switch (gov.step(now_ms, celsius)) {
+            .none => {},
+            .set_threads => |threads| {
+                self.miner.shared.setActiveThreads(threads);
+                self.logger.info("thermal: {d:.1} C on {s} -> {d} of {d} threads (target {d:.0} C; {d} step-down(s), {d} step-up(s) so far)", .{
+                    celsius orelse 0,
+                    sensor,
+                    threads,
+                    self.miner.threadCount(),
+                    gov.config.target_c,
+                    gov.step_downs,
+                    gov.step_ups,
+                });
+            },
+            .pause => {
+                self.miner.shared.pause();
+                self.miner.shared.setActiveThreads(0);
+                self.logger.warn("thermal: {d:.1} C on {s} and one thread is not enough to stay under {d:.0} C - mining stops until it falls to {d:.0} C. Nothing is lost: the dataset stays in RAM and the pool connection stays up", .{
+                    celsius orelse 0,
+                    sensor,
+                    gov.config.max_c,
+                    gov.config.resume_c,
+                });
+            },
+            .unpause => {
+                self.miner.shared.unpause();
+                self.miner.shared.setActiveThreads(gov.threads);
+                self.logger.info("thermal: back to {d:.1} C on {s}, mining resumes on {d} thread(s) and climbs while it stays under {d:.0} C", .{
+                    celsius orelse 0,
+                    sensor,
+                    gov.threads,
+                    gov.config.target_c - gov.config.hysteresis_c,
+                });
+            },
         }
     }
 
@@ -1315,6 +1410,10 @@ fn printConfigSummary(opts: *const options.Options) !void {
         });
     }
 
+    // The thermal policy. Printed even when it is off, because "why did my rig
+    // slow down at night" has two answers and only one of them is the pool.
+    try out.print("  thermal {s}\n", .{thermalSummary(opts)});
+
     // MSR is read-only here: probe the first CPU, never write during --check.
     var msr_buf: [192]u8 = undefined;
     _ = api.xmo_msr_probe(&msr_buf, msr_buf.len);
@@ -1589,6 +1688,43 @@ fn hugePageStatus(opts: *const options.Options) []const u8 {
     }
 
     return "fewer pages reserved than this mode needs; see --help";
+}
+
+/// One line for `--check`: whether the governor is armed, and the number it
+/// would act on right now.
+fn thermalSummary(opts: *const options.Options) []const u8 {
+    const buf = &thermal_summary_buf;
+    buf.* = [_]u8{0} ** thermal_summary_buf.len;
+
+    const target = opts.max_temp orelse return std.fmt.bufPrint(buf, "off (no --max-temp: nothing throttles, however hot the box gets)", .{}) catch "off";
+
+    const config = thermal.Config.fromTarget(target);
+    const reading = readTemperature(opts) orelse
+        return std.fmt.bufPrint(buf, "target {d:.0} C, pause at {d:.0} C - but no CPU sensor found: the governor would never act (--thermal-file=PATH overrides the sensor)", .{
+            config.target_c, config.critical_c,
+        }) catch "on, no sensor";
+
+    return std.fmt.bufPrint(buf, "hold {d:.0} C: {s} {d:.1} C now, step down at {d:.0} C, pause above {d:.0} C (--no-thermal turns it off)", .{
+        config.target_c, reading.label(), reading.celsius, config.target_c, config.critical_c,
+    }) catch "on";
+}
+
+var thermal_summary_buf: [320]u8 = undefined;
+
+/// The temperature the governor should act on: the file if one was given
+/// (`--thermal-file`), else the hottest CPU sensor in /sys.
+fn readTemperature(opts: *const options.Options) ?thermal.Reading {
+    if (opts.thermal_file) |path| {
+        const celsius = thermal.readPlainFile(path) orelse return null;
+        var reading = thermal.Reading{ .celsius = celsius };
+        const name = "file";
+        @memcpy(reading.name_buf[0..name.len], name);
+        reading.name_len = name.len;
+
+        return reading;
+    }
+
+    return thermal.readSys("/sys");
 }
 
 /// One line for `--check`: which huge-page mechanism this host has, and what it

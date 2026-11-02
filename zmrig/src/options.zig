@@ -222,6 +222,15 @@ pub const Options = struct {
     /// stops on battery). `auto` resolves to `watt` on a laptop running on
     /// battery and to `free` everywhere else.
     profile: ProfileSetting = .auto,
+    /// `--max-temp=°C`: keep the hottest CPU sensor at or below this. Null and
+    /// 0 both mean "no governor": a machine with no thermal policy behaves
+    /// exactly as it did before this flag existed.
+    max_temp: ?f32 = null,
+    /// `--thermal-file=PATH`: take the temperature from this file instead of
+    /// sysfs. For rigs whose sensor is not in /sys (a BMC, a USB thermometer
+    /// read by udev) and for the test suite, which starts the real binary and
+    /// changes a real number.
+    thermal_file: ?[]const u8 = null,
     /// `--autotune[=SECONDS]`: measure the thread count on this machine, print
     /// the winner and the config line to keep. Never trusts the L3 heuristic.
     autotune: bool = false,
@@ -284,6 +293,7 @@ pub const Options = struct {
         if (self.connect_to) |v| allocator.free(v);
         if (self.tls_ca) |v| allocator.free(v);
         if (self.proxy_url) |v| allocator.free(v);
+        if (self.thermal_file) |v| allocator.free(v);
     }
 
     /// Resolves the algorithm for a pool: explicit flag > pool flag > job value.
@@ -390,6 +400,11 @@ pub const usage =
     \\      --cpu-affinity=0x3   pin threads to these CPUs (bitmask, XMRig style)
     \\      --priority=N         1..5 (XMRig scale) or a raw nice value like -10
     \\      --cpu-priority=N     same as --priority (XMRig spelling)
+    \\      --max-temp=C         keep the hottest CPU sensor at or below C degrees:
+    \\                           shed threads as it warms, pause above C+15, never
+    \\                           go above the thread count you asked for
+    \\      --thermal-file=PATH  read the temperature from PATH instead of sysfs
+    \\      --no-thermal         disable the governor (same as --max-temp=0)
     \\
     \\Logging:
     \\      --no-color           disable colours
@@ -430,6 +445,17 @@ pub const usage =
     \\Every option that takes a value also accepts the "--option value" form.
     \\
 ;
+
+/// `--max-temp=75` and `--max-temp=75.5`. Out-of-range values are rejected
+/// rather than clamped: a target of 20 °C would park the miner for ever, and a
+/// target of 150 °C is not a policy, it is a typo.
+fn parseTemperature(text: []const u8) ParseError!f32 {
+    const value = std.fmt.parseFloat(f32, text) catch return error.InvalidNumber;
+
+    if (!(value >= 45 and value <= 95)) return error.InvalidNumber;
+
+    return value;
+}
 
 fn parseNumber(comptime T: type, text: []const u8) ParseError!T {
     return std.fmt.parseInt(T, text, 10) catch error.InvalidNumber;
@@ -517,6 +543,11 @@ pub fn parseUrl(allocator: std.mem.Allocator, url: []const u8) ParseError!Pool {
 
 pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseError!Options {
     var opts = Options{};
+    // A parse that fails half way has already allocated host names, wallet
+    // strings and file paths. Without this, every rejection - a typo in
+    // --max-temp, a bad pool URL - leaks what it read before the typo. The
+    // process normally exits anyway, which is exactly why nobody noticed.
+    errdefer opts.deinit(allocator);
     // Per-pool options seen before the pool they belong to (see `Pending`).
     var pending = Pending{};
     var i: usize = 0;
@@ -692,6 +723,15 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseEr
             const value = try needValue(args, &i, inline_value);
             opts.profile = ProfileSetting.fromName(value) orelse return error.UnknownOption;
             opts.seen.profile = true;
+        } else if (std.mem.eql(u8, name, "--max-temp")) {
+            const value = try needValue(args, &i, inline_value);
+            opts.max_temp = try parseTemperature(value);
+        } else if (std.mem.eql(u8, name, "--thermal-file")) {
+            const value = try needValue(args, &i, inline_value);
+            if (opts.thermal_file) |old| allocator.free(old);
+            opts.thermal_file = allocator.dupe(u8, value) catch return error.OutOfMemory;
+        } else if (std.mem.eql(u8, name, "--no-thermal")) {
+            opts.max_temp = null;
         } else if (std.mem.eql(u8, name, "--autotune")) {
             opts.autotune = true;
             if (inline_value) |v| {
@@ -1018,6 +1058,19 @@ fn jsonInt(comptime T: type, obj: std.json.ObjectMap, key: []const u8) ?T {
     };
 }
 
+/// JSON has one number type and it may arrive as either. `"max-temp": 75` and
+/// `"max-temp": 75.5` both have to work, or the installer has to guess which
+/// one to write.
+fn jsonFloat(obj: std.json.ObjectMap, key: []const u8) ?f32 {
+    const value = obj.get(key) orelse return null;
+
+    return switch (value) {
+        .integer => |v| @floatFromInt(v),
+        .float => |v| @floatCast(v),
+        else => null,
+    };
+}
+
 fn applyPoolObject(allocator: std.mem.Allocator, opts: *Options, obj: std.json.ObjectMap) ParseError!void {
     const url = jsonString(obj, "url") orelse return error.InvalidConfig;
     var pool = try parseUrl(allocator, url);
@@ -1116,6 +1169,17 @@ pub fn parseConfigFile(allocator: std.mem.Allocator, opts: *Options, path: []con
     // read before the command line, so an explicit `--profile` still wins.
     if (jsonString(root, "profile")) |v| {
         opts.profile = ProfileSetting.fromName(v) orelse opts.profile;
+    }
+    // The thermal policy, as written by `oneclick.sh --max-temp=...` and by the
+    // appliance's safe mode. A value outside 45..95 is ignored rather than
+    // refused here: a config file that an older binary wrote must not stop the
+    // miner from starting.
+    if (jsonFloat(root, "max-temp")) |v| {
+        opts.max_temp = if (v >= 45 and v <= 95) v else null;
+    }
+    if (jsonString(root, "thermal-file")) |v| {
+        if (opts.thermal_file) |old| allocator.free(old);
+        opts.thermal_file = allocator.dupe(u8, v) catch return error.OutOfMemory;
     }
     if (jsonBool(root, "colors")) |v| opts.colors = v;
     if (jsonBool(root, "background")) |v| opts.background = v;
@@ -1718,4 +1782,97 @@ test "algo: auto is also readable from the JSON config" {
 
     try testing.expect(!pinned.algo_all);
     try testing.expectEqual(@as(?api.Algo, .rx_wow), pinned.algo);
+}
+
+test "--max-temp is a temperature, not a wish" {
+    const testing = std.testing;
+    const ok = [_][]const u8{ "-u", "w", "-o", "pool.example.com:3333" };
+
+    // 75 and 75.5 are both temperatures; 20 and 150 are a typo that would park
+    // the miner for ever or protect nothing.
+    var args: [6][]const u8 = undefined;
+    @memcpy(args[0..4], &ok);
+
+    args[4] = "--max-temp=75";
+    args[5] = "--threads=2";
+    var opts = try parseArgs(testing.allocator, &args);
+    defer opts.deinit(testing.allocator);
+    try testing.expectEqual(@as(f32, 75), opts.max_temp.?);
+
+    args[4] = "--max-temp=75.5";
+    var half = try parseArgs(testing.allocator, &args);
+    defer half.deinit(testing.allocator);
+    try testing.expectEqual(@as(f32, 75.5), half.max_temp.?);
+
+    // The floor and the ceiling of what counts as a policy.
+    args[4] = "--max-temp=45";
+    var low = try parseArgs(testing.allocator, &args);
+    defer low.deinit(testing.allocator);
+    try testing.expectEqual(@as(f32, 45), low.max_temp.?);
+
+    args[4] = "--max-temp=44.9";
+    try testing.expectError(error.InvalidNumber, parseArgs(testing.allocator, &args));
+    args[4] = "--max-temp=95.1";
+    try testing.expectError(error.InvalidNumber, parseArgs(testing.allocator, &args));
+    args[4] = "--max-temp=warm";
+    try testing.expectError(error.InvalidNumber, parseArgs(testing.allocator, &args));
+}
+
+test "no --max-temp means no governor, and --no-thermal undoes one" {
+    const testing = std.testing;
+
+    var plain = try parseArgs(testing.allocator, &[_][]const u8{ "-u", "w", "-o", "pool.example.com:3333" });
+    defer plain.deinit(testing.allocator);
+    try testing.expect(plain.max_temp == null);
+
+    var undone = try parseArgs(testing.allocator, &[_][]const u8{
+        "-u", "w", "-o", "pool.example.com:3333", "--max-temp=70", "--no-thermal",
+    });
+    defer undone.deinit(testing.allocator);
+    try testing.expect(undone.max_temp == null);
+}
+
+test "--thermal-file keeps its own copy of the path" {
+    const testing = std.testing;
+    const source = "sensors/cpu0";
+
+    var opts = try parseArgs(testing.allocator, &[_][]const u8{
+        "-u", "w", "-o", "pool.example.com:3333", "--thermal-file", source,
+    });
+    defer opts.deinit(testing.allocator);
+
+    try testing.expectEqualStrings(source, opts.thermal_file.?);
+    // Not the same slice: the argv it came from may not outlive the options.
+    try testing.expect(opts.thermal_file.?.ptr != source.ptr);
+}
+
+test "the thermal policy is read from the config file, and a silly one is ignored" {
+    const testing = std.testing;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "safe.json", .data =
+        \\{"max-temp":72,"thermal-file":"/run/cpu.temp","pools":[{"url":"pool.example.com:3333","user":"w"}]}
+    });
+    try tmp.dir.writeFile(.{ .sub_path = "silly.json", .data =
+        \\{"max-temp":12,"pools":[{"url":"pool.example.com:3333","user":"w"}]}
+    });
+
+    var safe = Options{};
+    defer safe.deinit(testing.allocator);
+    const safe_path = try tmp.dir.realpathAlloc(testing.allocator, "safe.json");
+    defer testing.allocator.free(safe_path);
+    try parseConfigFile(testing.allocator, &safe, safe_path);
+
+    try testing.expectEqual(@as(f32, 72), safe.max_temp.?);
+    try testing.expectEqualStrings("/run/cpu.temp", safe.thermal_file.?);
+
+    var silly = Options{};
+    defer silly.deinit(testing.allocator);
+    const silly_path = try tmp.dir.realpathAlloc(testing.allocator, "silly.json");
+    defer testing.allocator.free(silly_path);
+    try parseConfigFile(testing.allocator, &silly, silly_path);
+
+    try testing.expect(silly.max_temp == null);
 }
