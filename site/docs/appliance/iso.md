@@ -9,8 +9,17 @@ image: https://molik-labs.github.io/ZMRIG/img/og-en.png
 `zmrig-os` is a complete operating system that mines: a kernel, a small
 initramfs and a read-only Alpine root filesystem containing `zmrig` and almost
 nothing else. Write it to a USB stick, boot the rig, type your wallet, and it is
-mining. There is no installer, no disk to prepare and no wizard that leaves
-half a system behind.
+mining. Nothing has to be installed and nothing on the machine is modified.
+
+If you would rather not depend on the stick, the same image installs onto the
+machine's own disk with one command, and from then on it looks after itself:
+
+```bash
+zmrig-os install --disk /dev/nvme0n1   # partition, copy, boot from the disk
+```
+
+[Install to disk](#install-to-disk) and [Updates](#updates) below are the whole
+story; the rest of this page is what the image does and how to change it.
 
 ```bash
 # grab the image for your CPU from the releases page, then
@@ -104,12 +113,78 @@ breaking, this is the mode to run. It gives up a few percent of peak hashrate at
 20 °C and it does not spend the hot hours hardware-throttled at a rate it cannot
 control.
 
+## Install to disk
+
+The live stick is deliberately disposable: `/etc/zmrig` lives in RAM and a
+reboot forgets it. An installed rig is the other half of that trade.
+
+```bash
+zmrig-os install --disk /dev/nvme0n1 --dry-run   # what would happen
+zmrig-os install --disk /dev/nvme0n1             # do it
+```
+
+The disk is repartitioned, not shared:
+
+| Partition | Size | Contents |
+| --- | --- | --- |
+| BIOS boot | 1 MiB | `core.img`, for a machine that boots in BIOS mode |
+| EFI | 100 MiB | `BOOTX64.EFI`, for UEFI |
+| root | the rest | kernel, initramfs, `rootfs-a.squashfs`, config |
+
+Then it copies, verifies what it wrote (by reading the new filesystem back and
+hashing the squashfs), and prints *remove the stick and boot from the disk*.
+There is no bootloader package on the machine: the two GRUB images are built
+when the ISO is built and travel inside it, so the install needs no network and
+no `grub-install`.
+
+Everything after that is automatic: the miner starts, the config persists, the
+thread count is measured on the machine it will run on, and the daily update
+job is already enabled.
+
+### Unattended, for Ventoy and fleets
+
+Add one parameter to the boot entry and walk away:
+
+```
+zmrig.os.install=/dev/nvme0n1
+```
+
+The machine installs, reboots into its own disk and starts mining. With Ventoy
+that is: pick the ISO, press `e`, add the parameter. A fleet is the same
+parameter on every machine with the disk name that model uses.
+
+## Updates
+
+An installed rig checks once a day, from busybox `crond` (`/etc/periodic/daily`),
+so there is no extra systemd timer and no package to keep.
+
+```bash
+zmrig-os auto --check    # is there anything newer?
+zmrig-os auto --apply    # do it now instead of at 03:00
+```
+
+- **The miner** is written next to the running system, not into `/usr/local/bin`
+  — that directory is RAM, so an update there would last until the reboot. The
+  previous binary is kept, and the miner is restarted into the new one.
+- **The OS image** (`AUTO_IMAGE=1`, off by default) is written into the *other*
+  slot, verified, and only then made the default for the next boot.
+- **An update that will not boot undoes itself.** The initramfs counts boots that
+  never became a mining rig; three of them flip the machine to the other slot
+  and reboot. `zmrig-os slot` shows both, `zmrig-os slot b` picks one.
+- `AUTO_UPDATE=0` turns the whole thing off. No manifest reachable means
+  "offline", which is not an error: the rig keeps mining and the job exits 0.
+
 ## What the image does that a normal distribution does not
 
 The harshest part of RandomX is memory, and the operating system decides almost
 all of it. On a general-purpose install every setting below is a fight against a
 package upgrade or a systemd unit. Here they are the defaults:
 
+- **The kernel carries only the drivers a rig uses.** Sound, video capture, GPU,
+  InfiniBand, ISDN, WAN, CAN, IIO, NFC, Bluetooth and staging modules are
+  removed at build time and `depmod` is rebuilt; the build log prints how many
+  were dropped and the size before and after. That is most of the image, and a
+  rig has never needed any of it — the console is the kernel's own framebuffer.
 - **2 MiB pages are reserved by the initramfs**, before any userspace program has
   fragmented memory. That is the +4–6 % on top of transparent huge pages, and it
   is the one tuning step that is nearly impossible to do later in the day.
@@ -143,7 +218,7 @@ Long uptime is not one feature, it is a chain of them:
 `zmrig-os doctor` prints every check the boot makes, with the value it found:
 
 ```
-  PASS  binary                 zmrig 6.35.0 - ZMRIG by @nggkhaiz
+  PASS  binary                 zmrig 6.36.0 - ZMRIG by @nggkhaiz
   PASS  wallet                 46SQLW7D...ysb5tJ
   PASS  memory                 32044 MB total, need 2400 MB
   PASS  hugepages              1168 x 2 MB reserved
@@ -168,8 +243,9 @@ The result is written to `os.conf`; `THREADS="auto"` returns to the heuristic.
 
 ## Keeping the settings
 
-The root filesystem is read-only, so the config lives in RAM and disappears at
-reboot. A small partition on the same stick fixes that:
+On an installed disk this is unnecessary: the config is on the boot medium and
+comes back by itself. On a live stick the root filesystem is read-only, so the
+config lives in RAM and disappears at reboot; a small partition fixes that:
 
 ```bash
 zmrig-os persist /dev/sdb1      # format, label ZMRIGDATA, copy the config
@@ -193,7 +269,9 @@ With those three lines, `http://rig:18080/2/summary` answers anyone holding the
 token, which is what a fleet dashboard, Home Assistant or a `curl` in a cron job
 needs. Leaving `API_HOST` at `127.0.0.1` keeps it on the machine.
 
-## Updates
+## Updates, by hand
+
+The automatic job above uses the same commands; these are the manual versions:
 
 ```bash
 zmrig-os update --check                  # what is published for this channel
@@ -201,9 +279,11 @@ zmrig-os update --apply                  # 19 MB binary, sha256 verified, swappe
 zmrig-os update --iso --write /dev/sdb1  # flash a newer image to another stick
 ```
 
-`--apply` patches the running image and is lost on reboot — reboot and you are
-back on the version that was burned in. That is the whole rollback procedure, and
-it needs no menu. `--iso` refuses to write the device the machine booted from.
+On a **live** stick `--apply` patches the running image and is lost on reboot —
+reboot and you are back on the version that was burned in. That is the whole
+rollback procedure and it needs no menu. On an **installed** rig it lands on the
+boot medium and survives. `--iso` refuses to write the device the machine booted
+from.
 
 Channels: `stable` follows master releases, `beta` follows the rolling
 pre-release. Both publish a manifest per instruction level, which is what the

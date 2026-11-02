@@ -7,6 +7,15 @@ you tell it to stop. Nothing is installed to a disk and nothing on the stick is
 modified, so one stick can set up a hundred machines and a mistaken boot leaves
 no trace.
 
+The same image also **installs** itself onto a disk, which is the form to use
+when the rig has one:
+
+```bash
+zmrig-os install --disk /dev/nvme0n1          # or --dry-run first
+```
+
+See [Install to disk](#install-to-disk) and [Updates](#updates).
+
 This file is the operator manual. The user-facing page is
 `site/docs/appliance/iso.md` (and its Vietnamese twin).
 
@@ -39,15 +48,26 @@ job instead of the operator's:
   virtio, ext4, vfat). No network in the initramfs: nothing to fetch, nothing to
   fail.
 - **Root filesystem**: Alpine with `alpine-base`, `openrc`, `kmod`, `e2fsprogs`,
-  `util-linux`, `curl`, `ca-certificates`, `chrony`, `openssh`, `pciutils`,
+  `dosfstools` (the installer's EFI partition), `util-linux` (`sfdisk` is the only
+  real GPT writer in the image), `curl`, `ca-certificates`, `chrony`, `openssh`,
   `ifupdown-ng`, `dhcpcd`. `zmrig` is a **static musl binary** built by
   `zmrig/build.sh --static`, so the miner cannot be broken by a libc update and
   the same file runs on any distribution.
+- **Kernel modules are pruned at build time**: `sound`, `media`, `gpu`,
+  `infiniband`, `isdn`, `wan`, `can`, `iio`, `staging`, `nfc`, `bluetooth` and
+  `thunderbolt` are deleted and `depmod` rebuilt. Those are the bulk of the image;
+  a rig drives the kernel's own framebuffer and no GPU, and `chroot-setup.sh`
+  prints how many modules went and the size before and after.
 - **Services**: `zmrig` (the miner, via `zmrig-os run`), `zmrig-firstboot` (the
-  wizard on the console when no wallet is configured), `networking`, `chronyd`,
-  `sshd`, `syslog`, `mdev`/`hwdrivers`.
-- **Layout**: `rootfs.squashfs` and `os.conf.example` live under `/zmrig` on the
-  media; the initramfs mounts the squashfs read-only and puts a tmpfs over it.
+  wizard on the console when no wallet is configured), `crond` (the daily update
+  job), `networking`, `chronyd`, `sshd`, `syslog`, `mdev`/`hwdrivers`. The miner
+  service *uses* networking, DNS and the clock rather than needing them: it starts
+  with the filesystem and stratum reconnects, so a DHCP lease is no longer on the
+  critical path to the first share.
+- **Layout**: `rootfs.squashfs` (or `rootfs-a/b.squashfs` on an installed disk),
+  `os.conf.example`, `boot/` with the kernel, the initramfs and the three GRUB
+  images. The initramfs mounts the squashfs read-only, puts a tmpfs over it, and
+  bind-mounts the boot medium at `/media` so the guest can keep state.
 
 ## Boot sequence
 
@@ -70,6 +90,71 @@ been up for a week the kernel cannot find 1168 contiguous 2 MiB pages any more,
 and the miner silently falls back to transparent huge pages. Reserving at boot
 is the difference between 814 H/s and 786 H/s on the machine in
 `doc/PERFORMANCE.md`, and it costs nothing.
+
+## Install to disk
+
+`zmrig-os install --disk /dev/sdX` writes the running image onto a disk:
+
+| Partition | Size | Contents |
+| --- | --- | --- |
+| 1 BIOS boot | 1 MiB | `core.img` — only read by a machine that boots in BIOS mode |
+| 2 EFI | 100 MiB | `BOOTX64.EFI` in `EFI/BOOT/` |
+| 3 root | rest, ext4, label `ZMRIGROOT` | `boot/vmlinuz-a`, `boot/initramfs-a.gz`, `zmrig/rootfs-a.squashfs`, `etc/zmrig/os.conf`, `boot/grub/grub.cfg` |
+
+The two GRUB images are **built with the ISO** (`grub-mkimage`, in
+`build-iso.sh`) and travel inside it, so the install needs no `grub-install`, no
+package manager and no network. Both are standalone: their early config searches
+for the `ZMRIGROOT` label and hands over to `/boot/grub/grub.cfg`, which is why
+adding a second disk does not stop the rig from booting.
+
+Order of operations, and why each one is where it is:
+
+1. `wipefs`, `sfdisk` (GPT), `mkfs.vfat`, `mkfs.ext4` — the target is
+   unrecognisable from this point on, so every input is validated first.
+2. copy kernel, initramfs, squashfs; write `grub.cfg` and the environment block;
+   write `os.conf` from the running configuration.
+3. `sync`, unmount, then `dd` `boot.img` into the first 512 bytes and `core.img`
+   at sector 2048.
+4. mount the new root **read-only and hash the squashfs** against the source. A
+   truncated copy fails here instead of after the reboot.
+5. optionally `--autotune` the thread count on the machine that is going to run
+   it, and write the winner into the installed config.
+
+`--dry-run` prints the partition script, the files and the boot sector offsets and
+changes nothing. What it prints comes from the same functions the real run calls
+(`partition_script`, `install_plan`), so the plan cannot drift from the code.
+
+Unattended: `zmrig.os.install=/dev/nvme0n1` on the kernel command line. `zmrig-os
+boot` installs, `sync`s and reboots before it starts mining.
+
+### A/B slots and rollback
+
+Two root filesystems live side by side on the root partition, and GRUB picks one
+by `--id` from a **1024-byte environment block** at `/boot/grub/grubenv`. The
+initramfs and `zmrig-os` write that block in shell (header, `zmrig_slot=X`, `#`
+padding) because the guest deliberately has no `grub-editenv`.
+
+The initramfs keeps a counter on the boot medium: incremented on every boot of an
+installed system, reset by the supervisor once the miner has been up for five
+minutes. Three boots that never got that far flip the machine to the other slot,
+write the environment block and reboot.
+
+## Updates
+
+Installed rigs run `/etc/periodic/daily/zmrig-auto` from busybox `crond`:
+
+| What | Where it goes | Rollback |
+| --- | --- | --- |
+| the miner binary | `<medium>/zmrig/bin/zmrig-<version>`, `current` a symlink | the previous file is kept; the image's own binary is still there |
+| the OS image (`AUTO_IMAGE=1`) | the other slot, verified before it becomes the default | three failed boots, or `zmrig-os slot <other>` |
+
+`AUTO_UPDATE=0` disables both. An unreachable manifest is treated as offline —
+the job exits 0 and the rig keeps mining, because a rig behind a firewall is
+normal and a support ticket every morning is not.
+
+The miner is *not* updated into `/usr/local/bin`: that directory is the tmpfs
+overlay, so the change would last until the next reboot. "Reboot to roll back" is
+honest for a live stick and wrong for an appliance.
 
 ## Modes
 

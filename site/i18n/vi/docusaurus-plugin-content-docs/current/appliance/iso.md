@@ -8,8 +8,18 @@ image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 
 `zmrig-os` là một hệ điều hành đào coin hoàn chỉnh: nhân Linux, một initramfs
 nhỏ, và root filesystem Alpine chỉ đọc bên trong có `zmrig` và gần như không có
-gì khác. Ghi ra USB, khởi động dàn máy, gõ ví — thế là đào. Không có trình cài
-đặt, không cần chuẩn bị ổ, không để lại nửa hệ thống trên máy.
+gì khác. Ghi ra USB, khởi động dàn máy, gõ ví — thế là đào. Không phải cài gì,
+không sửa gì trên máy.
+
+Nếu không muốn phụ thuộc vào cây USB thì cùng ảnh đó cài được thẳng lên ổ của
+máy bằng một lệnh, sau đó nó tự lo phần còn lại:
+
+```bash
+zmrig-os install --disk /dev/nvme0n1   # chia ổ, copy, khởi động từ ổ
+```
+
+[Cài lên ổ](#cài-lên-ổ) và [Cập nhật](#cập-nhật-tự-động) bên dưới là toàn bộ câu
+chuyện; phần còn lại của trang là ảnh làm gì và đổi bằng cách nào.
 
 ```bash
 # tải ảnh đúng loại CPU ở trang releases, rồi
@@ -99,6 +109,65 @@ khi nó hỏng, đây là chế độ nên chạy. Nó mất vài phần trăm h
 và đổi lại là không phải sống những giờ nóng trong trạng thái bị phần cứng tự hạ
 xung mà mình không kiểm soát được.
 
+## Cài lên ổ
+
+Cây USB là thứ cố ý dùng một lần: `/etc/zmrig` nằm trong RAM và reboot là quên.
+Máy đã cài là nửa còn lại của sự đánh đổi đó.
+
+```bash
+zmrig-os install --disk /dev/nvme0n1 --dry-run   # xem trước sẽ làm gì
+zmrig-os install --disk /dev/nvme0n1             # làm thật
+```
+
+Ổ bị chia lại, không chia sẻ:
+
+| Phân vùng | Kích thước | Nội dung |
+| --- | --- | --- |
+| BIOS boot | 1 MiB | `core.img`, cho máy boot kiểu BIOS |
+| EFI | 100 MiB | `BOOTX64.EFI`, cho UEFI |
+| root | phần còn lại | nhân, initramfs, `rootfs-a.squashfs`, cấu hình |
+
+Sau đó nó copy, đọc lại đúng thứ vừa ghi (mount lại phân vùng mới và băm
+squashfs) rồi in *rút USB ra và khởi động từ ổ*. Trên máy không có gói
+bootloader nào: hai ảnh GRUB được build lúc build ISO và đi kèm trong ISO, nên
+việc cài không cần mạng và không cần `grub-install`.
+
+Mọi thứ sau đó là tự động: miner tự chạy, cấu hình được giữ, số thread được đo
+ngay trên máy sẽ đào, và job cập nhật hằng ngày đã bật sẵn.
+
+### Không cần bàn phím: Ventoy và fleet
+
+Thêm một tham số vào mục boot rồi đi làm việc khác:
+
+```
+zmrig.os.install=/dev/nvme0n1
+```
+
+Máy tự cài, reboot vào ổ của nó và bắt đầu đào. Với Ventoy: chọn ISO, bấm `e`,
+thêm tham số. Với fleet: cùng tham số đó trên mọi máy, chỉ đổi tên ổ theo model.
+
+## Cập nhật tự động
+
+Máy đã cài kiểm tra mỗi ngày một lần, bằng busybox `crond`
+(`/etc/periodic/daily`), nên không có systemd timer và không có gói nào phải
+giữ cho sống.
+
+```bash
+zmrig-os auto --check    # có bản mới hơn không?
+zmrig-os auto --apply    # làm ngay thay vì đợi 03:00
+```
+
+- **Miner** được ghi cạnh hệ thống đang chạy, không ghi vào `/usr/local/bin` —
+  thư mục đó là RAM, cập nhật vào đó chỉ sống tới lần reboot sau. Bản cũ được
+  giữ lại, và miner được restart sang bản mới.
+- **Ảnh hệ điều hành** (`AUTO_IMAGE=1`, mặc định tắt) được ghi vào slot *kia*,
+  kiểm tra rồi mới thành mặc định cho lần boot sau.
+- **Bản cập nhật không boot được thì tự lùi.** Initramfs đếm số lần boot mà máy
+  không trở thành một rig đang đào; ba lần thì nó chuyển sang slot kia và reboot.
+  `zmrig-os slot` xem cả hai, `zmrig-os slot b` chọn một.
+- `AUTO_UPDATE=0` tắt toàn bộ. Không với tới được manifest nghĩa là "đang offline",
+  không phải lỗi: rig vẫn đào và job thoát 0.
+
 ## Ảnh làm những gì mà distro thường không làm
 
 Phần khó nhất của RandomX là bộ nhớ, và hệ điều hành quyết gần như toàn bộ. Trên
@@ -136,7 +205,7 @@ Chạy lâu không phải một tính năng mà là một chuỗi:
 `zmrig-os doctor` in ra mọi kiểm tra mà lúc boot đã làm, kèm giá trị đọc được:
 
 ```
-  PASS  binary                 zmrig 6.35.0 - ZMRIG by @nggkhaiz
+  PASS  binary                 zmrig 6.36.0 - ZMRIG by @nggkhaiz
   PASS  wallet                 46SQLW7D...ysb5tJ
   PASS  memory                 32044 MB total, need 2400 MB
   PASS  hugepages              1168 x 2 MB reserved
@@ -161,8 +230,9 @@ Kết quả được ghi vào `os.conf`; `THREADS="auto"` quay lại heuristic.
 
 ## Giữ lại cấu hình
 
-Root filesystem chỉ đọc, nên cấu hình nằm trong RAM và mất khi reboot. Một phân
-vùng nhỏ trên cùng cây USB giải quyết việc đó:
+Trên máy đã cài thì không cần bước này: cấu hình nằm trên ổ và tự quay lại. Trên
+cây USB live, root filesystem chỉ đọc nên cấu hình nằm trong RAM và mất khi
+reboot; một phân vùng nhỏ giải quyết việc đó:
 
 ```bash
 zmrig-os persist /dev/sdb1      # format, gắn nhãn ZMRIGDATA, chép cấu hình
@@ -186,7 +256,9 @@ Với ba dòng đó, `http://rig:18080/2/summary` trả lời cho ai có token �
 một dashboard fleet, Home Assistant hay một lệnh `curl` trong cron cần. Để
 `API_HOST` là `127.0.0.1` thì API chỉ nằm trong máy.
 
-## Cập nhật
+## Cập nhật, làm tay
+
+Job tự động ở trên dùng đúng những lệnh này; đây là bản làm tay:
 
 ```bash
 zmrig-os update --check                  # bản nào đang phát hành cho kênh này
@@ -194,9 +266,10 @@ zmrig-os update --apply                  # binary 19 MB, kiểm sha256, thay t�
 zmrig-os update --iso --write /dev/sdb1  # ghi ảnh mới ra USB khác
 ```
 
-`--apply` vá vào ảnh đang chạy và mất khi reboot — reboot là quay lại đúng bản
-đã ghi trong ảnh. Toàn bộ quy trình rollback là vậy, không cần menu.
-`--iso` từ chối ghi vào thiết bị mà máy đang boot từ đó.
+Trên **cây USB live**, `--apply` vá vào ảnh đang chạy và mất khi reboot — reboot
+là quay lại đúng bản đã ghi trong ảnh; toàn bộ quy trình rollback là vậy, không
+cần menu. Trên **máy đã cài** nó nằm trên ổ và sống qua reboot. `--iso` từ chối
+ghi vào thiết bị mà máy đang boot từ đó.
 
 Kênh: `stable` theo bản phát hành từ master, `beta` theo bản pre-release luân
 phiên. Cả hai phát hành manifest riêng cho từng mức lệnh CPU, và đó là thứ trình

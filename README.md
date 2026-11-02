@@ -8,7 +8,7 @@
 
 by **[@nggkhaiz](https://github.com/NggKhaiz)**
 
-[![release](https://img.shields.io/badge/release-6.35.0-f2763f)](CHANGELOG.md)
+[![release](https://img.shields.io/badge/release-6.36.0-f2763f)](CHANGELOG.md)
 [![licence](https://img.shields.io/badge/licence-GPL--3.0-blue)](LICENSE)
 [![dev fee](https://img.shields.io/badge/developer%20fee-1%25%20%C2%B7%20off%20switch-f2763f)](doc/FEE.md)
 [![platform](https://img.shields.io/badge/platform-Linux%20x86--64%20%C2%B7%20macOS%20%C2%B7%20Windows-lightgrey)](#build-from-source)
@@ -172,8 +172,18 @@ image to a USB stick, boot the rig, paste your wallet:
 sudo dd if=zmrig-os-<version>-x86-64-v3.iso of=/dev/sdX bs=4M status=progress conv=fsync
 ```
 
-It is a live image, not an installer: nothing is written to any disk, the stick
-is never modified, and pulling it out leaves the machine exactly as it was.
+It boots live: nothing is written to any disk, the stick is never modified, and
+pulling it out leaves the machine exactly as it was. When you would rather not
+depend on the stick, the same image installs onto the machine's own disk and then
+looks after itself:
+
+```bash
+zmrig-os install --disk /dev/nvme0n1   # one command, about a minute, no network
+```
+
+After that it boots from its own disk, keeps its config, starts mining by itself,
+and updates once a day — with A/B root filesystems, so an update that will not
+boot rolls back to the other slot on the third try instead of needing a visit.
 
 - **Tuned by construction.** 2 MiB pages are reserved by the initramfs before any
   userspace program has fragmented memory (+4–6 % over transparent huge pages),
@@ -184,9 +194,12 @@ is never modified, and pulling it out leaves the machine exactly as it was.
   network can still be switched.
 - **Stable on purpose:** the miner exits on a stall, the supervisor restarts it,
   five failed starts reboot the box, logs rotate, chrony keeps the clock.
-- **Updates are verified:** `zmrig-os update --apply` swaps in a sha256-checked
-  static binary inside the running image; reboot and you are back on the version
-  burned into the stick, which is the entire rollback story.
+- **Updates are verified and automatic:** a daily job installs a sha256-checked
+  static binary *next to* the running system, so it survives a reboot; on an
+  installed disk the OS image can update too, into the spare slot.
+- **Light and quick to boot:** the kernel carries only the drivers a rig uses
+  (sound, video capture, GPU, InfiniBand and the rest are removed at build time),
+  and the miner no longer waits for DHCP before it starts.
 - **Two builds** — `x86-64-v3` (AVX2) and `x86-64-v2` (everything since Nehalem) —
   rebuilt by CI whenever `os/`, `zmrig/` or the tuner changes, with every past
   version kept. The workflow is `.github/workflows/os.yml` and it also runs on a
@@ -430,7 +443,7 @@ checks while two of the rows are wrong.
 | `site` `npm test` | 67 | command builder and its blocked states, calculator arithmetic against hand-computed numbers including break-even, pool table vs `oneclick.sh` and `doc/POOLS.md`, coin matrix and ranking (a missing number is never a zero, no invented pool or price), en/vi key parity and no dead or duplicated message |
 | `tests/docs/pages.sh` | 22 | the published site as Pages serves it: Docusaurus entry point, 23 sidebar pages in both locales, all 2494 local `href`/`src`, both sitemaps, language and theme controls, one localised social card per page, a title/description/lang on every page with no leaked placeholder, old-URL redirects, committed build not stale |
 | `zmrig/tests/thermal.sh` | 10 | the safe mode against a real process and a real pool: cool is not throttled, heat sheds threads, one thread and hot stops hashing, cooling resumes, no sensor changes nothing |
-| `os/tests/control.sh` | 79 | the appliance tool: wallet validation (length, base58 alphabet, prefix), a command line per mode, kernel-command-line overrides, the supervisor waiting for a wallet, and an updater that refuses a checksum mismatch — all with no root, no miner and no network |
+| `os/tests/control.sh` | 126 | the appliance tool: wallet validation (length, base58 alphabet, prefix), a command line per mode, kernel-command-line overrides, the supervisor waiting for a wallet, an updater that refuses a checksum mismatch, the installer's partition table and its refusals, A/B slot arithmetic and the 1024-byte GRUB environment block — all with no root, no miner, no disk and no network |
 
 ## Documentation
 

@@ -1,3 +1,74 @@
+# 6.36.0 — the image installs itself, updates itself, and fits in less RAM
+
+Two forms, one image. The stick still boots and mines with nothing written
+anywhere; the same image now also *installs* onto the machine's own disk, and
+from then on there is nothing to do: it boots, it mines, it updates itself, and
+an update that will not boot undoes itself.
+
+### Install to disk
+- `zmrig-os install --disk /dev/nvme0n1` partitions the disk (BIOS-boot, EFI,
+  one ext4 root), copies the kernel, the initramfs and the root squashfs, and
+  writes the two bootloaders. One command, about a minute, no network.
+- **The bootloaders are built at image-build time**, not on the rig: a standalone
+  `BOOTX64.EFI`, a `core.img` and the 512-byte `boot.img`, all inside the ISO.
+  An image that needs `grub-install` is an image that needs a GRUB toolkit on
+  the machine, and that is 40 MB of modules for a job that happens once.
+- The EFI binary finds its config by **filesystem label**, not by disk number,
+  so plugging in a second disk does not stop the rig from booting.
+- `--dry-run` prints the partition table, the files and where the boot sector
+  goes, and changes nothing. What it prints is the code that runs, not a copy.
+- **Unattended**: `zmrig.os.install=/dev/nvme0n1` on the kernel command line
+  installs and reboots. That is the Ventoy and fleet path - press `e`, type one
+  parameter.
+- After the copy, the squashfs is read back **through a fresh mount** and hashed
+  against the source. A truncated write is caught before the machine is told to
+  reboot into it.
+
+### A/B slots and rollback
+- The installed system keeps two root filesystems: `rootfs-a.squashfs` and
+  `rootfs-b.squashfs`, and GRUB chooses between them by `--id` from a
+  **1024-byte environment block** - the same file `grub-editenv` writes, written
+  here in shell because the guest has no GRUB tools.
+- The initramfs counts boots: three that fail to become a mining rig flip the
+  machine to the other slot and reboot. "Failed" means the miner never got five
+  minutes of uptime, which covers a kernel that panics, a squashfs that will not
+  mount and a miner that exits in a loop.
+- `zmrig-os slot` prints both, `zmrig-os slot b` sets the next one.
+
+### Updates, automatically
+- busybox `crond` runs `/etc/periodic/daily/zmrig-auto` once a day: check the
+  manifest, install a newer miner **next to the running system** (the image is a
+  read-only squashfs, so `/usr/local/bin` is RAM and an "update" there would be
+  a demo), keep the previous binary, restart.
+- `AUTO_IMAGE=1` also writes the whole OS image into the spare slot, verifies
+  it, points the next boot at it and reboots. Off by default, because it is the
+  one update that changes the kernel.
+- `AUTO_UPDATE=0` turns all of it off. An unreachable manifest is not an error:
+  a rig behind a firewall keeps mining and the daily job exits 0.
+
+### Lighter, and faster to boot
+- **The kernel module tree is pruned**: sound, media, GPU, InfiniBand, ISDN, WAN,
+  CAN, IIO, staging, NFC, Bluetooth and Thunderbolt are removed and `depmod` is
+  rebuilt. They are the bulk of the image and none of them has ever hashed a
+  block. The build prints how many modules it dropped and how big the tree
+  became, so the number is in the log rather than in an estimate.
+- `pciutils` is gone (nothing in the image called it); `dosfstools` is added for
+  the EFI partition.
+- The miner service no longer *needs* networking, DNS or the clock: those are
+  soft dependencies now, so the miner starts with the filesystem instead of
+  after DHCP. Stratum retries on its own; waiting for a lease costs ten seconds
+  per boot and buys nothing.
+- New GRUB entry: **max hashrate, CPU mitigations off**. It is a trade (Milldown
+  class attacks need code execution on this machine first) and it is offered as
+  a menu item, never as the default. Not measured in the environment that wrote
+  this, and said so in the docs.
+
+### Tests
+`os/tests/control.sh` 126 checks (was 79): the installer's partition table, its
+plan, the slot arithmetic, the version comparison, the GRUB environment block
+being exactly 1024 bytes, and every refusal (loop device, optical device, the
+disk it booted from).
+
 # 6.35.0 — safe mode: mine without cooking the machine
 
 Every mode until now answered "how fast can this box go". `safe` answers the
