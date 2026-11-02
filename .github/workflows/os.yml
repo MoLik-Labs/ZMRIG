@@ -132,9 +132,9 @@ jobs:
           # matters, and a compile that spawns four processes buries it. Take
           # the errors by name first, then the last few lines for context.
           {
-            grep -m 12 -E 'error: |fatal error|undefined reference|cannot find' build.log || true
-            echo "---"
-            tail -n 10 build.log
+            grep -E '^==> ' build.log | tail -n 4 || true
+            grep -m 3 -E 'command:' build.log || true
+            grep -m 10 -E 'error: |fatal error|undefined reference|cannot find' build.log || true
           } | sed -e 's/%/%25/g' -e 's/\r//g' -e 's/::/#/g' -e 's/^/| /' \
             | awk 'BEGIN{ORS=""} {print $0 "%0A"}' > annotation.txt
           echo "::error title=ISO build failed::$(cat annotation.txt)"

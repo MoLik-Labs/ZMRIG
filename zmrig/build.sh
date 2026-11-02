@@ -114,12 +114,17 @@ fi
 # Ask for the feature by name when the compiler knows it; ignore it when it does
 # not, because older clang enables 512-bit from -mavx512f alone.
 AVX512_FLAGS=(-mavx512f -mavx512vl -mavx512dq -mavx512bw -mvaes)
-# -fsyntax-only, not -c -o /dev/null: zig's driver takes `-` as the output name
-# and leaves a file called `-.o` in the working directory.
-if printf 'int main(void){return 0;}\n' |
-   "${CXX_BIN[@]}" -x c++ -mevex512 -fsyntax-only - >/dev/null 2>&1; then
+# Probed by compiling a real file to a real object: zig's driver does not
+# implement -fsyntax-only (it answers FileNotFound for every input), and it
+# treats a trailing `-` as an output name, so both of the obvious one-liners
+# report "unsupported" no matter what the compiler can do.
+probe_dir=$(mktemp -d 2>/dev/null || echo "${OBJ}/probe")
+mkdir -p "$probe_dir"
+printf 'int main(void){return 0;}\n' > "${probe_dir}/probe.cpp"
+if "${CXX_BIN[@]}" -mevex512 -c "${probe_dir}/probe.cpp" -o "${probe_dir}/probe.o" >/dev/null 2>&1; then
     AVX512_FLAGS+=(-mevex512)
 fi
+rm -rf "$probe_dir"
 
 # Objects are not interchangeable between flag sets. This signature used to be
 # computed from the *environment* arrays, which were still empty at that point,
