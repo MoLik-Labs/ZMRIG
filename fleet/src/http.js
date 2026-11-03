@@ -78,11 +78,11 @@ function cleanAcks(acks) {
   }));
 }
 
-function createServer({ config, store, log = () => {}, now = () => Date.now(), onEvent = () => {}, onCheckIn = () => {}, releases = null }) {
+function createServer({ config, store, log = () => {}, now = () => Date.now(), onEvent = () => {}, onCheckIn = () => {}, releases = null, roster = null }) {
   const lastHello = new Map();
   // Null when no password is configured: the dashboard is opt-in, and a bot-only
   // host has no HTML surface at all.
-  const web = createWeb({ config, store, log, releases, now });
+  const web = createWeb({ config, store, log, releases, now, roster });
 
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, 'http://localhost');

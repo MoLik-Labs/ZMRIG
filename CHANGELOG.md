@@ -47,10 +47,34 @@ what it is — a scratch cache — and `.github/workflows/keepalive.yml` asks
 `/healthz` twice an hour, which covers a fleet that is quiet, while a fleet that
 is checking in every minute keeps the service awake by itself.
 
-Tests: fleet **69** (was 59) — three roster shapes, a broken roster reported
-rather than thrown, a correction queued once instead of once a minute, and the
-test that matters: the same fleet, a brand new empty store, still enrolled and
-still reconciled.
+## The dashboard now has every command the chat has
+
+`/rename` and `/log <rig> [n]` were the two the browser could not do. A name is
+applied immediately rather than queued — the rig never learns its own name, so
+there is nothing to ask it — and the log form takes 5-80 lines like the chat,
+clamped rather than refused because it is a display setting.
+
+A rig the roster pins now says so, and lists the fields it pins. Without that,
+changing a value in the browser can look like it silently failed: it applies on
+one check-in and is corrected on the next, because the roster is re-read every
+minute. The page now explains the loop instead of leaving somebody to guess at it.
+
+## The USB stick, in the docs
+
+Someone mining continuously for a year will ask whether the stick survives it,
+so `docs/appliance/iso` now answers with what the image actually does: after boot
+nothing is written to the stick — the root filesystem is a read-only squashfs and
+the writable layer is a tmpfs — so a year of mining is a handful of reads a day.
+The section covers metal-bodied sticks, small capacity, clean power, few reboots,
+the two Ventoy habits that matter (`VTOY_DEFAULT_IMAGE`, and no persistence for
+this image), and the honest answer that an internal drive is more durable than any
+stick. It claims no lifetime in hours, because that depends on the controller and
+the room.
+
+Tests: fleet **73** (was 59) — three roster shapes, a broken roster reported
+rather than thrown, a correction queued once instead of once a minute, the same
+fleet surviving an emptied store, and the dashboard's rename, log length and
+roster badge.
 
 # 6.40.1 — a portable build that compiles the portable way
 

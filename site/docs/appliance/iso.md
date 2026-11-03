@@ -153,6 +153,53 @@ The machine installs, reboots into its own disk and starts mining. With Ventoy
 that is: pick the ISO, press `e`, add the parameter. A fleet is the same
 parameter on every machine with the disk name that model uses.
 
+### The stick, and how to make it last
+
+A stick mining 24/7 for a year is 8,760 hours inside a device built to carry a
+document across a room. The answer is that the stick does not work while the rig
+mines.
+
+**Nothing is written to it after boot.** The root filesystem is a squashfs
+mounted read-only, and the writable layer stacked on top is a tmpfs in RAM — that
+is where the logs, the wallet file and an updated miner live. It is also why a
+reboot forgets an unpersisted config, and why a log that grows cannot fill the
+stick. NAND wears from writes; during normal running there are none.
+
+What does touch the stick: each boot reads the kernel, the initramfs and the
+158 MB squashfs; `zmrig-os install` writes once; an image update writes one slot
+at a time. So the stick's real workload is a handful of reads a day, not a year
+of writes. That turns the question from endurance into heat, power and cheap
+controllers:
+
+| Keep | Why |
+| --- | --- |
+| the stick **cool** | sustained heat costs NAND retention far more than reads do. A metal body and a port away from the PSU exhaust is most of it |
+| the stick **small** | the image is 158 MB, so 8 GB is generous. The cheapest high-capacity sticks have the worst controllers |
+| **power** clean | the only corruption window is an install or an image update. A UPS, or simply not pulling the cable mid-update, closes it |
+| **reboots** few | every boot reads ~158 MB. A rig that reboots three times a day does the stick more work than one that mines for a month — and the OS reboots itself only after five failed miner starts |
+
+**Ventoy** boots this image the way a burned stick does: the ISO is read-only and
+nothing inside it is modified. Everything above applies unchanged, plus two
+habits:
+
+* **do not enable Ventoy persistence for this image.** Configuration belongs on
+  the kernel command line (`zmrig.os.wallet=…`, `zmrig.os.pool=…`) or in the
+  `os.conf` next to the image, and a fleet gets the rest from its roster.
+  Persistence turns the log into writes on the stick, which is the one thing this
+  design avoids.
+* set `VTOY_DEFAULT_IMAGE` (and `VTOY_DEFAULT_IMAGE_FORCE=1`) so a headless
+  machine boots straight into the image, and update Ventoy itself rarely — that
+  is the only other thing that writes to the stick.
+
+**The most durable setup is not a stick.** If the machine has a SATA or NVMe
+drive, `zmrig-os install --disk /dev/…` once: the OS moves to the drive, the
+stick becomes an installer you can put in a drawer, and `zmrig-os update` has
+somewhere sane to write. For a live fleet, a cloned spare stick — the ISO plus
+one `os.conf` — is the whole disaster plan.
+
+Not claimed here: a lifetime in hours. It depends on the controller and on the
+temperature of the room, and it has not been measured in this environment.
+
 ## Updates
 
 An installed rig checks once a day, from busybox `crond` (`/etc/periodic/daily`),

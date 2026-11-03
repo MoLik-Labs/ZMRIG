@@ -82,6 +82,8 @@ button.primary:hover{filter:brightness(.95);color:var(--accent-ink)}
 button.danger{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 40%,var(--line))}
 button.danger:hover{background:var(--bad);color:#fff;border-color:var(--bad)}
 .actions{display:flex;gap:.5rem;flex-wrap:wrap;margin:.6rem 0}
+form.inline{display:flex;gap:.4rem;align-items:center;margin:0}
+input.narrow{width:5.5rem}
 .flash{border-left:3px solid var(--ok);background:var(--panel);padding:.6rem .8rem;border-radius:6px;margin:0 0 1rem}
 .flash.bad{border-color:var(--bad)}
 .kv{display:grid;grid-template-columns:max-content 1fr;gap:.35rem 1rem;margin:.4rem 0}

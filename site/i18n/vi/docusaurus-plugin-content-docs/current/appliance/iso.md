@@ -146,6 +146,50 @@ zmrig.os.install=/dev/nvme0n1
 Máy tự cài, reboot vào ổ của nó và bắt đầu đào. Với Ventoy: chọn ISO, bấm `e`,
 thêm tham số. Với fleet: cùng tham số đó trên mọi máy, chỉ đổi tên ổ theo model.
 
+### Cái USB, và cách để nó sống lâu
+
+Một cây USB đào 24/7 suốt một năm là 8.760 giờ nằm trong một thiết bị vốn được
+làm ra để chở một file văn bản qua phòng. Câu trả lời là: cây USB **không làm
+việc** trong lúc rig đào.
+
+**Sau khi boot xong, không có gì được ghi lên nó.** Root filesystem là squashfs
+mount read-only, lớp ghi được xếp chồng lên trên là tmpfs trong RAM — log, file
+ví, bản miner vừa cập nhật đều nằm ở đó. Đó cũng là lý do một lần reboot quên
+cấu hình chưa persist, và lý do log có phình cũng không đầy được cây USB. NAND
+mòn vì ghi; lúc chạy bình thường không có lần ghi nào.
+
+Thứ thật sự chạm vào USB: mỗi lần boot đọc kernel, initramfs và ảnh squashfs
+158 MB; `zmrig-os install` ghi một lần; cập nhật ảnh ghi từng slot một. Nên khối
+lượng thật của cây USB là vài lần đọc mỗi ngày, không phải một năm ghi. Vậy câu
+hỏi chuyển từ "độ bền" sang nhiệt, nguồn và controller rẻ tiền:
+
+| Giữ cho | Vì sao |
+| --- | --- |
+| USB **mát** | nhiệt cao kéo dài làm mất khả năng lưu dữ liệu của NAND hơn hẳn việc đọc. Vỏ kim loại và một cổng tránh khí nóng của PSU là phần lớn của việc này |
+| USB **nhỏ** | ảnh chỉ 158 MB, nên 8 GB là dư. Loại dung lượng lớn giá rẻ có controller tệ nhất |
+| **nguồn** sạch | cửa sổ hỏng dữ liệu duy nhất là lúc cài hoặc lúc cập nhật ảnh. Một UPS, hoặc đơn giản là không rút dây giữa lúc cập nhật, đóng cửa sổ đó lại |
+| **reboot** ít | mỗi lần boot đọc ~158 MB. Máy reboot ba lần một ngày làm cây USB vất vả hơn máy đào cả tháng — và hệ điều hành chỉ tự reboot sau năm lần miner khởi động hỏng liên tiếp |
+
+**Ventoy** boot ảnh này đúng như một cây USB đã ghi: ISO là read-only và không có
+gì bên trong bị sửa. Mọi điều trên giữ nguyên, thêm hai thói quen:
+
+* **đừng bật persistence của Ventoy cho ảnh này.** Cấu hình thuộc về kernel
+  command line (`zmrig.os.wallet=…`, `zmrig.os.pool=…`) hoặc file `os.conf` cạnh
+  ảnh, còn fleet lấy phần còn lại từ roster. Persistence biến log thành những lần
+  ghi lên USB — đúng thứ thiết kế này tránh.
+* đặt `VTOY_DEFAULT_IMAGE` (kèm `VTOY_DEFAULT_IMAGE_FORCE=1`) để máy không bàn
+  phím boot thẳng vào ảnh, và ít cập nhật bản thân Ventoy — đó là thứ còn lại duy
+  nhất ghi lên USB.
+
+**Cấu hình bền nhất không phải là USB.** Nếu máy có ổ SATA hoặc NVMe, chạy
+`zmrig-os install --disk /dev/…` một lần: hệ điều hành chuyển sang ổ, cây USB
+thành bộ cài cất trong ngăn kéo, và `zmrig-os update` có chỗ ghi hợp lý. Với một
+fleet đang chạy, một cây USB dự phòng đã clone — ảnh cộng một file `os.conf` — là
+toàn bộ phương án dự phòng.
+
+Không tuyên bố ở đây: tuổi thọ tính bằng giờ. Nó phụ thuộc controller và nhiệt độ
+phòng, và chưa được đo trong môi trường này.
+
 ## Cập nhật tự động
 
 Máy đã cài kiểm tra mỗi ngày một lần, bằng busybox `crond`

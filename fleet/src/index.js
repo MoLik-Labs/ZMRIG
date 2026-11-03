@@ -141,6 +141,7 @@ function start(env = process.env) {
     releases: app.releases,
     onEvent: app.onEvent,
     onCheckIn: app.onCheckIn,
+    roster: app.roster,
   });
 
   server.listen(config.port, config.bind, () => {
