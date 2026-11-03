@@ -212,13 +212,15 @@ jobs:
           # the image starts, reads its config and serves HTTP with no volume.
           curl -fsS http://127.0.0.1:18080/api/config | tee /dev/stderr | grep -q '"fee_percent"'
 
-          # /healthz answers 503 - honestly - while there is no daemon behind it,
-          # so a job has never been fetched. Asserting 200 here would only prove
-          # that a health check can lie.
+          # /healthz reports the job the pool has, and with `DAEMON=` there is no
+          # daemon and therefore no job: 503 and `"ok": false` is the correct,
+          # honest answer. Asserting 200 here would only prove that a health
+          # check can lie. The pattern tolerates the spacing a JSON serialiser
+          # chooses; asserting the pair, not the formatting.
           code=$(curl -s -o /tmp/health.json -w '%{http_code}' http://127.0.0.1:18080/healthz)
           echo "healthz -> $code $(cat /tmp/health.json)"
           [ "$code" = "503" ]
-          grep -q '"ok": *false' /tmp/health.json
+          grep -Eq '"ok" *: *false' /tmp/health.json
 
           docker logs pool | tail -20
           docker rm -f pool
