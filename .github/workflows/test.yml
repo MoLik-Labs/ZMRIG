@@ -161,10 +161,23 @@ jobs:
           docker run -d --name pool -p 18080:8080 \
             -e DAEMON= -e POOL_NAME=ci ocean-pool:ci
           for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:18080/healthz >/dev/null 2>&1; then break; fi
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/config || echo 000)
+            if [ "$code" = "200" ]; then break; fi
             sleep 1
           done
-          curl -fsS http://127.0.0.1:18080/healthz | tee /dev/stderr | grep -q '"ok"'
+
+          # /api/config needs nothing but the process: it is the real proof that
+          # the image starts, reads its config and serves HTTP with no volume.
+          curl -fsS http://127.0.0.1:18080/api/config | tee /dev/stderr | grep -q '"fee_percent"'
+
+          # /healthz answers 503 - honestly - while there is no daemon behind it,
+          # so a job has never been fetched. Asserting 200 here would only prove
+          # that a health check can lie.
+          code=$(curl -s -o /tmp/health.json -w '%{http_code}' http://127.0.0.1:18080/healthz)
+          echo "healthz -> $code $(cat /tmp/health.json)"
+          [ "$code" = "503" ]
+          grep -q '"ok": *false' /tmp/health.json
+
           docker logs pool | tail -20
           docker rm -f pool
 
