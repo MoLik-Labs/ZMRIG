@@ -1,7 +1,7 @@
 ---
 title: Mã báo cáo
 description: Định dạng ZMRIG1. — máy đo những gì, cách tự giải mã, và vì sao trong đó không có ví hay token.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
+image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 ---
 
 # Mã báo cáo
@@ -44,6 +44,9 @@ dạng:
   "pw": 22,
   "pwsrc": "rapl",
   "hw": 66.8,
+  "tmax": 72,
+  "tc": 68.5,
+  "at": 7,
   "health": "ok",
   "pool": "gulf.moneroocean.stream:10001",
   "ts": 1793412000
@@ -59,7 +62,14 @@ dạng:
 | `up` | uptime tính bằng giây |
 | `pw`, `pwsrc` | watt, và nguồn: `rapl`, `hwmon`, `user`, `none` |
 | `hw` | hash trên watt, khi biết công suất, ngược lại `null` |
+| `tmax` | mức `--max-temp`, hoặc `null` khi không bật chế độ an toàn |
+| `tc` | nhiệt độ lần cuối bộ điều tiết phản ứng, hoặc `null` |
+| `at` | số thread đang được phép chạy — thấp hơn `thr` khi đang bị hạ tải |
 | `health` | miner tự đánh giá thu nhập: `ok`, `warming`, `degraded`, `stalled`, `rejected` |
+
+`at` thấp hơn `thr` là trường duy nhất mà bảng điều khiển không thể suy ra từ
+hashrate: một rig đang bị hạ tải và một rig khoẻ chạy nửa công suất trông giống
+hệt nhau từ phía pool, và chỉ một trong hai đang có vòng bi sắp hỏng.
 
 Không có gì khác trong đó. **Không địa chỉ ví, không mật khẩu pool, không IP công
 khai, không hostname** ngoài tên worker do chính bạn đặt.

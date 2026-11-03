@@ -38,7 +38,7 @@ function makeLogger(level = 'info', stream = process.stdout) {
 const HELP = `zmrig-proxy ${VERSION} - ZMRIG proxy by @nggkhaiz
 one connection to the pool for every rig
 
-https://github.com/NggKhaiz/ZMRIG
+https://github.com/MoLik-Labs/ZMRIG
 
   zmrig-proxy start [flags]          run the proxy (default command)
   zmrig-proxy doctor [flags]         test the pool, the wallet and the network

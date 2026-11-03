@@ -62,16 +62,24 @@ test('every branch named in a repository URL is a long-lived one', () => {
 });
 
 test('the published one-liner installs from BETA', () => {
-  const expected = 'https://raw.githubusercontent.com/NggKhaiz/ZMRIG/BETA/oneclick.sh';
+  // The owner is deliberately not written down here: the repository moved once,
+  // and the copy broke everywhere it was spelled out. tests/docs/identity.sh
+  // holds the owner to the git remote; this test holds the two copies to each
+  // other, and both to BETA.
+  const pattern =
+    /https:\/\/raw\.githubusercontent\.com\/[^/\s]+\/ZMRIG\/BETA\/oneclick\.sh/;
 
-  assert.ok(
-    read('README.md').includes(expected),
-    'README one-liner uses the stable branch',
-  );
-  // The URL lives in command.js now, because the wizard and the quick builder
-  // both build their commands there. One file, one URL.
-  assert.ok(
-    read('legacy/assets/command.js').includes(expected),
+  const readme = read('README.md').match(pattern);
+  assert.ok(readme, 'README one-liner installs from BETA');
+
+  // The URL lives in command.js too, because the wizard and the quick builder
+  // both build their commands there. One branch, one URL.
+  const builder = read('legacy/assets/command.js').match(pattern);
+  assert.ok(builder, 'the site builder installs from BETA');
+
+  assert.equal(
+    builder[0],
+    readme[0],
     'the site builder uses the same URL as the README',
   );
 });

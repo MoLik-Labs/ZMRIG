@@ -1,7 +1,7 @@
 ---
 title: File cấu hình
 description: Thứ tự ưu tiên, một config.json đầy đủ do installer ghi, và mọi khoá mà engine Zig hiểu.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
+image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 ---
 
 # File cấu hình

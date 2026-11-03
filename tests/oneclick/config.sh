@@ -105,6 +105,23 @@ else
     fail "donate-level is $(json_get "${DIR1}/config.json" "donate-level"), expected 1"
 fi
 
+# --- the thermal policy reaches the file the miner reads -------------------
+DIR_T="${WORK}/etc-thermal"
+run_config "$DIR_T" --engine=zmrig --pool=supportxmr.com:3333 --max-temp=70
+if [ "$(json_get "${DIR_T}/config.json" "max-temp")" = "70" ]; then
+    pass "--max-temp is written to config.json"
+else
+    fail "max-temp in config is '$(json_get "${DIR_T}/config.json" "max-temp")', expected 70"
+fi
+
+# ... and its absence is an absence, not a zero: a config that says nothing
+# cannot throttle a machine that never asked to be throttled.
+if [ "$(json_get "${DIR1}/config.json" "max-temp")" = "null" ]; then
+    pass "no --max-temp writes no max-temp key"
+else
+    fail "a max-temp key appeared without the flag"
+fi
+
 # A thread count is written only when the search produced one.
 DIR2="${WORK}/etc-threads"
 MINER_AUTOTUNE_THREADS=3 run_config "$DIR2" --engine=zmrig --pool=supportxmr.com:3333

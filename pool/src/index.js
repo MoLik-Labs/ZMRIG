@@ -56,7 +56,7 @@ async function main() {
 Environment overrides: PORT, HTTP_PORT, BIND, DAEMON, POOL_MODE, POOL_FEE_PERCENT,
 OPERATOR_ADDRESS, WALLET_RPC, PAYOUT_MODE, VERIFY_SHARES, STATE_FILE, LOG_LEVEL.
 
-Docs: pool/README.md - https://github.com/NggKhaiz/ZMRIG
+Docs: pool/README.md - https://github.com/MoLik-Labs/ZMRIG
 `);
     return;
   }

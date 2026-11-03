@@ -196,6 +196,15 @@ pub const Shared = struct {
     next_nonce: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     running: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
     paused: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// How many workers may hash right now; 0 means "all of them".
+    ///
+    /// This is the thermal governor's handle. Pausing every worker and
+    /// resuming later would be simpler, but a paused miner produces nothing at
+    /// all while a three-thread miner on a hot box still produces most of what
+    /// a four-thread one would - the fourth thread is what costs the degrees.
+    /// A parked worker keeps its VM and its place in the dataset, so it costs
+    /// nothing to park it for a minute and wake it up.
+    active_threads: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
     bench_limit: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     hashes: [max_threads]Counter = [_]Counter{.{}} ** max_threads,
     thread_count: usize = 0,
@@ -228,6 +237,17 @@ pub const Shared = struct {
         const hw = if (self.hw_threads > 0) self.hw_threads else self.thread_count;
 
         return @max(self.thread_count, @min(hw, max_threads));
+    }
+
+    /// Threads allowed to hash right now, resolved against the thread count.
+    pub fn activeCount(self: *const Shared) usize {
+        const limit = self.active_threads.load(.acquire);
+
+        return if (limit == 0 or limit > self.thread_count) self.thread_count else limit;
+    }
+
+    pub fn setActiveThreads(self: *Shared, n: usize) void {
+        self.active_threads.store(n, .release);
     }
 
     pub fn pause(self: *Shared) void {
@@ -628,6 +648,14 @@ pub const Miner = struct {
         return self.shared.thread_count;
     }
 
+    /// Threads the governor is letting hash right now. Equal to `threadCount`
+    /// unless a thermal policy parked some of them, which is why the report
+    /// carries both: "8 threads, 5 allowed" is a different machine from
+    /// "8 threads".
+    pub fn activeCount(self: *const Self) usize {
+        return self.shared.activeCount();
+    }
+
     /// Huge page usage as [allocated, total] in 2 MiB pages, for the API.
     /// `allocated` counts only pages the kernel really gave us.
     pub fn hugePages(self: *const Self) [2]usize {
@@ -816,6 +844,14 @@ fn workerMain(worker: *Worker) void {
 
         if (shared.paused.load(.acquire)) {
             std.time.sleep(5 * std.time.ns_per_ms);
+            continue;
+        }
+
+        // Thermal gate. Checked once per hash: a RandomX hash is measured in
+        // milliseconds, so this costs nothing measurable and the reaction to a
+        // hot sensor is one hash, not one job.
+        if (shared.activeCount() <= worker.index) {
+            std.time.sleep(20 * std.time.ns_per_ms);
             continue;
         }
 

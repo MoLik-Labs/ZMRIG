@@ -1,7 +1,7 @@
 ---
 title: Giám sát
 description: API HTTP chỉ đọc, watchdog sức khoẻ, và mã báo cáo ZMRIG1. — mỗi thứ cho bạn gì và dùng khi nào.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
+image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 ---
 
 # Giám sát

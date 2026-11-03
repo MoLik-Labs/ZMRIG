@@ -158,7 +158,7 @@ def social_card(path, title, subtitle, rows, footer, locale_label, vietnamese=Fa
     d.line([64, H - 116, W - 64, H - 116], fill=RULE, width=2)
     footer_font = font(SANS if vietnamese else MONO, 20)
     d.text((64, H - 96), clamp(footer, W - 128, footer_font, d), font=footer_font, fill=INK_DIM)
-    d.text((64, H - 62), "nggkhaiz.github.io/ZMRIG", font=font(MONO, 19), fill=ACCENT)
+    d.text((64, H - 62), "molik-labs.github.io/ZMRIG", font=font(MONO, 19), fill=ACCENT)
 
     img.save(path, optimize=True)
     print(f"wrote {path.relative_to(SITE.parent)} {img.size[0]}x{img.size[1]}")

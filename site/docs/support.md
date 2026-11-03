@@ -1,7 +1,7 @@
 ---
 title: Support and donations
 description: Where to send a Monero donation, how to verify the address before sending, what a donation does not buy, and what helps the project more.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-en.png
+image: https://molik-labs.github.io/ZMRIG/img/og-en.png
 ---
 
 # Support and donations

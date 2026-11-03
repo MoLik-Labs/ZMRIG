@@ -1,0 +1,8 @@
+# busybox crond, one line, no daemon of its own.
+#
+# `zmrig-os sync` exits in microseconds when the last check-in was too recent,
+# so this is not "poll every minute" in any way that costs a rig anything: an
+# idle rig makes one small HTTPS request a minute and a busy one makes exactly
+# the same. It also means the bot can act within a minute of a button press,
+# which is the difference between a fleet tool and a log viewer.
+* * * * * /usr/local/bin/zmrig-os sync --quiet

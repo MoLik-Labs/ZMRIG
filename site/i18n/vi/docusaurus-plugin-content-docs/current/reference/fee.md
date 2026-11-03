@@ -1,7 +1,7 @@
 ---
 title: Phí 1 %, nói hết
 description: Phí developer tốn bao nhiêu, áp cho coin nào, in ở đâu, đổi thế nào, và lệnh chứng minh đó là khoản phí duy nhất.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
+image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 ---
 
 # Phí 1 %, nói hết
@@ -34,8 +34,8 @@ hai lần:
 Đây không phải thiết lập âm thầm. Tất cả những chỗ sau đều nói mức phí và địa chỉ:
 
 ```text
-ZMRIG 6.34.0 - RandomX miner by @nggkhaiz
-1% of Monero mining time goes to the developer (--donate-level=0 turns it off), GPL-3.0, https://github.com/NggKhaiz/ZMRIG
+ZMRIG 6.36.0 - RandomX miner by @nggkhaiz
+1% of Monero mining time goes to the developer (--donate-level=0 turns it off), GPL-3.0, https://github.com/MoLik-Labs/ZMRIG
 ```
 
 ```bash

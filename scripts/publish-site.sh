@@ -64,5 +64,5 @@ done
 cp -a build/. "$ROOT/"
 
 echo "published $(find build -type f | wc -l) files to web/ and the repository root"
-echo "  https://nggkhaiz.github.io/ZMRIG/docs/intro"
-echo "  https://nggkhaiz.github.io/ZMRIG/vi/docs/intro"
+echo "  https://molik-labs.github.io/ZMRIG/docs/intro"
+echo "  https://molik-labs.github.io/ZMRIG/vi/docs/intro"

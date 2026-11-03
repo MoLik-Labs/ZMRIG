@@ -1,13 +1,13 @@
 ---
 title: Cài trong một lệnh
 description: Cài ZMRIG bằng một lệnh và một địa chỉ ví. Installer tự quyết định những gì, in ra những gì, và kiểm tra thế nào là xong.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
+image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 ---
 
 # Cài trong một lệnh
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NggKhaiz/ZMRIG/BETA/oneclick.sh \
+curl -fsSL https://raw.githubusercontent.com/MoLik-Labs/ZMRIG/BETA/oneclick.sh \
   | sudo bash -s -- --wallet 4YourMoneroAddress
 ```
 

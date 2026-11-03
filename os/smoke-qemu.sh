@@ -2,7 +2,7 @@
 #
 # smoke-qemu.sh - boot the ISO in a throwaway VM and check that it comes up.
 #
-#   ./os/smoke-qemu.sh os/out/zmrig-os-6.34.0-x86-64-v3.iso
+#   ./os/smoke-qemu.sh os/out/zmrig-os-6.40.0-x86-64-v3.iso
 #   BOOT_TIMEOUT=900 ./os/smoke-qemu.sh image.iso     # slower emulation
 #
 # QEMU is given the image as a CD and the kernel is booted explicitly, so the
@@ -22,15 +22,25 @@ command -v xorriso >/dev/null || { echo "xorriso not installed" >&2; exit 1; }
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
-echo "==> extracting the boot files from $ISO"
-xorriso -osirrox on -indev "$ISO" \
-    -extract /boot/vmlinuz "$WORK/vmlinuz" \
-    -extract /boot/initramfs.gz "$WORK/initramfs.gz" \
-    -extract /zmrig/rootfs.squashfs "$WORK/rootfs.squashfs" >/dev/null 2>&1 ||
-    { echo "the image has no /boot/vmlinuz or no rootfs" >&2; exit 1; }
+# The initramfs is zstd-compressed when the kernel's own config said it can
+# unpack zstd, gzip otherwise. The kernel finds it by magic bytes, so this test
+# only has to find the file - but it must not assume the one it used to have.
+INITRAMFS=""
+for candidate in initramfs.zst initramfs.gz; do
+    if xorriso -osirrox on -indev "$ISO" -extract "/boot/$candidate" "$WORK/$candidate" >/dev/null 2>&1 &&
+        [ -s "$WORK/$candidate" ]; then
+        INITRAMFS="$WORK/$candidate"
+        break
+    fi
+done
+[ -n "$INITRAMFS" ] || { echo "the image has no /boot/initramfs.{zst,gz}" >&2; exit 1; }
+echo "==> extracting the boot files from $ISO (initramfs: $(basename "$INITRAMFS"))"
 
-for f in vmlinuz initramfs.gz rootfs.squashfs; do
-    [ -s "$WORK/$f" ] || { echo "$f is empty: the ISO is incomplete" >&2; exit 1; }
+xorriso -osirrox on -indev "$ISO" -extract /boot/vmlinuz "$WORK/vmlinuz" >/dev/null 2>&1 || true
+xorriso -osirrox on -indev "$ISO" -extract /zmrig/rootfs.squashfs "$WORK/rootfs.squashfs" >/dev/null 2>&1 || true
+
+for f in "$WORK/vmlinuz" "$INITRAMFS" "$WORK/rootfs.squashfs"; do
+    [ -s "$f" ] || { echo "$f is empty: the ISO is incomplete" >&2; exit 1; }
 done
 
 echo "==> booting (TCG if no /dev/kvm), timeout ${BOOT_TIMEOUT}s"
@@ -42,7 +52,7 @@ timeout "$BOOT_TIMEOUT" qemu-system-x86_64 \
     -machine q35,accel="$ACCEL" \
     -m "$QEMU_MEM" -smp 2 \
     -kernel "$WORK/vmlinuz" \
-    -initrd "$WORK/initramfs.gz" \
+    -initrd "$INITRAMFS" \
     -append "console=ttyS0 quiet loglevel=3 zmrig.os.nostart=1 zmrig.os.wallet=46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ" \
     -cdrom "$ISO" \
     -nographic -monitor none -no-reboot \

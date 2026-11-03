@@ -1,7 +1,7 @@
 ---
 title: Command reference
 description: Every zmrig flag, grouped by what it touches, plus config validation, self-test and autotune.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-en.png
+image: https://molik-labs.github.io/ZMRIG/img/og-en.png
 ---
 
 # Command reference
@@ -51,6 +51,9 @@ show it in brackets.
     --scratchpad-prefetch=N 0 nop, 1 prefetcht0 [default], 2 prefetchnta, 3 load
     --no-optimized-init    portable dataset initialiser
     --autotune[=SECONDS]   measure candidate thread counts, no pool needed
+    --max-temp=C           keep the hottest CPU sensor at or below C degrees
+    --thermal-file=PATH    read the temperature from PATH instead of sysfs
+    --no-thermal           turn the governor off
 ```
 
 ## Logging and lifecycle
@@ -89,6 +92,57 @@ sudo ./oneclick.sh install --wallet 4YourMoneroAddress                 # = auto
 `auto` reads the battery: a laptop on battery becomes `watt`, everything else
 becomes `free`. The miner re-reads the profile at startup, so unplugging and
 restarting the service is enough to switch.
+
+## Safe mode: mine without cooking the machine
+
+`--max-temp` is the one number this mode is built around. It arms a governor
+that runs once a second, reads the hottest CPU sensor and gives back threads as
+the box warms:
+
+```bash
+sudo zmrig -o gulf.moneroocean.stream:10001 -u 4YourMoneroAddress \
+    --max-temp=72 --profile watt
+```
+
+| what happens | when |
+| --- | --- |
+| nothing | below 72 °C |
+| one thread is parked | at 72 °C, at most once every 30 s |
+| a thread is parked immediately | at 80 °C (target + 8), at most once every 5 s |
+| hashing stops | at 87 °C (target + 15) even on one thread |
+| hashing resumes at one thread | once the sensor is back under 65 °C |
+| a thread comes back | after two minutes below 67 °C (target − 5) |
+
+The two speeds matter. At the target a spike is normal — a boost bin, one burst
+of shares — so it waits. At the hard cap the hardware is already protecting
+itself, so it acts at once. Stepping back up is deliberately slow: cooling for
+two minutes and heating up in ten seconds is how a fan bearing dies, and it also
+makes the measured average worse than holding one thread less.
+
+Nothing is rebuilt while this happens. A parked thread keeps its VM and the
+dataset stays in RAM, so a pause costs the shares it did not compute and nothing
+else — the pool connection stays open.
+
+```text
+thermal: holding 72 C max - k10temp/Tctl reads 61.5 C now; 8 thread(s), step down at 72 C, pause above 87 C
+thermal: 73.4 C on k10temp/Tctl -> 7 of 8 threads (target 72 C; 1 step-down(s), 0 step-up(s) so far)
+thermal: 81.2 C on k10temp/Tctl -> 6 of 8 threads (target 72 C; 2 step-down(s), 0 step-up(s) so far)
+```
+
+`zmrig --check` prints whether a governor is armed and what it can see, which is
+the difference between "it throttled" and "it has no sensor and never could":
+
+```text
+  thermal hold 72 C: k10temp/Tctl 61.5 C now, step down at 72 C, pause above 87 C (--no-thermal turns it off)
+  thermal off (no --max-temp: nothing throttles, however hot the box gets)
+```
+
+The sensors are the CPU ones only — `coretemp`, `k10temp`, `zenpower`,
+`cpu_thermal`, `acpitz` and the Super I/O chips — so a warm NVMe or a warm GPU
+never costs a thread. A machine with no sensor at all says so once and keeps
+mining at the thread count it was given: an unreadable thermometer is not a
+reason to stop earning. `--thermal-file=PATH` points the governor at a file
+instead, for a board whose sensor is exposed by the BMC.
 
 ## Threads, measured rather than guessed
 

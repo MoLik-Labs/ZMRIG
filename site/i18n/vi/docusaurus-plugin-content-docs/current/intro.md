@@ -2,7 +2,7 @@
 title: ZMRIG là gì
 description: Miner RandomX không phí developer, installer cài đặt nó, proxy cho farm và pool tự dựng. Từng phần làm gì, tốn bao nhiêu, và mã nguồn đến từ đâu.
 slug: /intro
-image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
+image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 ---
 
 # ZMRIG là gì

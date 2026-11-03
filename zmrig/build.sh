@@ -30,7 +30,7 @@ BUILD_ZIG=1
 MARCH="-march=native"
 MCPU="native"
 STATIC=0
-ZIG="${ZIG:-zig}"
+ZIG="${ZIG:-zig}"   # replaced by scripts/find-zig.sh when left as the default
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -50,6 +50,17 @@ while [ $# -gt 0 ]; do
 done
 
 command -v g++ >/dev/null || { echo "g++ is required" >&2; exit 1; }
+
+# Zig 0.13, from PATH, from ZIG=..., or from the `ziglang` pip wheel. Resolved
+# here, before the static path asks for it. The search is version-aware on
+# purpose: a newer Zig on PATH is not a usable Zig for this code, and silently
+# using it produces a compile error that looks like a broken source tree.
+if [ "$ZIG" = "zig" ]; then
+    ZIG=$("${ROOT}/scripts/find-zig.sh") || {
+        echo "zig 0.13 not found (set ZIG=/path/to/zig, or pip install ziglang==0.13.0)" >&2
+        exit 1
+    }
+fi
 
 # A static build has to come from one toolchain: gcc links glibc, and glibc
 # cannot be dropped into a musl image. `zig c++` is clang plus a musl sysroot,
@@ -94,12 +105,34 @@ if [ "$STATIC" -eq 1 ]; then
     ARGON_CFLAGS+=(-static)
 fi
 
+# Three translation units use AVX-512 intrinsics and are only ever called behind
+# a runtime CPUID check, so their instruction set is not the build baseline: the
+# flags below override whatever -march said. Clang 19 split 512-bit EVEX out of
+# -mavx512f into a feature of its own, and a -march=x86-64-v2 baseline has that
+# feature off, which turned every _mm512_* call in those files into "requires
+# target feature 'evex512'" on a newer compiler than the one this was tested on.
+# Ask for the feature by name when the compiler knows it; ignore it when it does
+# not, because older clang enables 512-bit from -mavx512f alone.
+AVX512_FLAGS=(-mavx512f -mavx512vl -mavx512dq -mavx512bw -mvaes)
+# Probed by compiling a real file to a real object: zig's driver does not
+# implement -fsyntax-only (it answers FileNotFound for every input), and it
+# treats a trailing `-` as an output name, so both of the obvious one-liners
+# report "unsupported" no matter what the compiler can do.
+probe_dir=$(mktemp -d 2>/dev/null || echo "${OBJ}/probe")
+mkdir -p "$probe_dir"
+printf 'int main(void){return 0;}\n' > "${probe_dir}/probe.cpp"
+if "${CXX_BIN[@]}" -mevex512 -c "${probe_dir}/probe.cpp" -o "${probe_dir}/probe.o" >/dev/null 2>&1; then
+    AVX512_FLAGS+=(-mevex512)
+fi
+rm -rf "$probe_dir"
+
 # Objects are not interchangeable between flag sets. This signature used to be
 # computed from the *environment* arrays, which were still empty at that point,
 # so a --static or --arch build in the same output directory silently reused the
 # native objects. Hash the real flags, and the mode, now that they exist.
 FLAGS_SIG=$(printf '%s\n' "${CXXFLAGS[@]}" "${CFLAGS[@]}" "${ARGON_CFLAGS[@]}" \
-            "static=${STATIC}" "arch=${MARCH}" | sha256sum | cut -d' ' -f1)
+            "${AVX512_FLAGS[@]}" "static=${STATIC}" "arch=${MARCH}" \
+            | sha256sum | cut -d' ' -f1)
 
 if [ -d "$OBJ" ] && [ "$(cat "$OBJ/.flags" 2>/dev/null)" != "$FLAGS_SIG" ]; then
     echo "==> compiler flags changed, rebuilding everything"
@@ -194,36 +227,56 @@ obj_path() {
 echo "==> compiling hash engine ($(( ${#CXX_SOURCES[@]} + ${#C_SOURCES[@]} + ${#ARGON_SOURCES[@]} + ${#ASM_SOURCES[@]} )) files, -j${JOBS})"
 
 objects=()
+LAST_CMD=()
+
 compile_one() {
     local src="$1" obj="$2"
     local ext="${src##*.}"
+    LAST_CMD=()
     case "$ext" in
         c)
             case "$src" in
-                */3rdparty/argon2/*) "${CC_BIN[@]}" "${ARGON_CFLAGS[@]}" -x c -c "$src" -o "$obj" ;;
-                *)                   "${CC_BIN[@]}" "${CFLAGS[@]}" -x c -c "$src" -o "$obj" ;;
+                */argon2-avx512f.c)
+                    LAST_CMD=("${CC_BIN[@]}" "${ARGON_CFLAGS[@]}" "${AVX512_FLAGS[@]}" -x c -c "$src" -o "$obj") ;;
+                */3rdparty/argon2/*)
+                    LAST_CMD=("${CC_BIN[@]}" "${ARGON_CFLAGS[@]}" -x c -c "$src" -o "$obj") ;;
+                *)
+                    LAST_CMD=("${CC_BIN[@]}" "${CFLAGS[@]}" -x c -c "$src" -o "$obj") ;;
             esac ;;
         S)
-            "${CC_BIN[@]}" "${CFLAGS[@]}" -x assembler-with-cpp -c "$src" -o "$obj" ;;
+            LAST_CMD=("${CC_BIN[@]}" "${CFLAGS[@]}" -x assembler-with-cpp -c "$src" -o "$obj") ;;
         *)
-            # The VAES-512 AES routine needs its own ISA even when the build host
-            # has none (-march=native only covers the machine doing the build).
-            # Without this the file fails to compile on a CPU without AVX-512,
-            # which made `./build.sh --portable` and older build hosts unusable.
-            # The routine is only ever called behind a runtime CPUID check.
+            # AVX-512 translation units carry their own flags: see AVX512_FLAGS.
             case "$src" in
                 */aes_hash_vaes512.cpp)
-                    "${CXX_BIN[@]}" "${CXXFLAGS[@]}" -mvaes -mavx512f -mavx512vl -c "$src" -o "$obj" ;;
+                    LAST_CMD=("${CXX_BIN[@]}" "${CXXFLAGS[@]}" "${AVX512_FLAGS[@]}" -c "$src" -o "$obj") ;;
                 *)
-                    "${CXX_BIN[@]}" "${CXXFLAGS[@]}" -c "$src" -o "$obj" ;;
+                    LAST_CMD=("${CXX_BIN[@]}" "${CXXFLAGS[@]}" -c "$src" -o "$obj") ;;
             esac ;;
     esac
+    "${LAST_CMD[@]}"
 }
 
 # A background compile must not be able to fail silently: the archive would
-# then be built from stale objects.
+# then be built from stale objects. Each object keeps its own stderr, so a
+# failure can name the file that failed, the command that ran, and why - four
+# compilers writing to one terminal interleave their output, and a runner that
+# kills a compiler for memory prints nothing at all.
 compile_bg() {
-    compile_one "$1" "$2" || : > "${OBJ}/.failed"
+    local src="$1" obj="$2"
+    local err="${OBJ}/$(basename -- "${obj%.o}").err"
+    if ! compile_one "$src" "$obj" 2>"$err"; then
+        printf '%s\n' "$src" > "${OBJ}/.failed"
+        {
+            printf 'error: compiling %s failed\n' "${src#"${ROOT}/"}"
+            printf '  command:'
+            printf ' %q' "${LAST_CMD[@]}"
+            printf '\n'
+            tail -n 25 "$err" 2>/dev/null || true
+        } >&2
+    else
+        rm -f "$err"
+    fi
 }
 
 rm -f "${OBJ}/.failed"
@@ -240,8 +293,9 @@ done
 wait || true
 
 if [ -f "${OBJ}/.failed" ]; then
+    failed_src=$(cat "${OBJ}/.failed")
     rm -f "${OBJ}/.failed"
-    echo "error: compilation failed" >&2
+    echo "error: compilation failed: ${failed_src}" >&2
     exit 1
 fi
 
@@ -256,19 +310,17 @@ if [ "$BUILD_ZIG" -eq 0 ]; then
     exit 0
 fi
 
-# Zig can come from PATH, from ZIG=..., or from the `ziglang` pip package
-# (the usual way to get it on a machine without a package manager).
-if ! command -v "$ZIG" >/dev/null; then
-    if python3 -c "import ziglang" >/dev/null 2>&1; then
-        ZIG=$(python3 -c "import ziglang, os; print(os.path.join(os.path.dirname(ziglang.__file__), 'zig'))")
-
-        [ -x "$ZIG" ] || chmod +x "$ZIG" 2>/dev/null || true
-    fi
-fi
-
-command -v "$ZIG" >/dev/null || [ -x "$ZIG" ] || { echo "zig not found (set ZIG=/path/to/zig, or pip install ziglang==0.13.0)" >&2; exit 1; }
 
 echo "==> building zmrig ($($ZIG version))"
+# `zig` is a multiplexer, not a compiler: --version is not a command it has. The
+# version of the compiler inside it is what actually decides whether this file
+# set compiles, so ask the C++ driver and say so.
+if [ "$STATIC" -eq 1 ]; then
+    echo "==> compiler: ${CXX_BIN[*]} -> $("${CXX_BIN[@]}" -dM -E -x c++ /dev/null 2>/dev/null | awk '/__clang_major__/ {print "clang " $3}' | head -1)"
+else
+    echo "==> compiler: $("${CXX_BIN[0]}" --version 2>/dev/null | head -1)"
+fi
+echo "==> avx-512 flags for the three files that use them: ${AVX512_FLAGS[*]}"
 
 CPU_FLAG=()
 [ -n "$MARCH" ] && CPU_FLAG=("-mcpu=${MCPU}")

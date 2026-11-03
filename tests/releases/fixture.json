@@ -1,0 +1,26 @@
+[
+  {
+    "tag_name": "v6.38.0", "name": "ZMRIG OS 6.38.0", "prerelease": false, "draft": false,
+    "published_at": "2026-11-02T10:00:00Z", "html_url": "https://github.com/MoLik-Labs/ZMRIG/releases/tag/v6.38.0",
+    "assets": [
+      {"name": "zmrig-os-6.38.0-x86-64-v3.iso", "size": 167772160, "browser_download_url": "https://example.test/v3.iso"},
+      {"name": "zmrig-os-6.38.0-x86-64-v3.iso.sha256", "size": 96, "browser_download_url": "https://example.test/v3.iso.sha256"},
+      {"name": "zmrig-os-6.38.0-x86-64-v2.iso", "size": 165000000, "browser_download_url": "https://example.test/v2.iso"},
+      {"name": "zmrig-os-stable-x86-64-v3.json", "size": 400, "browser_download_url": "https://example.test/v3.json"}
+    ]
+  },
+  {
+    "tag_name": "os-beta", "name": "ZMRIG OS (rolling beta)", "prerelease": true, "draft": false,
+    "published_at": "2026-11-02T11:00:00Z", "html_url": "https://github.com/MoLik-Labs/ZMRIG/releases/tag/os-beta",
+    "assets": [
+      {"name": "zmrig-os-6.38.0-x86-64-v3.iso", "size": 167000000, "browser_download_url": "https://example.test/beta-v3.iso"}
+    ]
+  },
+  {
+    "tag_name": "v6.37.0", "name": "Older", "prerelease": false, "draft": false,
+    "published_at": "2026-11-01T10:00:00Z", "html_url": "https://example.test/old",
+    "assets": [
+      {"name": "zmrig-os-6.37.0-x86-64-v3.iso", "size": 160000000, "browser_download_url": "https://example.test/old-v3.iso"}
+    ]
+  }
+]

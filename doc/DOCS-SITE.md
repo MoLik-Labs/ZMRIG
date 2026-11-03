@@ -1,6 +1,6 @@
 # The documentation site
 
-The site at <https://nggkhaiz.github.io/ZMRIG/docs/intro> is a Docusaurus 3
+The site at <https://molik-labs.github.io/ZMRIG/docs/intro> is a Docusaurus 3
 project in [`site/`](../site). It is two locales (English is the default,
 Vietnamese is a full translation), one sidebar with a fixed order, and three
 calculators that run in the browser.
@@ -90,9 +90,9 @@ fallback for the period before the application is approved. Both produce exactly
 one search box in the navbar — never two.
 
 1. Apply at <https://docsearch.algolia.com/apply> with:
-   - URL: `https://nggkhaiz.github.io/ZMRIG/`
+   - URL: `https://molik-labs.github.io/ZMRIG/`
    - email: the address you read
-   - repository: `https://github.com/NggKhaiz/ZMRIG`
+   - repository: `https://github.com/MoLik-Labs/ZMRIG`
 2. When the crawler is approved, Algolia issues three values: `appId`,
    `apiKey` (the **search-only** key) and `indexName`.
 3. Put them in the build environment, not in the repository:
@@ -198,7 +198,7 @@ fills with a second copy of every static file. Instead every page carries an
 absolute URL in its front matter:
 
 ```yaml
-image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
+image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 ```
 
 The home page sets the same tags in `src/pages/index.jsx` (`Layout` in

@@ -1,8 +1,11 @@
 # Copy to /etc/zmrig/os.conf, or run `zmrig-os setup`, which writes this file.
 #
-# The image is read-only, so this file lives on the tmpfs overlay and is lost on
-# reboot unless a ZMRIGDATA partition exists (`zmrig-os persist /dev/sdX1`) or the
-# values come from the kernel command line (zmrig.os.wallet=4...).
+# On a live stick the image is read-only, so this file lives on the tmpfs overlay
+# and is lost on reboot unless a ZMRIGDATA partition exists
+# (`zmrig-os persist /dev/sdX1`) or the values came from the kernel command line
+# (zmrig.os.wallet=4...). On an installed disk (`zmrig-os install --disk ...`)
+# the copy on the boot medium is read back at every boot and this file simply
+# persists.
 WALLET=""
 POOL="gulf.moneroocean.stream:10001"
 WORKER="rig"
@@ -15,5 +18,18 @@ API_PORT="0"
 API_HOST="127.0.0.1"
 API_TOKEN=""
 AUTO_REBOOT="1"
+# The miner is updated daily: the new binary is written next to the running
+# system, and the previous one is kept so the upgrade can be undone.
+AUTO_UPDATE="1"
+# Also update the OS image itself (kernel + root filesystem). It goes into the
+# other A/B slot and only becomes the default once the copy has been verified;
+# three failed boots on a slot roll the machine back to the other one.
+AUTO_IMAGE="0"
 CHANNEL="stable"
 EXTRA_ARGS=""
+# The control plane (Telegram and/or Discord bot). Empty means no fleet: nothing
+# on the rig contacts anything until a server is named here or on the kernel
+# command line (`zmrig.os.fleet=https://...`).
+FLEET_URL=""
+# How often the rig checks in, in seconds. The server may lower this further.
+FLEET_INTERVAL="60"

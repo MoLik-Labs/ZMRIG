@@ -13,7 +13,9 @@ set -euo pipefail
 CHECK=0
 [ "${1:-}" = "--check" ] && CHECK=1
 
-need=(xorriso mtools mksquashfs cpio gzip tar curl sha256sum grub-mkrescue gcc g++)
+# grub-mkimage is what builds the two files `zmrig-os install` writes to a disk:
+# without it the ISO still boots, but it cannot install itself anywhere.
+need=(xorriso mtools mksquashfs cpio gzip tar curl sha256sum grub-mkrescue grub-mkimage gcc g++)
 
 missing=()
 for t in "${need[@]}"; do
@@ -55,11 +57,19 @@ else
 fi
 
 # zig 0.13 is not in any distro at a usable version; the pip wheel is the same
-# compiler the release binaries are built with.
-if ! command -v zig >/dev/null; then
+# compiler the release binaries are built with. The test is the version, not
+# whether `zig` exists: distributions and CI runners ship newer Zig, which
+# compiles nothing in zmrig/ and would otherwise be treated as satisfied.
+ROOT=$(cd -- "$(dirname -- "${0}")/.." && pwd)
+if ! zig_bin=$("${ROOT}/scripts/find-zig.sh" 2>&1); then
+    echo "$zig_bin" >&2
     python3 -m pip install --break-system-packages -q ziglang==0.13.0 2>/dev/null ||
         python3 -m pip install -q ziglang==0.13.0
-    echo "zig installed at $(python3 -c 'import ziglang,os;print(os.path.dirname(ziglang.__file__))')/zig"
+    zig_bin=$("${ROOT}/scripts/find-zig.sh") || {
+        echo "zig 0.13 still not available after pip install" >&2
+        exit 1
+    }
 fi
+echo "zig: $("$zig_bin" version) at $zig_bin"
 
 echo "done"
