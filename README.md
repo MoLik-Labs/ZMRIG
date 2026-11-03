@@ -8,7 +8,7 @@
 
 by **[@nggkhaiz](https://github.com/NggKhaiz)**
 
-[![release](https://img.shields.io/badge/release-6.43.0-f2763f)](CHANGELOG.md)
+[![release](https://img.shields.io/badge/release-6.44.0-f2763f)](CHANGELOG.md)
 [![licence](https://img.shields.io/badge/licence-GPL--3.0-blue)](LICENSE)
 [![dev fee](https://img.shields.io/badge/developer%20fee-1%25%20%C2%B7%20off%20switch-f2763f)](doc/FEE.md)
 [![platform](https://img.shields.io/badge/platform-Linux%20x86--64%20%C2%B7%20macOS%20%C2%B7%20Windows-lightgrey)](#build-from-source)
@@ -572,7 +572,7 @@ checks while two of the rows are wrong.
 | `site` `npm test` | 67 | command builder and its blocked states, calculator arithmetic against hand-computed numbers including break-even, pool table vs `oneclick.sh` and `doc/POOLS.md`, coin matrix and ranking (a missing number is never a zero, no invented pool or price), en/vi key parity and no dead or duplicated message |
 | `tests/docs/pages.sh` | 22 | the published site as Pages serves it: Docusaurus entry point, 26 sidebar pages in both locales, all 2808 local `href`/`src`, both sitemaps, language and theme controls, one localised social card per page, a title/description/lang on every page with no leaked placeholder, old-URL redirects, committed build not stale |
 | `zmrig/tests/thermal.sh` | 10 | the safe mode against a real process and a real pool: cool is not throttled, heat sheds threads, one thread and hot stops hashing, cooling resumes, no sensor changes nothing |
-| `os/tests/control.sh` | 200 | the appliance tool: wallet validation (length, base58 alphabet, prefix), a command line per mode, kernel-command-line overrides, the supervisor waiting for a wallet, an updater that refuses a checksum mismatch, the installer's partition table and its refusals, A/B slot arithmetic and the 1024-byte GRUB environment block, the tuner running before the measurement, a mode change invalidating it, the physical-core topology read from a fake 8-core/16-thread sysfs (`-t 7`, mask `0xff`, `AFFINITY=off`, a machine that reports no topology at all), and every version string in the repository agreeing — all with no root, no miner, no disk and no network |
+| `os/tests/control.sh` | 213 | the appliance tool: wallet validation (length, base58 alphabet, prefix), a command line per mode, kernel-command-line overrides, the supervisor waiting for a wallet, an updater that refuses a checksum mismatch, the installer's partition table and its refusals, A/B slot arithmetic and the 1024-byte GRUB environment block, the tuner running before the measurement, a mode change invalidating it, the physical-core topology read from a fake 8-core/16-thread sysfs (`-t 7`, mask `0xff`, `AFFINITY=off`, a machine that reports no topology at all), the hardware verdict for a Ryzen, a 2 GB box, a CPU without AVX2 and a machine too small to mine, and every version string in the repository agreeing — all with no root, no miner, no disk and no network |
 | `tests/oneclick/tune-targets.sh` | 7 | the two kernel settings a miner wants that are not the CPU: NUMA balancing turned off by path, every writable IRQ moved to CPU 0, unbound workqueues pinned there, `keep` leaving both alone, and a two-core machine keeping its interrupts spread — driven against a fake `/proc` and `/sys`, so it needs no root and no reboot |
 
 ## Documentation

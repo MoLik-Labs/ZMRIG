@@ -176,6 +176,33 @@ per hyperthread — which is hotter and slower than 8. `AFFINITY=off` in `os.con
 (or `zmrig.os.affinity=off` on the command line) takes the pinning out for
 somebody with a reason to want it gone.
 
+### What hardware this runs on
+
+RandomX's fast mode wants AVX2, AES-NI and 2 GB of memory for the dataset. A
+machine missing any of the three still hashes — several times slower — which is
+worth being told rather than left to infer from a rate that does not match the
+README.
+
+```
+$ zmrig-os hardware
+cpu        Intel(R) Xeon(R) Processor @ 2.60GHz (1 cores, 2 threads)
+flags      avx2 aes sha_ni
+memory     3939 MB total
+pages      2 MB (no 1 GB pages)
+verdict    full: fast mode: AVX2 and AES, and room for the 2 GB dataset
+```
+
+| verdict | means | what to do |
+| --- | --- | --- |
+| `full` | AVX2, AES, room for the dataset | nothing — `max` is the miner at its own rate |
+| `light` | AVX2 and AES, under 2.4 GB | `--mode light`: it mines, the dataset does not fit in one array |
+| `slow` | no AVX2, or no AES | it works and it is much slower; on a pre-2015 CPU boot the **x86-64-v2** image |
+| `small` | under 1.2 GB | it cannot mine RandomX — the scratchpad alone is 256 MB per thread |
+
+The command exits non-zero on `slow` and `small`, so a script that provisions a
+hundred machines stops on the one that will never be fast instead of adding it to
+the pile. `doctor` prints the same verdict as a single line on every boot.
+
 ### The stick, and how to make it last
 
 A stick mining 24/7 for a year is 8,760 hours inside a device built to carry a
@@ -188,10 +215,17 @@ is where the logs, the wallet file and an updated miner live. It is also why a
 reboot forgets an unpersisted config, and why a log that grows cannot fill the
 stick. NAND wears from writes; during normal running there are none.
 
-What does touch the stick: each boot reads the kernel, the initramfs and the
-158 MB squashfs; `zmrig-os install` writes once; an image update writes one slot
-at a time. So the stick's real workload is a handful of reads a day, not a year
-of writes. That turns the question from endurance into heat, power and cheap
+What does touch the stick, and how much:
+
+| | writes | when |
+| --- | --- | --- |
+| `zmrig-os install --disk` | the whole image, once | the day you install |
+| a miner update | ~19 MB into the data partition | `AUTO_UPDATE=1` (the default) and a newer binary exists |
+| an image update | one slot, ~158 MB | `AUTO_IMAGE=1` (off by default) |
+| `zmrig-os persist` | the config, a few kB | when you run it |
+
+Everything else is a read. So the stick's real workload is a handful of reads a
+day, not a year of writes. That turns the question from endurance into heat, power and cheap
 controllers:
 
 | Keep | Why |

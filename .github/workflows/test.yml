@@ -107,6 +107,48 @@ jobs:
       - name: Thermal governor against a real process
         run: ./zmrig/tests/thermal.sh
 
+  # The installer and the tuner: the two things a person runs on a machine they
+  # own, before any image exists. They were only ever run by hand, which is how
+  # `oneclick.sh update` managed to silently do nothing on a shallow clone for
+  # as long as nobody re-cloned.
+  #
+  # Everything here works on a fake root: a temporary `sys/`, `proc/`, a stub
+  # `nproc`, and `--dry-run`. No root, no reboot, no real CPU.
+  install:
+    name: Installer and tuner (non-root, fake /proc)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      # `-S error` only: these are POSIX sh on purpose, and shellcheck's notes
+      # about `local` are not worth failing a build over.
+      - name: Shellcheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends shellcheck
+          shellcheck -s sh -S error \
+            oneclick.sh \
+            scripts/tune-linux.sh \
+            scripts/latest-iso.sh \
+            scripts/publish-site.sh
+
+      # plan, config, governor, tuner targets, purge.
+      - name: The installer's decisions
+        run: npm run test:oneclick
+
+      # The one that needs a git remote: a local repository with two branches and
+      # a shallow clone of it, so `update` is exercised without the network.
+      - name: Moving an existing checkout between branches
+        run: bash tests/oneclick/branch-switch.sh
+
+      # The download helper `zmrig-os update` and the site both use, against a
+      # recorded GitHub reply: no network, no rate limit.
+      - name: How an image is found
+        run: bash tests/releases/latest-iso.test.sh
+
   # The control plane. Zero dependencies, so this is `node --test` and nothing
   # to install; the agent half runs against the same server in os/tests/fleet.sh.
   fleet:

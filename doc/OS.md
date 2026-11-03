@@ -88,6 +88,47 @@ decision, not the hashrate. On the two-thread VM this repository was tested on �
 where `nproc` reports 2 — `zmrig-os topology` prints `cores      1 physical, 2
 threads` and pins the miner to `0x1`.
 
+## What hardware this runs on
+
+RandomX's fast mode wants three things: AVX2, AES-NI, and 2 GB of memory for the
+dataset (2.08 GB plus the scratchpad plus the OS). A machine missing any of them
+still hashes — it just hashes several times slower, which is exactly the kind of
+thing a person should be told rather than left to work out from a rate that is a
+fifth of the number in a README.
+
+`zmrig-os hardware` answers it in five lines and exits non-zero when the machine
+cannot do it at all, so a provisioning script can stop instead of burning an
+afternoon:
+
+```
+$ zmrig-os hardware
+cpu        Intel(R) Xeon(R) Processor @ 2.60GHz (1 cores, 2 threads)
+flags      avx2 aes sha_ni
+memory     3939 MB total
+pages      2 MB (no 1 GB pages)
+verdict    full: fast mode: AVX2 and AES, and room for the 2 GB dataset
+```
+
+| verdict | means | what to do |
+| --- | --- | --- |
+| `full` | AVX2, AES, and room for the dataset | nothing: `max` or `balanced` is the miner at its rate |
+| `light` | AVX2 and AES, but under 2.4 GB | the machine runs `--mode light` (no dataset in a big array, lower hashrate per thread); `doctor` says so too |
+| `slow` | no AVX2, or no AES | it works: RandomX keeps a scalar path. Expect a large fraction of the hashrate elsewhere. If it is a pre-2015 CPU, boot the **x86-64-v2** image — the v3 one needs AVX2 in the compiler's own output |
+| `small` | under 1.2 GB | it cannot mine RandomX: the scratchpad alone is 256 MB per thread |
+
+Two consequences that are easy to miss:
+
+* **Flags come from every processor**, not the first one's line, so a hybrid or a
+  truncated `cpuinfo` does not produce a wrong verdict.
+* **1 GB pages are reported, never assumed.** They help the dataset on a machine
+  whose page tables are the bottleneck, and they cannot be reserved on a kernel
+  that does not advertise them. `zmrig-os tune` asks only when the kernel says yes.
+
+The verdict is a word, not a sentence, so it is testable: `os/tests/control.sh`
+calls the decision directly with fabricated CPU and memory values and asserts
+each of the four outcomes, and drives the command itself against a fixture
+`/proc` (`ZMRIG_OS_PROC`) rather than the machine it runs on.
+
 ## What it is built from
 
 | | |
@@ -513,14 +554,14 @@ building anything:
 ```
 
 ```
-ZMRIG OS 6.43.0
+ZMRIG OS 6.44.0
 
   base               Alpine Linux 3.22.1 (x86_64, OpenRC, musl)
   kernel             linux-lts 6.12.61
   root filesystem    squashfs, zstd level 19, 1 MiB blocks
   bootloader         GRUB, BIOS and UEFI, built with the image
 
-  published: v6.43.0
+  published: v6.44.0
              built on Alpine 3.22.1
              os-beta (rolling beta)
 

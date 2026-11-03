@@ -106,6 +106,25 @@ workaround for a bug in this code:
   `FLEET_ROSTER`, in the environment, which says who the rigs are and what they
   should be running. Every check-in is reconciled against it — see below.
 
+### What is hosted, and what is not
+
+One process, and only one:
+
+* **hosted** — the page you check the machines on and control them from, and the
+  Telegram/Discord bots that do the same thing in chat. Same process, same port,
+  same password.
+* **not hosted, ever** — the pool. Its code stays in the repository because it is
+  a useful thing to have built, but nothing here deploys it, and a rig points at
+  whatever pool the operator chooses. There is also no database, no object
+  storage, no uploads, no accounts and no analytics: the service holds the fleet
+  in memory and reads the roster from the environment.
+* **not hosted here either** — the documentation site. It is static, so it lives
+  on GitHub Pages, which costs nothing and cannot sleep.
+
+The direction of traffic is one way. Rigs push and poll; the service never
+connects out to a rig, which is why a rig behind a carrier NAT is a normal rig and
+not a support case.
+
 Any other host works the same way: Node 20+, one port, the environment.
 
 ### Environment
@@ -355,7 +374,7 @@ One request a minute from the rig:
 ```json
 POST /v1/hello
 Authorization: Bearer <64 hex characters: the device key>
-{"device":"ZMR-1A2B-3C4D-5E6F","version":"6.43.0",
+{"device":"ZMR-1A2B-3C4D-5E6F","version":"6.44.0",
  "status":{"state":"mining","hashrate":1201.4,"temp":64,"uptime":86400,
            "mode":"max","wallet":"4...","pool":"gulf.moneroocean.stream:10001",
            "coin":"xmr","threads":"8","slot":"a","installed":true},

@@ -167,6 +167,32 @@ Trước đây `--mode balanced` trên máy đó xin 15 luồng — mỗi hypert
 vừa nóng vừa chậm hơn 8. `AFFINITY=off` trong `os.conf` (hoặc
 `zmrig.os.affinity=off` trên command line) bỏ phần ghim nếu có lý do riêng.
 
+### Máy nào chạy được
+
+Fast mode của RandomX cần AVX2, AES-NI và 2 GB bộ nhớ cho dataset. Máy thiếu một
+trong ba vẫn đào — chậm hơn nhiều lần — và điều đó nên được nói ra thay vì để
+người dùng tự suy từ một con số hashrate không khớp với README.
+
+```
+$ zmrig-os hardware
+cpu        Intel(R) Xeon(R) Processor @ 2.60GHz (1 cores, 2 threads)
+flags      avx2 aes sha_ni
+memory     3939 MB total
+pages      2 MB (no 1 GB pages)
+verdict    full: fast mode: AVX2 and AES, and room for the 2 GB dataset
+```
+
+| kết luận | nghĩa | nên làm gì |
+| --- | --- | --- |
+| `full` | có AVX2, AES, đủ chỗ cho dataset | không cần gì: `max` là miner chạy hết tốc của máy |
+| `light` | có AVX2 và AES, dưới 2,4 GB | `--mode light`: vẫn đào, dataset không nằm gọn trong một mảng |
+| `slow` | thiếu AVX2 hoặc thiếu AES | vẫn chạy và chậm hơn nhiều; CPU trước 2015 thì boot ảnh **x86-64-v2** |
+| `small` | dưới 1,2 GB | không đào RandomX được — riêng scratchpad đã 256 MB mỗi thread |
+
+Lệnh thoát khác 0 với `slow` và `small`, nên script cài cho cả trăm máy sẽ dừng
+đúng cái máy không bao giờ nhanh thay vì thêm nó vào danh sách. `doctor` in cùng
+kết luận đó thành một dòng mỗi lần boot.
+
 ### Cái USB, và cách để nó sống lâu
 
 Một cây USB đào 24/7 suốt một năm là 8.760 giờ nằm trong một thiết bị vốn được
@@ -179,9 +205,17 @@ ví, bản miner vừa cập nhật đều nằm ở đó. Đó cũng là lý do
 cấu hình chưa persist, và lý do log có phình cũng không đầy được cây USB. NAND
 mòn vì ghi; lúc chạy bình thường không có lần ghi nào.
 
-Thứ thật sự chạm vào USB: mỗi lần boot đọc kernel, initramfs và ảnh squashfs
-158 MB; `zmrig-os install` ghi một lần; cập nhật ảnh ghi từng slot một. Nên khối
-lượng thật của cây USB là vài lần đọc mỗi ngày, không phải một năm ghi. Vậy câu
+Thứ thật sự chạm vào USB, và ghi bao nhiêu:
+
+| | ghi gì | khi nào |
+| --- | --- | --- |
+| `zmrig-os install --disk` | toàn bộ ảnh, một lần | ngày bạn cài |
+| cập nhật miner | ~19 MB vào phân vùng dữ liệu | `AUTO_UPDATE=1` (mặc định) và có bản mới |
+| cập nhật ảnh | một slot, ~158 MB | `AUTO_IMAGE=1` (mặc định tắt) |
+| `zmrig-os persist` | cấu hình, vài kB | khi bạn chạy nó |
+
+Còn lại đều là đọc. Nên khối lượng thật của cây USB là vài lần đọc mỗi ngày,
+không phải một năm ghi. Vậy câu
 hỏi chuyển từ "độ bền" sang nhiệt, nguồn và controller rẻ tiền:
 
 | Giữ cho | Vì sao |

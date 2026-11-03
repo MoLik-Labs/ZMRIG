@@ -632,6 +632,45 @@ printf 'MODE="max"\nTHREADS="auto"\nWALLET="%s"\n' "$WALLET" > "$ROOTDIR/etc/zmr
 expect_ok "no topology is not a failure" env ZMRIG_OS_SYS="$EMPTYSYS" "$TOOL" topology
 contains "0x" "$CHECK_MSG" && bad "no topology must not invent a mask" || ok "no topology produces no mask"
 
+# ---------------------------------------------------------------- hardware
+# What the CPU is, and what that means for RandomX. The verdict is a word so it
+# can be asserted; the sentence around it is for the person reading it.
+[ "$(fn hw_verdict 1 1 16000)" = "full" ] && ok "AVX2, AES and 16 GB is a full-speed machine" ||
+    bad "AVX2, AES and 16 GB is a full-speed machine"
+[ "$(fn hw_verdict 1 1 1800)" = "light" ] && ok "two thirds of the dataset is light mode, not fast" ||
+    bad "two thirds of the dataset is light mode"
+[ "$(fn hw_verdict 0 1 16000)" = "slow" ] && ok "no AVX2 is slow, not broken" || bad "no AVX2 is slow, not broken"
+[ "$(fn hw_verdict 1 0 16000)" = "slow" ] && ok "no AES is slow: the scratchpad stops being cheap" ||
+    bad "no AES is slow"
+[ "$(fn hw_verdict 1 1 900)" = "small" ] && ok "under 1.2 GB cannot mine at all" || bad "under 1.2 GB cannot mine"
+
+FAKEPROC="$ROOTDIR/fakeproc"
+mkdir -p "$FAKEPROC"
+printf 'processor\t: 0\nmodel name\t: AMD Ryzen 5 5600 6-Core Processor\nflags\t\t: fpu avx avx2 aes sha_ni\n' > "$FAKEPROC/cpuinfo"
+printf 'MemTotal:       16384000 kB\n' > "$FAKEPROC/meminfo"
+
+expect_ok "hardware describes the machine" env ZMRIG_OS_PROC="$FAKEPROC" ZMRIG_OS_SYS="$FAKESYS" "$TOOL" hardware
+contains "AMD Ryzen 5 5600" "$CHECK_MSG" && ok "the CPU model is named" || bad "the CPU model is named"
+contains "verdict    full" "$CHECK_MSG" && ok "a Ryzen with 16 GB is a full-speed machine" ||
+    bad "a Ryzen with 16 GB is a full-speed machine"
+
+# Flags are read from every processor, so a machine whose first processor line is
+# truncated is still judged on the CPU the miner will actually run on.
+printf 'processor\t: 0\nmodel name\t: Hybrid\nflags\t\t: fpu avx\n\nprocessor\t: 1\nflags\t\t: fpu avx avx2 aes\n' > "$FAKEPROC/cpuinfo"
+expect_ok "flags come from every processor" env ZMRIG_OS_PROC="$FAKEPROC" ZMRIG_OS_SYS="$FAKESYS" "$TOOL" hardware
+contains "verdict    full" "$CHECK_MSG" && ok "AVX2 found in the second processor's line" ||
+    bad "AVX2 found in the second processor's line"
+
+printf 'MemTotal:       900000 kB\n' > "$FAKEPROC/meminfo"
+expect_fail "a machine too small to mine says so, and exits non-zero" \
+    env ZMRIG_OS_PROC="$FAKEPROC" ZMRIG_OS_SYS="$FAKESYS" "$TOOL" hardware
+contains "too small" "$CHECK_MSG" && ok "and the reason is the memory" || bad "and the reason is the memory"
+
+# The doctor is expected to exit non-zero on an unconfigured sandbox (no wallet,
+# no binary); what matters is that it still names the hardware verdict.
+CHECK_MSG=$(ZMRIG_OS_PROC="$FAKEPROC" ZMRIG_OS_SYS="$FAKESYS" ZMRIG_OS_ROOT="$ROOTDIR" "$TOOL" doctor 2>&1 || true)
+contains "compat" "$CHECK_MSG" && ok "doctor reports the hardware verdict once" || bad "doctor reports the hardware verdict"
+
 # ------------------------------------------------------------- self-tuning
 # The image measures each machine once, in the background, after it has already
 # started earning. What it must never do is measure a rig whose operator pinned

@@ -1,3 +1,36 @@
+# 6.44.0 — the machine is asked what it can do
+
+RandomX's fast mode wants AVX2, AES-NI and 2 GB of memory for the dataset, and a
+machine missing any of them still hashes — several times slower. Until now the
+only way to find out was to mine and compare the rate to a number on the site.
+
+## What changed
+
+* **`zmrig-os hardware`** prints the CPU, the flags that matter, the memory and a
+  one-word verdict — `full`, `light`, `slow` or `small` — with a sentence saying
+  what to do about it. It exits non-zero on the last two, so a provisioner stops
+  on the box that will never be fast instead of adding it to the pile.
+* **`doctor` prints the verdict** on every boot, next to the rest of the checks.
+* Flags are read from **every processor's line**, not the first one's, so a hybrid
+  CPU or a truncated `cpuinfo` does not produce a wrong answer.
+* `ZMRIG_OS_PROC` joins `ZMRIG_OS_SYS`: both point the tool at a fixture tree, which
+  is how the four verdicts are tested on a machine that has one of them.
+
+## Also in this release
+
+* **The installer and the tuner now run in CI.** They were only ever run by hand:
+  `oneclick.sh`'s six decision tests, the shallow-clone branch switch, the tuner's
+  targets against a fake `/proc`, shellcheck, and the download helper. A silent
+  `update` regression had no way to be caught before this.
+* **`doc/FLEET.md` says what is hosted and what is not**, in one place: one
+  process — the page and the bots — no pool, no database, no storage, no accounts;
+  the documentation site is static and lives on GitHub Pages.
+* **Both site languages** explain the hardware verdict and put numbers on what
+  actually writes to the boot stick.
+
+Tests: `os/tests/control.sh` 200 → 213. Nothing here is a claim about hashrate;
+the verdicts are thresholds, and the code that computes them is what is tested.
+
 # 6.43.0 — one wallet, one number
 
 Six machines in a shed mine into one address, and until now the dashboard showed
