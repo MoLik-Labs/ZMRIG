@@ -1,3 +1,55 @@
+# 6.40.1 — a portable build that compiles the portable way
+
+The Render deploy failed with one line naming a source file:
+
+```
+error: compilation failed: /src/src/crypto/randomx/blake2/avx2/blake2b_avx2.c
+```
+
+Two things were wrong, and only one of them was in that file's neighbourhood.
+
+## The image had a compiler with no C library headers
+
+`deploy/Dockerfile` installed `g++` with `--no-install-recommends`. On Debian,
+`g++` *recommends* `libc6-dev` rather than depending on it, so the build stage
+had a compiler and no `string.h`. Every translation unit then failed at its first
+glibc include. The build reported **one** of them — whichever background compile
+finished last — which is why the message named a perfectly good source file and
+nothing else. It now installs `build-essential`, and a three-line probe compiles
+and runs before the engine is touched, so a broken toolchain fails in one line
+with the real error.
+
+That was also a reporting bug worth fixing on its own: `build.sh` now records
+every file that failed and prints the *first* lines of each compiler's stderr
+instead of the last 25 of one, because the tail of a failed compile is the note
+under the error and the line that matters is at the top.
+
+## A `--portable` build now builds portable
+
+RandomX picks its implementation at runtime from CPUID, so the AVX2, SSE4.1 and
+SSSE3 translation units are always compiled — but their instruction set was only
+ever enabled as a side effect of `-march=native`. A `--portable` build compiled
+AVX2 intrinsics with AVX2 off: gcc turns that into
+
+```
+warning: AVX vector return without AVX enabled changes the ABI [-Wpsabi]
+```
+
+which is not a warning to shrug at — it means the calling convention of those
+functions is not the one the rest of the build assumes. Clang refuses the same
+code outright. Each file now carries its own flags (`-mavx2`, `-msse4.1`,
+`-mssse3`), the flag set is part of the object-cache signature so a stale object
+cannot survive the change, and the same fix applies to the ISO images built with
+`--arch=x86-64-v2`, where AVX2 was never enabled either.
+
+Measured here: `./zmrig/build.sh --jobs 2 --portable` on Debian 12 / gcc 12
+builds clean with no `-Wpsabi` warning and the resulting binary passes
+`--self-test=light` (all six reference vectors). The Docker image itself is built
+in CI now, so the next person to break `deploy/Dockerfile` is told by a job
+called "Pool image" rather than by a failed deploy.
+
+Tests: `zmrig/build.sh` portable build + self-test, shellcheck, workflow parse.
+
 # 6.40.0 — the rig notices when it stops keeping its own number
 
 A measurement is a claim about the future, and a machine only sometimes keeps it.

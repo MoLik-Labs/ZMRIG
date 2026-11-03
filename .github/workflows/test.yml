@@ -133,6 +133,41 @@ jobs:
       - name: The download helper
         run: bash tests/releases/latest-iso.test.sh
 
+  # The image Render builds. Without this job the first person to find out that
+  # `deploy/Dockerfile` no longer compiles is whoever deployed it: a Render build
+  # failure shows two lines of a log and one source file name, which is how a
+  # missing libc6-dev header was reported as a broken blake2b_avx2.c.
+  image:
+    name: Pool image (docker build)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Build it the way Render does
+        run: docker build -f deploy/Dockerfile -t ocean-pool:ci .
+
+      # The verifier is the reason the image contains a miner at all: the pool
+      # cannot trust a share it cannot hash.
+      - name: The verifier inside the image runs
+        run: |
+          docker run --rm --entrypoint /usr/local/bin/zmrig ocean-pool:ci --version
+          docker run --rm --entrypoint /usr/local/bin/zmrig ocean-pool:ci --self-test=light
+
+      - name: The pool answers, with nothing mounted
+        run: |
+          docker run -d --name pool -p 18080:8080 \
+            -e DAEMON= -e POOL_NAME=ci ocean-pool:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18080/healthz >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:18080/healthz | tee /dev/stderr | grep -q '"ok"'
+          docker logs pool | tail -20
+          docker rm -f pool
+
   macos:
     name: macOS ${{ matrix.arch }} build and hash tests
     runs-on: ${{ matrix.runner }}
