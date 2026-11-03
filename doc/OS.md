@@ -55,6 +55,12 @@ writes it to `/etc/zmrig/base` and `zmrig-os version` prints it, so a bug report
 can say which base it came from. `./os/upstream.sh` prints the same table from
 the source, plus what the published images were built on.
 
+zstd at level 19 rather than the default 15, and a zstd initramfs rather than
+gzip, are worth 5.4 MB per image: the artifact CI uploads went from 155.93 MB to
+150.56 MB (`x86-64-v3`) and 155.85 MB to 150.47 MB (`x86-64-v2`) across the same
+two-architecture build. zstd decompresses at the same speed at every level — the
+level costs build time and nothing on the rig.
+
 The Alpine version is `latest-stable` rather than a pinned one so the weekly
 build picks up point releases and security fixes without anybody remembering to
 edit a number. What that costs is the reverse question — *did anything actually

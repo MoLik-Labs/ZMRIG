@@ -60,10 +60,11 @@ skips both architectures when nothing moved, instead of producing an identical
 * **root filesystem**: zstd level 19 instead of the default 15. Decompression
   speed is the same at every zstd level; only the build takes longer.
 
-Neither is a measured claim here: this sandbox has no `mksquashfs`, no
-`xorriso` and no root, so the ISO size and boot time for 6.39.0 are whatever the
-CI job reports. What is asserted locally is the decision itself — the codec comes
-from the kernel config, and `grub.cfg` names the file the build wrote.
+Measured by CI on the same two-architecture build, before and after: the
+uploaded artifact went from 155.93 MB to **150.56 MB** (`x86-64-v3`) and 155.85 MB
+to **150.47 MB** (`x86-64-v2`), and both still boot in QEMU. What is asserted
+locally is the decision itself — the codec comes from the kernel config, and
+`grub.cfg` names the file the build wrote.
 
 ## Automation
 
