@@ -40,7 +40,7 @@ work        release     stable tags
 
 Practically:
 
-* `BETA` is the default branch, so `curl …/raw.githubusercontent.com/NggKhaiz/ZMRIG/BETA/oneclick.sh`
+* `BETA` is the default branch, so `curl …/raw.githubusercontent.com/MoLik-Labs/ZMRIG/BETA/oneclick.sh`
   and a plain `git clone` both give the stable tree. Nothing in the repository
   hard-codes any other branch name — `oneclick.sh` defaults to `BETA` and honours
   `MINER_BRANCH` for everything else.
@@ -63,7 +63,7 @@ Practically:
 Check the invariants at any time:
 
 ```bash
-gh api repos/NggKhaiz/ZMRIG --jq .default_branch        # BETA
+gh api repos/MoLik-Labs/ZMRIG --jq .default_branch        # BETA
 git ls-remote --heads origin                            # ALPHA, BETA, master
 git diff --stat origin/BETA origin/master               # empty after a release
 grep -rn "arena/" --include='*.md' --include='*.sh' --include='*.js' --include='*.html' . \
@@ -88,7 +88,7 @@ permission (this session's token gets `403`). Paste them in **Settings → Gener
 * **Topics**
   `monero` `randomx` `miner` `xmrig` `stratum` `zig` `cpu-mining`
 * **Website**
-  `https://nggkhaiz.github.io/ZMRIG/` — already set, and correct once step 4 is
+  `https://molik-labs.github.io/ZMRIG/` — already set, and correct once step 4 is
   done. Change it if you use a custom domain.
 
 The **Sponsor** button needs no setting: `.github/FUNDING.yml` points it at the
@@ -268,21 +268,21 @@ is a useful page rather than a dead end.
 
 | URL | What |
 | --- | --- |
-| `https://nggkhaiz.github.io/ZMRIG/` | home page (English) |
-| `https://nggkhaiz.github.io/ZMRIG/docs/intro` | documentation |
-| `https://nggkhaiz.github.io/ZMRIG/vi/docs/intro` | the same page in Vietnamese |
-| `https://nggkhaiz.github.io/ZMRIG/docs/install/builder` | command builder |
-| `https://nggkhaiz.github.io/ZMRIG/docs/economics/profitability` | profitability calculator |
-| `https://nggkhaiz.github.io/ZMRIG/wizard.html` | redirect into the builder, for links from the previous site |
-| `https://nggkhaiz.github.io/ZMRIG/docs.html` | redirect into the documentation, same reason |
+| `https://molik-labs.github.io/ZMRIG/` | home page (English) |
+| `https://molik-labs.github.io/ZMRIG/docs/intro` | documentation |
+| `https://molik-labs.github.io/ZMRIG/vi/docs/intro` | the same page in Vietnamese |
+| `https://molik-labs.github.io/ZMRIG/docs/install/builder` | command builder |
+| `https://molik-labs.github.io/ZMRIG/docs/economics/profitability` | profitability calculator |
+| `https://molik-labs.github.io/ZMRIG/wizard.html` | redirect into the builder, for links from the previous site |
+| `https://molik-labs.github.io/ZMRIG/docs.html` | redirect into the documentation, same reason |
 
 Verify after a publish:
 
 ```bash
 ./scripts/publish-site.sh --check                                 # both copies current
 bash tests/docs/pages.sh                                          # 21 checks
-curl -sI https://nggkhaiz.github.io/ZMRIG/docs/intro | head -1     # 200
-curl -s  https://nggkhaiz.github.io/ZMRIG/robots.txt | tail -1     # Sitemap: …
+curl -sI https://molik-labs.github.io/ZMRIG/docs/intro | head -1     # 200
+curl -s  https://molik-labs.github.io/ZMRIG/robots.txt | tail -1     # Sitemap: …
 ```
 
 ### 4b. Cloudflare Pages
@@ -317,7 +317,7 @@ sitemap entry and `og:url` is derived from them. Change those two values, then:
 ```bash
 cd site && npm run build && cd ..
 ./scripts/publish-site.sh
-sed -i "s#https://nggkhaiz.github.io/ZMRIG#https://your.domain#g" robots.txt
+sed -i "s#https://molik-labs.github.io/ZMRIG#https://your.domain#g" robots.txt
 bash tests/docs/pages.sh
 ```
 
@@ -502,7 +502,7 @@ price, or if a missing number is silently treated as zero.
 On the box that mines, as a user with `sudo`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NggKhaiz/ZMRIG/BETA/oneclick.sh \
+curl -fsSL https://raw.githubusercontent.com/MoLik-Labs/ZMRIG/BETA/oneclick.sh \
   | sudo bash -s -- install --wallet 4YourMoneroAddress... --engine zmrig
 ```
 

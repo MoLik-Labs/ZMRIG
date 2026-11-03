@@ -1,7 +1,7 @@
 ---
 title: Kiểm thử
 description: Các bộ test trong repo, mỗi bộ chứng minh điều gì, chạy mất bao lâu, và những lỗi thường là do máy chứ không phải do mã.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
+image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 ---
 
 # Kiểm thử

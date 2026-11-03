@@ -1,6 +1,6 @@
 # zmrig-proxy
 
-One pool connection for a whole farm. Part of [ZMRIG](https://github.com/NggKhaiz/ZMRIG),
+One pool connection for a whole farm. Part of [ZMRIG](https://github.com/MoLik-Labs/ZMRIG),
 by [@nggkhaiz](https://github.com/NggKhaiz). GPL-3.0 (this component is MIT so
 it can be vendored anywhere; see [`package.json`](package.json)).
 

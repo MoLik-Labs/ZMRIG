@@ -1,0 +1,89 @@
+# Render blueprint for Ocean Pool — the optional half.
+#
+# The root render.yaml deploys the control plane, because a free workspace gets
+# 750 instance hours a month and one always-on service already uses ~744 of
+# them. This file exists for the case where the pool is what you want on Render:
+# apply it to a *different* workspace, or to this one if you are not running the
+# bot here.
+#
+# Free web services get one HTTPS port and no raw TCP, so the pool runs in
+# WebSocket-only mode: miners connect with
+#   zmrig -o wss://<service>.onrender.com/stratum -u <address>
+#
+# A free instance sleeps after 15 minutes without traffic, and its filesystem is
+# ephemeral. Attach a disk (paid plans) or the ledger is lost on every restart --
+# acceptable while testing, not once real miners are pointed at it.
+
+services:
+  - type: web
+    name: ocean-pool
+    runtime: docker
+    dockerfilePath: ./deploy/Dockerfile
+    dockerContext: .
+    plan: free
+    region: frankfurt
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: 8080
+      - key: HTTP_PORT
+        value: 8080
+      - key: POOL_FEE_PERCENT
+        value: 1
+      - key: POOL_NAME
+        value: Ocean Pool
+      - key: VERIFY_SHARES
+        value: true
+      # Point this at a node you run: a public node will rate-limit you.
+      - key: DAEMON
+        sync: false
+      # Leave empty to use the address compiled into pool/src/operator.js.
+      - key: OPERATOR_ADDRESS
+        value: ""
+      - key: PAYOUT_MODE
+        value: ledger
+      - key: LOG_LEVEL
+        value: info
+
+  # The documentation site, the download page and the release feed, served by
+  # `serve/`. It is one Node process with no dependencies: the site is built
+  # once at deploy time, the files are read into memory at boot, and every
+  # request after that is a Map lookup.
+  #
+  #   https://<service>.onrender.com/            the documentation
+  #   https://<service>.onrender.com/download    the current images
+  #   https://<service>.onrender.com/iso/v3      permanent link to the newest v3
+  #   https://<service>.onrender.com/iso/v2      ... and v2, and /iso/beta
+  #   https://<service>.onrender.com/api/releases.json
+  #
+  # GitHub Pages keeps serving the same site at /ZMRIG/; this service exists so
+  # the download page can redirect to the newest asset without a redeploy.
+  - type: web
+    name: zmrig-site
+    runtime: node
+    plan: free
+    region: frankfurt
+    healthCheckPath: /healthz
+    autoDeploy: true
+    buildCommand: >-
+      npm --prefix site install --no-audit --no-fund &&
+      SITE_BASE_URL=/ SITE_URL="${RENDER_EXTERNAL_URL:-https://zmrig.onrender.com}"
+      SITE_DOWNLOAD_URL="${RENDER_EXTERNAL_URL:-https://zmrig.onrender.com}/download"
+      npm --prefix site run build &&
+      npm --prefix serve run build
+    startCommand: node serve/server.js
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: SITE_ROOT
+        value: site/build
+      - key: GITHUB_REPO
+        value: MoLik-Labs/ZMRIG
+      # Ten minutes: 60 anonymous API calls an hour, well inside the 60/hour
+      # unauthenticated limit, and short enough that a new release shows up
+      # while somebody is still looking at the page.
+      - key: RELEASES_TTL
+        value: "600000"
+      - key: ZMRIG_VERSION
+        value: "6.40.1"

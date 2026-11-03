@@ -2,7 +2,7 @@
 #
 # oneclick.sh - build, tune, install and supervise this miner with one command.
 #
-#   curl -fsSL https://raw.githubusercontent.com/NggKhaiz/ZMRIG/BETA/oneclick.sh | sudo bash -s -- --wallet 4...
+#   curl -fsSL https://raw.githubusercontent.com/MoLik-Labs/ZMRIG/BETA/oneclick.sh | sudo bash -s -- --wallet 4...
 #
 #   sudo ./oneclick.sh                     # full install, asks for the wallet
 #   sudo ./oneclick.sh --wallet 4... --yes  # fully unattended
@@ -36,7 +36,7 @@
 # overwrite an existing config unless --force is passed, and skips a rebuild
 # when the binary is newer than the sources.
 #
-# ZMRIG installer, by @nggkhaiz - https://github.com/NggKhaiz/ZMRIG
+# ZMRIG installer, by @nggkhaiz - https://github.com/MoLik-Labs/ZMRIG
 # Licensed under GPL-3.0.
 #
 set -euo pipefail
@@ -45,7 +45,7 @@ ONECLICK_VERSION="1.3"
 ZIG_VERSION="${MINER_ZIG_VERSION:-0.13.0}"
 
 SELF="${BASH_SOURCE[0]:-}"
-REPO_URL="${MINER_REPO_URL:-https://github.com/NggKhaiz/ZMRIG.git}"
+REPO_URL="${MINER_REPO_URL:-https://github.com/MoLik-Labs/ZMRIG.git}"
 REPO_BRANCH="${MINER_BRANCH:-BETA}"
 
 PREFIX="${MINER_PREFIX:-/usr/local}"
@@ -98,6 +98,8 @@ MSR_MODE="auto"
 # battery becomes "watt", everything else "free"), so a plain install needs no
 # flags at all.
 PROFILE="${MINER_PROFILE:-auto}"
+# Empty means "no thermal policy": the miner is only throttled when asked.
+MAX_TEMP="${MAX_TEMP:-}"
 CPU_AFFINITY=""
 NICEHASH=0
 # Machine report for the web dashboard (zmrig only): a small file the miner
@@ -175,6 +177,9 @@ Options
   --profile NAME         auto | free | watt. Default auto: free (max hashrate,
                          electricity is free) everywhere except a laptop on
                          battery, which gets watt (max hashrate per watt).
+  --max-temp C           keep the hottest CPU sensor at or below C degrees:
+                         the miner gives back threads as the box warms and
+                         stops above C+15 instead of cooking the machine
   --autotune[=SEC]       search for the best thread count after install
                          (default: on for zmrig, 8 s per candidate)
   --no-autotune          keep the built-in thread heuristic
@@ -259,6 +264,8 @@ while [ $# -gt 0 ]; do
         --no-autotune)   AUTOTUNE=0 ;;
         --profile)       PROFILE="${2:?}"; shift ;;
         --profile=*)     PROFILE="${1#*=}" ;;
+        --max-temp)      MAX_TEMP="${2:?}"; shift ;;
+        --max-temp=*)    MAX_TEMP="${1#*=}" ;;
         --engine)        ENGINE="${2:?}"; ENGINE_EXPLICIT=1; shift ;;
         --engine=*)      ENGINE="${1#*=}"; ENGINE_EXPLICIT=1 ;;
         --tls)           TLS="true" ;;
@@ -319,6 +326,17 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$COMMAND" ] || COMMAND="install"
+
+# The thermal policy is checked here, not where it is written: `plan` never
+# writes a config, and a typo should fail before the user believes it worked.
+if [ -n "$MAX_TEMP" ]; then
+    case "$MAX_TEMP" in
+        *[!0-9]*) die "--max-temp must be a whole number of degrees Celsius (45..95), got '${MAX_TEMP}'" ;;
+    esac
+    if [ "$MAX_TEMP" -lt 45 ] || [ "$MAX_TEMP" -gt 95 ]; then
+        die "--max-temp must be 45..95 degrees Celsius, got ${MAX_TEMP}: below 45 the rig would never mine, above 95 nothing is protected"
+    fi
+fi
 
 # ---------------------------------------------------------------------------
 # pool names
@@ -1102,10 +1120,23 @@ write_config() {
     local profile_json=""
     local cpu_threads_json=""
     local health_json=""
+    local thermal_json=""
     if [ "${ENGINE:-xmrig}" = "zmrig" ]; then
         resolve_profile_effective
         profile_json="
     \"profile\": \"${PROFILE_EFFECTIVE}\","
+        # The thermal policy, when one was asked for. Written as a number so the
+        # miner reads it without parsing anything, and left out entirely when
+        # the flag is absent: a config that says nothing cannot throttle.
+        case "${MAX_TEMP}" in
+            ''|*[!0-9.]*)
+                [ -n "$MAX_TEMP" ] && die "--max-temp must be a number of degrees Celsius (45..95)"
+                ;;
+            *)
+                thermal_json="
+    \"max-temp\": ${MAX_TEMP},"
+                ;;
+        esac
         if [ "$HEALTH_RESTART" != 1 ]; then
             # profile_json already ends with a comma, so this block only has
             # to supply its own trailing one.
@@ -1135,7 +1166,7 @@ write_config() {
         "access-token": ${http_token},
         "restricted": true
     },
-    "autosave": true,${profile_json}${health_json}
+    "autosave": true,${profile_json}${thermal_json}${health_json}
     "background": false,
     "colors": false,
     "title": true,
@@ -2250,6 +2281,7 @@ cmd_plan() {
     printf '    %-14s %s  (%s)\n' "profile" "${PROFILE_EFFECTIVE}" "$(profile_reason)"
     printf '    %-14s %s\n' "mode" "$( [ "$ENGINE" = zmrig ] && echo "auto (fast when RAM allows)" || echo "pool default")"
     printf '    %-14s %s\n' "huge pages" "$(huge_page_plan)"
+    printf '    %-14s %s\n' "thermal" "$( if [ -n "$MAX_TEMP" ]; then printf 'hold %s C: step down at %s C, pause above %s C' "$MAX_TEMP" "$MAX_TEMP" "$((MAX_TEMP + 15))"; else printf 'off (no --max-temp: nothing throttles, however hot the box gets)'; fi )"
     printf '    %-14s %s\n' "autotune" "$(autotune_plan)"
     printf '    %-14s %s\n' "service" "$( [ "$DO_SERVICE" = 1 ] && echo "${SERVICE_NAME}.service (systemd)" || echo "none, run in the foreground")"
     printf '\n'

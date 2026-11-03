@@ -1,7 +1,7 @@
 ---
 title: Choosing an engine
 description: zmrig (Zig) and xmrig (C++) share the same RandomX engine. The difference is transports, algorithms and what each one can tell you about itself.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-en.png
+image: https://molik-labs.github.io/ZMRIG/img/og-en.png
 ---
 
 # Choosing an engine

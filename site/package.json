@@ -1,6 +1,6 @@
 {
   "name": "zmrig-docs",
-  "version": "6.32.1",
+  "version": "6.42.0",
   "private": true,
   "description": "Documentation site for ZMRIG, built with Docusaurus.",
   "scripts": {

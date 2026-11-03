@@ -1,0 +1,24 @@
+{
+  "name": "zmrig-fleet",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Telegram and Discord control plane for ZMRIG OS rigs: enrolment by Device ID, wallet/pool/coin/mode changes, updates and alerts.",
+  "type": "commonjs",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "check": "node src/index.js --check",
+    "test": "node --test --test-concurrency=1 'tests/*.test.js'"
+  },
+  "dependencies": {},
+  "license": "GPL-3.0",
+  "author": "@nggkhaiz (https://github.com/NggKhaiz)",
+  "homepage": "https://github.com/MoLik-Labs/ZMRIG",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MoLik-Labs/ZMRIG.git"
+  }
+}

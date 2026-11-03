@@ -1,7 +1,7 @@
 ---
 title: Chọn engine
 description: zmrig (Zig) và xmrig (C++) dùng chung engine RandomX. Khác biệt nằm ở transport, thuật toán, và những gì mỗi bên tự nói được về mình.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
+image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 ---
 
 # Chọn engine

@@ -1,7 +1,7 @@
 ---
 title: Mạng chỉ mở 443
 description: Relay Cloudflare, proxy SOCKS5 và HTTP, --connect-to và ghim CA, cho VPS và mạng công ty chặn mọi thứ trừ HTTPS.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
+image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 ---
 
 # Mạng chỉ mở 443

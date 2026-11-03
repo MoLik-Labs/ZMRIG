@@ -9,14 +9,21 @@
 # read without guessing where boot stopped.
 #
 # Kernel command line (all optional):
-#   zmrig.os.mode=max|balanced|eco|light   mining mode for the first boot
+#   zmrig.os.mode=max|balanced|eco|light|safe   mining mode for the first boot
+#   zmrig.os.maxtemp=C                     safe mode: hold the CPU at or below C
 #   zmrig.os.wallet=4...                   wallet, skips the wizard
 #   zmrig.os.pool=host:port                pool override
 #   zmrig.os.worker=name                   worker name
+#   zmrig.os.affinity=auto|off|0xMASK      which cores the miner may use
 #   zmrig.os.hugepages=N                   0 disables the reservation
+#   zmrig.os.fleet=https://host            control plane: enrol and configure
+#                                          this rig from a Telegram/Discord bot
 #   zmrig.os.data=/dev/sdX1                partition that keeps the config
 #   zmrig.os.debug=1                       shell instead of the miner
 #   zmrig.os.nostart=1                     boot, but do not mine
+#   zmrig.slot=a|b                         which rootfs slot to boot (A/B)
+#   zmrig.os.install=/dev/nvme0n1          install to this disk, then reboot
+#                                          (unattended: for Ventoy and fleets)
 #
 # The same values are read by `zmrig-os` once the system is up, so a fleet can
 # be pointed at a new pool by editing one GRUB line.
@@ -40,6 +47,13 @@ getarg() { # key -> value, empty when absent
     printf '%s' ""
 }
 
+SLOT=$(getarg zmrig.slot)
+[ -n "$SLOT" ] || SLOT=a
+case "$SLOT" in
+    a|b) ;;
+    *) log "unknown slot '${SLOT}', using a"; SLOT=a ;;
+esac
+
 MODE=$(getarg zmrig.os.mode)
 WALLET=$(getarg zmrig.os.wallet)
 POOL=$(getarg zmrig.os.pool)
@@ -48,6 +62,10 @@ HUGEPAGES=$(getarg zmrig.os.hugepages)
 DATA=$(getarg zmrig.os.data)
 DEBUG=$(getarg zmrig.os.debug)
 NOSTART=$(getarg zmrig.os.nostart)
+MAXTEMP=$(getarg zmrig.os.maxtemp)
+FLEET=$(getarg zmrig.os.fleet)
+INSTALL=$(getarg zmrig.os.install)
+AFFINITY=$(getarg zmrig.os.affinity)
 
 # ------------------------------------------------------------ early mounts
 mount -t proc     proc /proc     2>/dev/null || true
@@ -80,8 +98,15 @@ if [ -d /sys/bus/pci/devices ]; then
 fi
 
 # ------------------------------------------------------------ find the media
+# The root filesystem is a squashfs next to the kernel. Two layouts are
+# supported and both are just a file name:
+#
+#   rootfs.squashfs         a live image (ISO/USB, read-only)
+#   rootfs-a/b.squashfs     an installed disk with an A/B pair, so an OS update
+#                           is written to the other slot and a failed boot can
+#                           be rolled back by changing one kernel parameter
 find_rootfs() {
-    local dev name mounted
+    local dev name fs candidate
 
     for sysdev in /sys/class/block/*; do
         name=$(basename "$sysdev")
@@ -91,11 +116,27 @@ find_rootfs() {
 
         for fs in iso9660 vfat ext4; do
             if mount -t "$fs" -o ro "$dev" /media 2>/dev/null; then
-                if [ -f /media/zmrig/rootfs.squashfs ]; then
-                    log "root filesystem on $dev ($fs)"
-                    MEDIA_DEV="$dev"
-                    return 0
-                fi
+                case "$SLOT" in a) other_slot=b ;; *) other_slot=a ;; esac
+                for candidate in "rootfs-${SLOT}.squashfs" rootfs.squashfs "rootfs-${other_slot}.squashfs"; do
+                    if [ -f "/media/zmrig/${candidate}" ]; then
+                        case "$candidate" in
+                            "rootfs-${SLOT}.squashfs"|rootfs.squashfs) ;;
+                            *) log "slot ${SLOT} has no root filesystem: booting ${candidate%%-*}-${other_slot} instead" ;;
+                        esac
+                        log "root filesystem on ${dev} (${fs}), slot ${SLOT}: ${candidate}"
+                        MEDIA_DEV="$dev"
+                        ROOTFS_IMG="/media/zmrig/${candidate}"
+                        # An installed system keeps its config and its updated
+                        # binary here, so the filesystem has to be writable; the
+                        # marker is written by the installer, never by a live
+                        # image (which cannot write to its own media anyway).
+                        if [ -f /media/zmrig/installed ] && [ "$fs" = "ext4" ]; then
+                            mount -o remount,rw /media 2>/dev/null ||
+                                log "warning: ${dev} could not be remounted read-write"
+                        fi
+                        return 0
+                    fi
+                done
                 umount /media
             fi
         done
@@ -105,7 +146,60 @@ find_rootfs() {
 }
 
 MEDIA_DEV=""
+ROOTFS_IMG=""
 find_rootfs || fatal "no ZMRIG root filesystem found on any disk, CD or USB device"
+
+# ------------------------------------------------------------ A/B rollback
+# An installed rig keeps a counter on the boot medium: incremented here, cleared
+# by `zmrig-os` once the miner has actually run for five minutes. Three boots
+# that never got that far mean the slot is broken - a kernel that panics, a
+# squashfs that does not mount, a miner that cannot start - and the honest thing
+# to do is boot the other one instead of asking somebody to drive to the rig.
+#
+# The choice lives in a GRUB environment block, which is a 1024-byte text file,
+# so it can be written here without grub-editenv and without touching grub.cfg.
+write_grubenv() { # slot
+    local env=/media/boot/grub/grubenv
+    [ -d /media/boot/grub ] || return 0
+    # Exactly 1024 bytes: the header, the key, then '#' padding. GRUB ignores a
+    # block of any other size, which would make the rollback silently do nothing.
+    awk -v slot="$1" 'BEGIN {
+        head = "# GRUB Environment Block\nzmrig_slot=" slot "\n"
+        n = 1024 - length(head) - 1
+        pad = ""
+        for (i = 0; i < n; i++) pad = pad "#"
+        printf "%s%s\n", head, pad
+    }' > "${env}.new" 2>/dev/null || return 0
+    mv "${env}.new" "$env" 2>/dev/null || return 0
+}
+
+if [ -f /media/zmrig/installed ]; then
+    boot_state=/media/zmrig/state/boots
+    boot_count=0
+    boot_slot="$SLOT"
+    if [ -f "$boot_state" ]; then
+        boot_count=$(cut -d' ' -f1 "$boot_state" 2>/dev/null || echo 0)
+        boot_slot=$(cut -d' ' -f2 "$boot_state" 2>/dev/null || echo "$SLOT")
+        case "$boot_count" in ''|*[!0-9]*) boot_count=0 ;; esac
+    fi
+
+    if [ "$boot_count" -ge 3 ] && [ "$boot_slot" = "$SLOT" ]; then
+        case "$SLOT" in a) other=b ;; *) other=a ;; esac
+        if [ -f "/media/zmrig/rootfs-${other}.squashfs" ]; then
+            log "slot ${SLOT} failed to start ${boot_count} times: switching to slot ${other} and rebooting"
+            printf '0 %s\n' "$other" > "$boot_state" 2>/dev/null || true
+            write_grubenv "$other"
+            sync
+            reboot -f 2>/dev/null || exec /bin/sh
+        fi
+        log "slot ${SLOT} has failed ${boot_count} times and there is no other slot: booting it anyway"
+    fi
+
+    mkdir -p /media/zmrig/state 2>/dev/null || true
+    printf '%s %s\n' "$((boot_count + 1))" "$SLOT" > "$boot_state" 2>/dev/null ||
+        log "warning: the boot counter could not be written (read-only media?)"
+    log "boot ${boot_count} on slot ${SLOT}"
+fi
 
 # ------------------------------------------------------------ memory pages
 # Reserved before anything else runs: the kernel hands out 2 MiB pages while the
@@ -145,7 +239,7 @@ reserve_pages() {
 [ "$MODE" = "light" ] || reserve_pages
 
 # ------------------------------------------------------------ root + overlay
-mount -t squashfs -o ro "/media/zmrig/rootfs.squashfs" /root-ro || fatal "cannot mount the squashfs"
+mount -t squashfs -o ro "$ROOTFS_IMG" /root-ro || fatal "cannot mount the squashfs"
 
 # The upper layer is where the running system writes: logs, the wallet file, a
 # binary installed by `zmrig-os update`. A tmpfs costs nothing until it is used,
@@ -161,6 +255,7 @@ mkdir -p /newroot/run/zmrig /newroot/etc/zmrig /newroot/var/log
 # Where the updater refuses to write. It lives in /etc, not /run: OpenRC mounts a
 # fresh tmpfs over /run once it starts, and the marker would disappear with it.
 printf '%s' "$MEDIA_DEV" > /newroot/etc/zmrig/bootdev 2>/dev/null || true
+printf '%s\n' "$SLOT" > /newroot/etc/zmrig/slot 2>/dev/null || true
 
 # ------------------------------------------------------------ configuration
 # Order of precedence, lowest to highest: the copy baked into the image, the
@@ -182,12 +277,16 @@ if [ -n "$DATA" ]; then
     fi
 fi
 
-if [ -n "$WALLET$POOL$WORKER$MODE" ]; then
+if [ -n "$WALLET$POOL$WORKER$MODE$MAXTEMP$FLEET$INSTALL$AFFINITY" ]; then
     {
         [ -n "$WALLET" ] && printf 'WALLET="%s"\n' "$WALLET"
         [ -n "$POOL" ] && printf 'POOL="%s"\n' "$POOL"
         [ -n "$WORKER" ] && printf 'WORKER="%s"\n' "$WORKER"
         [ -n "$MODE" ] && printf 'MODE="%s"\n' "$MODE"
+        [ -n "$MAXTEMP" ] && printf 'SAFE_TEMP="%s"\n' "$MAXTEMP"
+        [ -n "$FLEET" ] && printf 'FLEET="%s"\n' "$FLEET"
+        [ -n "$INSTALL" ] && printf 'INSTALL="%s"\n' "$INSTALL"
+        [ -n "$AFFINITY" ] && printf 'AFFINITY="%s"\n' "$AFFINITY"
     } > /newroot/etc/zmrig/kernel.conf
     log "config: overrides from the kernel command line"
 fi
@@ -204,6 +303,14 @@ fi
 if [ "$NOSTART" = "1" ]; then
     printf '1' > /newroot/run/zmrig/nostart
 fi
+
+# The media stays visible inside the running system at /media: an installed rig
+# keeps os.conf, downloaded binaries and the boot counter there, and the live
+# image needs it for `zmrig-os update --iso`. A bind mount under /newroot
+# survives switch_root, which is why this happens before the handover.
+mkdir -p /newroot/media
+mount --bind /media /newroot/media 2>/dev/null ||
+    log "warning: the boot media will not be visible at /media"
 
 log "ready: switching to the root filesystem"
 

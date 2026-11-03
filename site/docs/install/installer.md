@@ -1,7 +1,7 @@
 ---
 title: Installer reference
 description: Every oneclick.sh subcommand and flag, the files it installs, the systemd units it writes, how it migrates an old installation, and how it removes itself.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-en.png
+image: https://molik-labs.github.io/ZMRIG/img/og-en.png
 ---
 
 # Installer reference

@@ -16,9 +16,9 @@
   "license": "GPL-3.0",
   "dependencies": {},
   "author": "@nggkhaiz (https://github.com/NggKhaiz)",
-  "homepage": "https://github.com/NggKhaiz/ZMRIG",
+  "homepage": "https://github.com/MoLik-Labs/ZMRIG",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/NggKhaiz/ZMRIG.git"
+    "url": "git+https://github.com/MoLik-Labs/ZMRIG.git"
   }
 }

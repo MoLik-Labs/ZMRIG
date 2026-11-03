@@ -1,7 +1,7 @@
 ---
 title: Benchmarks and tuning
 description: How measurements are taken, the numbers from a 2 vCPU VM, which settings actually move hashrate, and the ten-minute procedure to tune a machine.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-en.png
+image: https://molik-labs.github.io/ZMRIG/img/og-en.png
 ---
 
 # Benchmarks and tuning

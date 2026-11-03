@@ -5,7 +5,7 @@ One command, no manual steps, safe to re-run.
 
 ```bash
 # on a fresh machine (clones the repository for you)
-curl -fsSL https://raw.githubusercontent.com/NggKhaiz/ZMRIG/BETA/oneclick.sh \
+curl -fsSL https://raw.githubusercontent.com/MoLik-Labs/ZMRIG/BETA/oneclick.sh \
   | sudo bash -s -- --wallet 4YourMoneroAddress...
 
 # or inside a checkout
@@ -106,7 +106,7 @@ sudo ./oneclick.sh purge      # remove everything, config included (asks first)
 `"health": {"restart": false, "warmup": 180}` from the config.
 
 Do not want to remember any of these? The published site has a four-step
-[wizard](https://nggkhaiz.github.io/ZMRIG/wizard.html) that produces the same
+[wizard](https://molik-labs.github.io/ZMRIG/wizard.html) that produces the same
 command, plus a `plan`-only variant that changes nothing on the host. Every
 short pool name above is a clickable card there.
 
@@ -234,7 +234,7 @@ sudo /usr/local/bin/zmrig -c /etc/zmrig/config.json --rebench-algo
 
 ```bash
 for host in rig01 rig02 rig03; do
-  ssh "$host" "curl -fsSL https://raw.githubusercontent.com/NggKhaiz/ZMRIG/BETA/oneclick.sh \
+  ssh "$host" "curl -fsSL https://raw.githubusercontent.com/MoLik-Labs/ZMRIG/BETA/oneclick.sh \
     | sudo bash -s -- --yes --wallet 4... --rig-id $host"
 done
 ```

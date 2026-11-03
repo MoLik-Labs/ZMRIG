@@ -1,0 +1,58 @@
+# Keeps the control plane awake on a free Render instance.
+#
+# A free web service spins down after 15 minutes without inbound traffic, and a
+# sleeping bot answers nothing until somebody wakes it. Every rig that checks in
+# is traffic and keeps the service up by itself, but an empty fleet, a paused
+# rig, or a quiet night is not - so this asks /healthz twice an hour.
+#
+# The cost is the point: 750 free instance hours per calendar month is enough
+# for one always-on service (744 hours in a 31-day month) and not for two. A
+# request every 30 minutes stays inside that, a request every minute would not
+# change anything, and running two services would end the month suspended.
+#
+# One thing to set: the repository variable FLEET_HEALTH_URL, for example
+#   https://zmrig-fleet.onrender.com/healthz
+# Settings -> Secrets and variables -> Actions -> Variables.
+name: Keep the control plane awake
+
+on:
+  schedule:
+    # Every 30 minutes. GitHub's scheduler can be late under load; the spin-down
+    # window is 15 minutes, so one late run is survivable and two are not - if
+    # the service is cold, the request below wakes it instead.
+    - cron: '7,37 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    name: /healthz
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Wake it, then confirm it answers
+        env:
+          URL: ${{ vars.FLEET_HEALTH_URL }}
+        run: |
+          if [ -z "${URL}" ]; then
+            echo "::notice title=Not configured::set the FLEET_HEALTH_URL repository variable to https://<service>.onrender.com/healthz"
+            exit 0
+          fi
+
+          # A cold instance takes about a minute to answer, so the first request
+          # is allowed to be slow and a 502/503 is not a failure - it is a
+          # machine starting. What is a failure is three 60-second waits that
+          # never come back.
+          for attempt in 1 2 3; do
+            code=$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 60 "$URL" || echo 000)
+            echo "attempt ${attempt}: GET ${URL} -> ${code}"
+            if [ "$code" = "200" ]; then
+              cat /tmp/health.json; echo
+              exit 0
+            fi
+            sleep 20
+          done
+
+          echo "::error title=The control plane did not answer::${URL} answered ${code} three times"
+          exit 1

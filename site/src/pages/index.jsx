@@ -5,7 +5,7 @@ import Link from "@docusaurus/Link";
 import useDocusaurusContext from "@docusaurus/useDocusaurusContext";
 import CopyButton from "../components/CopyButton";
 
-const RAW = "https://raw.githubusercontent.com/NggKhaiz/ZMRIG/BETA/oneclick.sh";
+const RAW = "https://raw.githubusercontent.com/MoLik-Labs/ZMRIG/BETA/oneclick.sh";
 
 const COMMAND = `curl -fsSL ${RAW} \\
   | sudo bash -s -- --wallet 4YourMoneroAddress`;
@@ -97,7 +97,7 @@ export default function Home() {
   const { i18n } = useDocusaurusContext();
   const locale = i18n.currentLocale === "vi" ? "vi" : "en";
   const c = COPY[locale];
-  const socialImage = `https://nggkhaiz.github.io/ZMRIG/img/og-${locale}.png`;
+  const socialImage = `https://molik-labs.github.io/ZMRIG/img/og-${locale}.png`;
 
   return (
     <Layout title="ZMRIG" description={c.lede}>

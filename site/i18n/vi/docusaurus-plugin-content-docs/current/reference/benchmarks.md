@@ -1,7 +1,7 @@
 ---
 title: Benchmark và tinh chỉnh
 description: Cách đo, số đo trên VM 2 vCPU, những cài đặt thật sự làm hashrate đổi, và quy trình mười phút để tinh chỉnh một máy.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
+image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 ---
 
 # Benchmark và tinh chỉnh

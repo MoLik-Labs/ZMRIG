@@ -1,7 +1,7 @@
 ---
 title: Tự dựng pool
 description: Một pool Monero bằng Node.js không dependency — phí 1 % đổi lấy gì, chạy thử trong năm phút, các lựa chọn hosting miễn phí, và quy tắc vận hành.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
+image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 ---
 
 # Tự dựng pool
@@ -73,9 +73,16 @@ curl -s 127.0.0.1:8080/api/worker/4YourMoneroAddress
 
 ## Hosting miễn phí
 
+Blueprint ở gốc repo deploy **fleet** — bot, dashboard và Discord — không phải
+pool này. Một workspace free chỉ được **750 instance-hours mỗi tháng** cho tất cả
+các service cộng lại, và một service chạy 24/7 đã dùng khoảng 744 giờ; thêm một
+service nữa là vượt hạn mức và Render treo các service free tới tháng sau. Vì thế
+blueprint của pool nằm ở `deploy/render-pool.yaml`: áp nó vào một workspace khác,
+hoặc vào chính workspace này nếu bot không chạy ở đây.
+
 | Nơi | Cách chạy | Ghi chú |
 | --- | --- | --- |
-| Render | `render.yaml` (Docker) | một cổng, chỉ WebSocket; instance free ngủ sau 15 phút không có traffic |
+| Render | `deploy/render-pool.yaml` (Docker) | một cổng, chỉ WebSocket; instance free ngủ sau 15 phút không có traffic |
 | Fly.io | `fly.toml` + volume 1 GB | có TCP thật ở 3333; `monerod` không vừa máy 256 MB |
 | Cloudflare Workers | `pool/worker/` | cầu WebSocket ⇄ TCP, không cần Durable Object |
 | Vercel | chỉ trang tĩnh | function không giữ được kết nối stratum |
@@ -107,4 +114,4 @@ zmrig -o pool.example.com:3333 -u 4YourMoneroAddress.rig1 -t 4
 
 Payout qua `monero-wallet-rpc`, API và các lưu ý bảo mật nằm trong
 `pool/README.md`; những bước bạn phải tự chạy khi deploy ở
-[`doc/SETUP.md`](https://github.com/NggKhaiz/ZMRIG/blob/master/doc/SETUP.md).
+[`doc/SETUP.md`](https://github.com/MoLik-Labs/ZMRIG/blob/master/doc/SETUP.md).

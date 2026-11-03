@@ -1,7 +1,7 @@
 ---
 title: Testing
 description: The suites in this repository, what each one proves, how long they take, and the failures that are usually the machine rather than the code.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-en.png
+image: https://molik-labs.github.io/ZMRIG/img/og-en.png
 ---
 
 # Testing

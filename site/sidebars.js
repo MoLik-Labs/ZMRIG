@@ -27,7 +27,7 @@ const sidebars = {
       type: "category",
       label: "Appliance",
       collapsible: true,
-      items: ["appliance/iso"],
+      items: ["appliance/iso", "appliance/web"],
     },
     {
       type: "category",
@@ -61,7 +61,7 @@ const sidebars = {
       type: "category",
       label: "A whole fleet",
       collapsible: true,
-      items: ["fleet/proxy", "fleet/pool"],
+      items: ["fleet/telegram", "fleet/dashboard", "fleet/proxy", "fleet/pool"],
     },
     {
       type: "category",

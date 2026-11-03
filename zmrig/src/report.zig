@@ -47,6 +47,15 @@ pub const Snapshot = struct {
     /// thinks of its own income right now, so a fleet dashboard can sort by
     /// "machines that are running but earning nothing".
     health: []const u8 = "ok",
+    /// The thermal policy, when one is armed: the target in `--max-temp`, the
+    /// reading it last acted on, and how many threads it is currently allowing.
+    /// A dashboard with a hundred rigs needs these to tell "cool and quiet"
+    /// from "has been at its pause limit since 03:00", which a hashrate graph
+    /// alone never shows - a throttled rig and a healthy rig at half load look
+    /// identical from the pool side.
+    temp_limit_c: ?f32 = null,
+    temp_c: ?f32 = null,
+    active_threads: ?usize = null,
     timestamp: i64 = 0,
 };
 
@@ -97,6 +106,15 @@ pub fn encode(buf: []u8, snap: Snapshot) ![]const u8 {
     } else {
         try w.print(",\"hw\":null", .{});
     }
+
+    // Null, not zero, for every one of the three: a report from a miner with no
+    // governor must not read as "0 C, 0 threads allowed".
+    try w.print(",\"tmax\":", .{});
+    if (snap.temp_limit_c) |v| try w.print("{d:.0}", .{v}) else try w.writeAll("null");
+    try w.print(",\"tc\":", .{});
+    if (snap.temp_c) |v| try w.print("{d:.1}", .{v}) else try w.writeAll("null");
+    try w.print(",\"at\":", .{});
+    if (snap.active_threads) |v| try w.print("{d}", .{v}) else try w.writeAll("null");
 
     try w.print(",\"health\":", .{});
     try writeJsonString(w, snap.health);
@@ -357,6 +375,40 @@ test "encode has the prefix and round trips through base64" {
 
     // 990 H/s over 45.5 W, derived because the caller did not pass it.
     try testing.expect(std.mem.indexOf(u8, json, "\"hw\":21.8") != null);
+}
+
+test "the thermal policy is in the payload, and absent when there is none" {
+    const testing = std.testing;
+
+    // The code is base64 of the JSON, so the assertions have to look at what a
+    // decoder sees, not at the transport encoding.
+    const decode = struct {
+        fn into(code: []const u8, out: []u8) []const u8 {
+            const payload = code[code_prefix.len..];
+            const len = std.base64.url_safe_no_pad.Decoder.calcSizeForSlice(payload) catch return "";
+            std.base64.url_safe_no_pad.Decoder.decode(out[0..len], payload) catch return "";
+            return out[0..len];
+        }
+    }.into;
+
+    var buf: [1200]u8 = undefined;
+    var json_buf: [1024]u8 = undefined;
+    const hot = decode(try encode(&buf, .{
+        .temp_limit_c = 72,
+        .temp_c = 73.4,
+        .active_threads = 7,
+    }), &json_buf);
+    try testing.expect(std.mem.indexOf(u8, hot, "\"tmax\":72") != null);
+    try testing.expect(std.mem.indexOf(u8, hot, "\"tc\":73.4") != null);
+    try testing.expect(std.mem.indexOf(u8, hot, "\"at\":7") != null);
+
+    // A miner with no --max-temp reports nulls, never a comfortable-looking 0.
+    var plain_buf: [1200]u8 = undefined;
+    var plain_json: [1024]u8 = undefined;
+    const plain = decode(try encode(&plain_buf, .{}), &plain_json);
+    try testing.expect(std.mem.indexOf(u8, plain, "\"tmax\":null") != null);
+    try testing.expect(std.mem.indexOf(u8, plain, "\"tc\":null") != null);
+    try testing.expect(std.mem.indexOf(u8, plain, "\"at\":null") != null);
 }
 
 test "hashes per watt is absent, not zero, when no power is known" {

@@ -1,7 +1,7 @@
 ---
 title: Farm proxy
 description: One pool connection for many rigs. Extranonce per rig, difficulty per rig, one login for the whole farm, and tunnels for rigs in another building.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-en.png
+image: https://molik-labs.github.io/ZMRIG/img/og-en.png
 ---
 
 # Farm proxy

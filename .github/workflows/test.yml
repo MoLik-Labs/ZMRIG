@@ -53,6 +53,134 @@ jobs:
 
       # Full local suite: node run_tests.js
 
+  # The Zig engine had no CI at all: cli.sh, unit.sh, net.sh, health.sh and
+  # thermal.sh ran only on the machine that wrote them, which is how a suite
+  # that passes locally and a suite that passes nowhere look the same.
+  #
+  # x86-64 only: the static build and the CUDA-free C++ engine are what the
+  # release binaries are, and the arm64 runner is used by the XMRig matrix
+  # above for the same source tree.
+  zmrig:
+    name: zmrig engine build and test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install the toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential python3-pip
+          # zig 0.13, and only 0.13: the runner's own zig is newer and does not
+          # compile this code. scripts/find-zig.sh decides, and says which.
+          python3 -m pip install --break-system-packages --quiet ziglang==0.13.0
+
+      - name: Build
+        run: ./zmrig/build.sh --jobs "$(nproc)"
+
+      - name: Report the toolchain
+        run: |
+          echo "zig:      $(./scripts/find-zig.sh) -> $(./scripts/find-zig.sh | xargs -r -I{} {} version)"
+          echo "cpus:     $(nproc)"
+          echo "memory:   $(free -m | awk '/^Mem:/ {print $2 " MiB"}')"
+
+      - name: Unit tests (every module)
+        run: ./zmrig/tests/unit.sh
+
+      - name: Hash engine (C API, reference vectors)
+        run: ./zmrig/tests/run.sh --quick
+
+      - name: CLI
+        run: ./zmrig/tests/cli.sh
+
+      - name: Stratum and transport
+        run: ./zmrig/tests/net.sh
+
+      - name: Watchdog against a real pool
+        run: ./zmrig/tests/health.sh
+
+      # The safe mode, end to end: the governor is driven through
+      # --thermal-file, because a test that needed a genuinely hot CPU would
+      # either never run or cost somebody a machine.
+      - name: Thermal governor against a real process
+        run: ./zmrig/tests/thermal.sh
+
+  # The control plane. Zero dependencies, so this is `node --test` and nothing
+  # to install; the agent half runs against the same server in os/tests/fleet.sh.
+  fleet:
+    name: fleet (bot and agent)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Node
+        run: node --version
+
+      - name: Bot, store, protocol and handlers
+        run: cd fleet && npm test
+
+      - name: Configuration check (no token needed)
+        run: cd fleet && node src/index.js --check || true
+
+      - name: Rig agent against the real server
+        run: bash os/tests/fleet.sh
+
+      - name: The download helper
+        run: bash tests/releases/latest-iso.test.sh
+
+  # The image Render builds. Without this job the first person to find out that
+  # `deploy/Dockerfile` no longer compiles is whoever deployed it: a Render build
+  # failure shows two lines of a log and one source file name, which is how a
+  # missing libc6-dev header was reported as a broken blake2b_avx2.c.
+  image:
+    name: Pool image (docker build)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Build it the way Render does
+        run: docker build -f deploy/Dockerfile -t ocean-pool:ci .
+
+      # The verifier is the reason the image contains a miner at all: the pool
+      # cannot trust a share it cannot hash.
+      - name: The verifier inside the image runs
+        run: |
+          docker run --rm --entrypoint /usr/local/bin/zmrig ocean-pool:ci --version
+          docker run --rm --entrypoint /usr/local/bin/zmrig ocean-pool:ci --self-test=light
+
+      - name: The pool answers, with nothing mounted
+        run: |
+          docker run -d --name pool -p 18080:8080 \
+            -e DAEMON= -e POOL_NAME=ci ocean-pool:ci
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/config || echo 000)
+            if [ "$code" = "200" ]; then break; fi
+            sleep 1
+          done
+
+          # /api/config needs nothing but the process: it is the real proof that
+          # the image starts, reads its config and serves HTTP with no volume.
+          curl -fsS http://127.0.0.1:18080/api/config | tee /dev/stderr | grep -q '"fee_percent"'
+
+          # /healthz answers 503 - honestly - while there is no daemon behind it,
+          # so a job has never been fetched. Asserting 200 here would only prove
+          # that a health check can lie.
+          code=$(curl -s -o /tmp/health.json -w '%{http_code}' http://127.0.0.1:18080/healthz)
+          echo "healthz -> $code $(cat /tmp/health.json)"
+          [ "$code" = "503" ]
+          grep -q '"ok": *false' /tmp/health.json
+
+          docker logs pool | tail -20
+          docker rm -f pool
+
   macos:
     name: macOS ${{ matrix.arch }} build and hash tests
     runs-on: ${{ matrix.runner }}

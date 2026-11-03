@@ -145,6 +145,40 @@ else
     fail "--no-autotune was ignored"
 fi
 
+# --- the thermal policy is planned, and a typo fails before it applies ---
+out=$(plan --pool=supportxmr.com:3333 --max-temp=70)
+if printf '%s' "$out" | grep -q "hold 70 C"; then
+    pass "--max-temp is planned"
+else
+    fail "--max-temp was not planned"
+fi
+if printf '%s' "$out" | grep -q "pause above 85 C"; then
+    pass "the pause limit is target + 15"
+else
+    fail "the pause limit is not target + 15"
+fi
+
+out=$(plan --pool=supportxmr.com:3333)
+if printf '%s' "$out" | grep -q "thermal        off"; then
+    pass "no --max-temp means no governor"
+else
+    fail "a governor was planned without being asked for"
+fi
+
+out=$(plan --pool=supportxmr.com:3333 --max-temp=warm)
+if [ "$(printf '%s' "$out" | grep -c 'must be a whole number')" -eq 1 ]; then
+    pass "a non-numeric --max-temp is refused"
+else
+    fail "a non-numeric --max-temp was accepted"
+fi
+
+out=$(plan --pool=supportxmr.com:3333 --max-temp=20)
+if [ "$(printf '%s' "$out" | grep -c 'must be 45..95')" -eq 1 ]; then
+    pass "a --max-temp that would park the rig for ever is refused"
+else
+    fail "an unusable --max-temp was accepted"
+fi
+
 # --- pool names and failover -------------------------------------------
 # A pool is hostname + port + whether it wants TLS. Nobody should have to
 # memorise three facts to start mining, and a rig that cannot resolve the

@@ -1,7 +1,7 @@
 ---
 title: Architecture
 description: The three engines, the Zig miner's module map, how a job travels from a pool to the CPU and back, and which threads exist at runtime.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-en.png
+image: https://molik-labs.github.io/ZMRIG/img/og-en.png
 ---
 
 # Architecture
@@ -100,4 +100,4 @@ HTTP.
 
 The longer C++ map — every directory in `src/`, the thread inventory and the
 RandomX pipeline — is in
-[`doc/ARCHITECTURE.md`](https://github.com/NggKhaiz/ZMRIG/blob/master/doc/ARCHITECTURE.md).
+[`doc/ARCHITECTURE.md`](https://github.com/MoLik-Labs/ZMRIG/blob/master/doc/ARCHITECTURE.md).

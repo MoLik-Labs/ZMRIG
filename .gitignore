@@ -32,3 +32,12 @@ __pycache__/
 /site/node_modules
 /site/build
 /site/.docusaurus
+
+# fleet: runtime state and secrets. The token is an environment variable, and the
+# state file is somebody's rig list - neither belongs in a repository.
+/fleet/data
+/fleet/.env
+/fleet/node_modules
+
+# the site built for the web host (site/ root base URL), not published
+/site/build-root
