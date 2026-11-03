@@ -339,8 +339,14 @@ cần menu. Trên **máy đã cài** nó nằm trên ổ và sống qua reboot. 
 ghi vào thiết bị mà máy đang boot từ đó.
 
 Kênh: `stable` theo bản phát hành từ master, `beta` theo bản pre-release luân
-phiên. Cả hai phát hành manifest riêng cho từng mức lệnh CPU, và đó là thứ trình
-cập nhật đọc.
+phiên dưới tag `os-beta`. Cả hai phát hành manifest riêng cho từng mức lệnh CPU,
+và đó là thứ trình cập nhật đọc — nhưng hai kênh nằm ở hai chỗ khác nhau, vì
+`releases/latest` không bao giờ trỏ vào một pre-release:
+
+```
+stable  https://github.com/MoLik-Labs/ZMRIG/releases/latest/download/zmrig-os-stable-x86-64-v3.json
+beta    https://github.com/MoLik-Labs/ZMRIG/releases/download/os-beta/zmrig-os-beta-x86-64-v3.json
+```
 
 ## Bảo mật
 

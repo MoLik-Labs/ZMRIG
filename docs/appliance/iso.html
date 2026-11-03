@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.e1cb14c0.css">
-<script src="/ZMRIG/assets/js/runtime~main.e37b94e5.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/runtime~main.b04db2e7.js" defer="defer"></script>
 <script src="/ZMRIG/assets/js/main.a55502bf.js" defer="defer"></script>
 </head>
 <body>
@@ -218,8 +218,10 @@ rollback procedure and it needs no menu. On an <strong>installed</strong> rig it
 boot medium and survives. <code>--iso</code> refuses to write the device the machine booted
 from.</p>
 <p>Channels: <code>stable</code> follows master releases, <code>beta</code> follows the rolling
-pre-release. Both publish a manifest per instruction level, which is what the
-updater reads.</p>
+pre-release under the <code>os-beta</code> tag. Both publish a manifest per instruction
+level, which is what the updater reads — and the two are in different places,
+because <code>releases/latest</code> never points at a pre-release:</p>
+<div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token plain">stable  https://github.com/MoLik-Labs/ZMRIG/releases/latest/download/zmrig-os-stable-x86-64-v3.json</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">beta    https://github.com/MoLik-Labs/ZMRIG/releases/download/os-beta/zmrig-os-beta-x86-64-v3.json</span><br></div></code></pre></div></div>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="security">Security<a href="#security" class="hash-link" aria-label="Direct link to Security" title="Direct link to Security" translate="no">​</a></h2>
 <ul>
 <li class="">The console is an autologin root shell — the wizard needs it, and physical

@@ -64,7 +64,20 @@ live rate, and the alert names the difference:
 🐌 rig-2 is at 640.0 H/s, 45% of the 1.4 kH/s it measured itself
 ```
 
-Tests: control **180** (was 157), lint **3** (new), fleet 59 (was 58), upstream
+## `CHANNEL="beta"` asked for a file that was never uploaded
+
+Found while checking that the merge into `BETA` really published something
+usable: the rolling beta is a *pre-release*, and `releases/latest` never points
+at a pre-release. A rig with `CHANNEL="beta"` was therefore asking
+`releases/latest/download/zmrig-os-beta-<arch>.json` — a 404 on a release that
+looked published. The publish job had the mirror-image bug: a push to `BETA`
+uploaded `zmrig-os-stable-*.json` to the `os-beta` tag, because the channel came
+from the dispatch input default rather than from the release being written.
+
+Both are fixed and both are tested: the beta channel names `os-beta` explicitly,
+and the workflow takes the channel from the tag it is publishing.
+
+Tests: control **182** (was 157), lint **3** (new), fleet 59 (was 58), upstream
 17, self-check.
 
 # 6.39.0 — the image measures itself, and knows what it is built from

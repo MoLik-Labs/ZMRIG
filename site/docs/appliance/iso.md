@@ -356,8 +356,14 @@ boot medium and survives. `--iso` refuses to write the device the machine booted
 from.
 
 Channels: `stable` follows master releases, `beta` follows the rolling
-pre-release. Both publish a manifest per instruction level, which is what the
-updater reads.
+pre-release under the `os-beta` tag. Both publish a manifest per instruction
+level, which is what the updater reads — and the two are in different places,
+because `releases/latest` never points at a pre-release:
+
+```
+stable  https://github.com/MoLik-Labs/ZMRIG/releases/latest/download/zmrig-os-stable-x86-64-v3.json
+beta    https://github.com/MoLik-Labs/ZMRIG/releases/download/os-beta/zmrig-os-beta-x86-64-v3.json
+```
 
 ## Security
 

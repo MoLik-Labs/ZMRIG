@@ -433,6 +433,13 @@ zmrig-os update --channel beta --check
 zmrig-os update --channel beta --apply          # or AUTO_IMAGE=1 for the whole system
 ```
 
+The two channels are two different releases, and the updater has to name them
+differently: `stable` asks `releases/latest/download/zmrig-os-stable-<arch>.json`,
+which is the newest stable release, while the rolling beta is a **pre-release**
+under the tag `os-beta` — `releases/latest` will never point at it. So `beta`
+asks `releases/download/os-beta/zmrig-os-beta-<arch>.json`, and the CI job
+uploads the manifest for the channel the release *is*, not for a default.
+
 ### The base, and why it says `latest-stable`
 
 The Alpine version is `latest-stable` on purpose: a pin means the image stops
@@ -519,7 +526,7 @@ run with `publish=true`, creates or refreshes a release.
 It does this:
 
 1. `shellcheck -s error` over every script, `tests/lint/no-debug.sh`, then
-   `os/tests/control.sh` (180 checks, no root needed).
+   `os/tests/control.sh` (182 checks, no root needed).
 2. Builds `x86-64-v3` and `x86-64-v2` in parallel.
 3. Boots the v3 image in QEMU and reads the serial console.
 4. Publishes: pushes to `master` create or refresh the release for the version in

@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.e1cb14c0.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.34fcb67b.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/runtime~main.dc545bae.js" defer="defer"></script>
 <script src="/ZMRIG/vi/assets/js/main.a9f59f68.js" defer="defer"></script>
 </head>
 <body>
@@ -201,8 +201,10 @@ là quay lại đúng bản đã ghi trong ảnh; toàn bộ quy trình rollback
 cần menu. Trên <strong>máy đã cài</strong> nó nằm trên ổ và sống qua reboot. <code>--iso</code> từ chối
 ghi vào thiết bị mà máy đang boot từ đó.</p>
 <p>Kênh: <code>stable</code> theo bản phát hành từ master, <code>beta</code> theo bản pre-release luân
-phiên. Cả hai phát hành manifest riêng cho từng mức lệnh CPU, và đó là thứ trình
-cập nhật đọc.</p>
+phiên dưới tag <code>os-beta</code>. Cả hai phát hành manifest riêng cho từng mức lệnh CPU,
+và đó là thứ trình cập nhật đọc — nhưng hai kênh nằm ở hai chỗ khác nhau, vì
+<code>releases/latest</code> không bao giờ trỏ vào một pre-release:</p>
+<div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token plain">stable  https://github.com/MoLik-Labs/ZMRIG/releases/latest/download/zmrig-os-stable-x86-64-v3.json</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">beta    https://github.com/MoLik-Labs/ZMRIG/releases/download/os-beta/zmrig-os-beta-x86-64-v3.json</span><br></div></code></pre></div></div>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="bảo-mật">Bảo mật<a href="#bảo-mật" class="hash-link" aria-label="Đường dẫn trực tiếp đến Bảo mật" title="Đường dẫn trực tiếp đến Bảo mật" translate="no">​</a></h2>
 <ul>
 <li class="">Console là shell root tự đăng nhập — wizard cần thế, và chạm được vào dàn máy
