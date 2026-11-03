@@ -386,6 +386,15 @@ controls, enrolment, and a download page for the ISO. One password, no accounts,
 CSRF on every form, Brotli plus `ETag`/`304`. Clear the variable and the bot runs
 exactly as before with no HTML surface at all.
 
+The fleet itself lives in the environment, not on the host. `FLEET_ROSTER` — one
+JSON object in Render's *Environment* tab, or `fleet/roster.json` in the
+repository — names every rig and what it should be running; on every check-in the
+server queues whatever differs. A free Render instance gives 750 instance hours a
+month and an empty filesystem after every deploy, so this is not a workaround: a
+service that remembers nothing comes back identical anyway. One service holds the
+Telegram bot, the Discord bot and the dashboard, because two always-on services
+would exhaust the month.
+
 Rig side, once: `zmrig-os fleet --url https://your-fleet` — or
 `zmrig.os.fleet=https://your-fleet` on the kernel command line for a stick that
 boots a hundred machines. [`doc/FLEET.md`](doc/FLEET.md) is the operator manual
