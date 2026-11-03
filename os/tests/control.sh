@@ -406,6 +406,23 @@ conf=$(cat "$ROOTDIR/etc/zmrig/os.conf")
 contains 'THREADS="6"' "$conf" && contains 'MEASURED_HS=""' "$conf" && contains 'AUTOTUNED=""' "$conf" &&
     ok "a hand-picked count clears the measurement it replaced" || bad "a hand-picked count kept a stale measurement"
 
+# The updater asks for a manifest per channel and per instruction level, and
+# the two channels live in different places: `releases/latest` follows the
+# newest stable release and never points at the rolling beta, which is a
+# pre-release under its own tag. Getting that wrong made `CHANNEL="beta"` a 404
+# that looked like a published release.
+mkdir -p "$ROOTDIR/etc/zmrig"
+printf 'x86-64-v3' > "$ROOTDIR/etc/zmrig/arch"
+# The update tests above pointed ZMRIG_OS_MANIFEST_URL at a local bucket; this
+# is about the URLs the tool derives when nobody overrides them.
+murl() { ZMRIG_OS_NO_MAIN=1 ZMRIG_OS_ROOT="$ROOTDIR" ZMRIG_OS_MANIFEST_URL= sh -c '. "$1"; CHANNEL="$2"; manifest_url' _ "$TOOL" "$1"; }
+[ "$(murl stable)" = "https://github.com/MoLik-Labs/ZMRIG/releases/latest/download/zmrig-os-stable-x86-64-v3.json" ] &&
+    ok "the stable channel follows the newest stable release" ||
+    bad "the stable channel URL is wrong ($(murl stable))"
+[ "$(murl beta)" = "https://github.com/MoLik-Labs/ZMRIG/releases/download/os-beta/zmrig-os-beta-x86-64-v3.json" ] &&
+    ok "the beta channel names the rolling tag instead of 'latest'" ||
+    bad "the beta channel asks for a manifest that does not exist ($(murl beta))"
+
 # `zmrig-os version` prints the base the image was built from.
 mkdir -p "$ROOTDIR/etc/zmrig"
 printf 'alpine 3.22.1\nkernel linux-lts\nsquashfs zstd-19\ninitramfs zst\n' > "$ROOTDIR/etc/zmrig/base"

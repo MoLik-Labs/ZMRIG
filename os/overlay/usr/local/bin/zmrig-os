@@ -39,6 +39,9 @@ set -eu
 
 VERSION="6.40.0"
 MANIFEST_URL="https://github.com/MoLik-Labs/ZMRIG/releases/latest/download"
+# The rolling beta is a pre-release, and `releases/latest` never points at one:
+# `CHANNEL="beta"` has to name the tag instead of following the newest stable.
+MANIFEST_BETA_URL="https://github.com/MoLik-Labs/ZMRIG/releases/download/os-beta"
 # A full URL wins over the derived one, so the test suite can serve a manifest
 # from a file:// path and a fleet can pin an exact release.
 MANIFEST_OVERRIDE="${ZMRIG_OS_MANIFEST_URL:-}"
@@ -1679,7 +1682,9 @@ manifest_url() {
         printf '%s' "$MANIFEST_OVERRIDE"
         return 0
     fi
-    printf '%s/zmrig-os-%s-%s.json' "$MANIFEST_URL" "$CHANNEL" "$(image_arch)"
+    local base="$MANIFEST_URL"
+    [ "$CHANNEL" = "beta" ] && base="$MANIFEST_BETA_URL"
+    printf '%s/zmrig-os-%s-%s.json' "$base" "$CHANNEL" "$(image_arch)"
 }
 
 version_gt() { newer_than "$1" "$2"; }
@@ -1709,7 +1714,8 @@ cmd_update() {
     load_conf
     CHANNEL=${CHANNEL:-stable}
 
-    manifest=$(fetch "$(manifest_url)") || die "cannot reach the update server ($(manifest_url))"
+    manifest=$(fetch "$(manifest_url)") ||
+        die "no $CHANNEL manifest at $(manifest_url); an unreachable server and a release that was never published look the same from here"
     latest=$(printf '%s' "$manifest" | manifest_field version)
     [ -n "$latest" ] || die "the update manifest is not readable"
 
@@ -1882,7 +1888,7 @@ cmd_auto() {
     manifest=$(fetch "$(manifest_url)") || {
         # No network is normal on a rig behind a firewall, and it is not a
         # failure worth waking anybody for: say it once and exit 0.
-        say "cannot reach the update server (offline is fine; the miner keeps running)"
+        say "cannot reach the update server for the $CHANNEL channel (offline is fine; the miner keeps running)"
         return 0
     }
     latest=$(printf '%s' "$manifest" | manifest_field version)

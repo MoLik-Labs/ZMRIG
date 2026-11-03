@@ -269,7 +269,7 @@ jobs:
 
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      CHANNEL: ${{ inputs.channel || 'stable' }}
+      CHANNEL: ${{ inputs.channel || 'stable' }}   # a dispatch or a tag; BETA overrides it below
 
     steps:
       - uses: actions/checkout@v5
@@ -287,12 +287,20 @@ jobs:
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "channel=${CHANNEL}" >> "$GITHUB_OUTPUT"
           elif [ "${GITHUB_REF_NAME}" = "BETA" ]; then
             echo "tag=os-beta" >> "$GITHUB_OUTPUT"
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            # The manifest name has to match the channel the release *is*, not
+            # the input default: a rig with CHANNEL="beta" asks for
+            # zmrig-os-beta-<arch>.json under this tag, and uploading a stable
+            # manifest here used to leave that request with a 404 while the
+            # release looked published.
+            echo "channel=beta" >> "$GITHUB_OUTPUT"
           else
             echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "channel=${CHANNEL}" >> "$GITHUB_OUTPUT"
           fi
 
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
@@ -336,6 +344,8 @@ jobs:
           fi
 
       - name: Attach the images and the channel manifests
+        env:
+          CHANNEL: ${{ steps.tag.outputs.channel }}
         run: |
           TAG="${{ steps.tag.outputs.tag }}"
 
