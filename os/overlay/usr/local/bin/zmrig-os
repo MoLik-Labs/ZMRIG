@@ -9,7 +9,7 @@
 #   zmrig-os setup               # the wizard: wallet, pool, mode, start
 #   zmrig-os setup --wallet 4... --pool host:port --mode max --start
 #   zmrig-os mode balanced       # max | balanced | eco | light
-#   zmrig-os status | logs 40 | bench 30 | doctor | autotune 8
+#   zmrig-os status | logs 40 | bench 30 | doctor | autotune 8 | topology
 #   zmrig-os update --check | update --apply | update --iso --write /dev/sdX
 #   zmrig-os persist /dev/sdb1   # keep the config on a USB stick across boots
 #   zmrig-os ssh-key add         # paste an authorized_keys line
@@ -66,6 +66,87 @@ is_root() { [ "$(id -u)" = "0" ]; }
 # Path helper: empty ROOT means "the real filesystem", so `P /etc/x` is /etc/x.
 P() { printf '%s%s' "$ROOT" "$1"; }
 
+# ------------------------------------------------------------------ topology
+# `nproc` counts SMT siblings. A sibling pair shares one core's caches and its
+# execution units, so for RandomX - which walks 2 MB of dataset per hash - two
+# threads on a sibling pair are not two cores, they are two threads fighting
+# over the same 512 KiB of L2. Everything below asks the kernel which CPUs are
+# separate cores and sizes the miner to those. On a 2-thread VM `nproc` says 2
+# and the kernel says 1; on a 16-thread Ryzen the difference is 16 against 8.
+SYS="${ZMRIG_OS_SYS:-/sys}"
+
+# The first CPU of every thread group, in numeric order. A machine with no
+# topology information (a very old kernel, an odd container) yields nothing and
+# the callers fall back to `nproc`, which is what they did before.
+primary_cpus() {
+    local dir cpu group
+    for dir in "$SYS"/devices/system/cpu/cpu[0-9]*; do
+        [ -d "$dir" ] || continue
+        cpu=${dir##*/cpu}
+        group=$(cat "$dir/topology/thread_siblings_list" 2>/dev/null || true)
+        [ -n "$group" ] || group="$cpu"
+        printf '%s %s\n' "$cpu" "$group"
+    done | sort -k2,2 -k1,1n | awk '!seen[$2]++ { print $1 }' | sort -n
+}
+
+# How many CPUs the kernel lists, which is the honest thread number: `nproc`
+# answers "how many may this process run on", and in a container that is not the
+# machine. The fallback keeps working where /sys is unavailable.
+thread_count() {
+    local n
+    n=$(find "$SYS/devices/system/cpu" -maxdepth 1 -name 'cpu[0-9]*' 2>/dev/null | wc -l | tr -d ' ')
+    [ "${n:-0}" -gt 0 ] 2>/dev/null || n=$(nproc 2>/dev/null || echo 1)
+    printf '%s' "$n"
+}
+
+core_count() {
+    local n
+    n=$(primary_cpus | awk 'END { print NR }')
+    [ "${n:-0}" -gt 0 ] 2>/dev/null || n=$(nproc 2>/dev/null || echo 1)
+    printf '%s' "$n"
+}
+
+# Every physical core, including the first. Holding one core back for the kernel
+# costs 1/N of the hashrate - 12% on an eight-core rig - and buys back a
+# responsiveness nobody is waiting on. `tune` steers interrupts to the first core
+# instead, which is the part that was worth having.
+mining_cpus() { primary_cpus; }
+
+# CPUs on stdin -> `0x1f`. Empty when the answer would need more than one
+# 64-bit word, because a mask the kernel cannot express is worse than no mask:
+# the miner would be pinned to the wrong cores.
+cpu_mask() {
+    local value=0 cpu
+    while IFS= read -r cpu; do
+        case "$cpu" in ''|*[!0-9]*) continue ;; esac
+        if [ "$cpu" -ge 63 ]; then printf ''; return 0; fi
+        value=$(( value | (1 << cpu) ))
+    done
+    [ "$value" -gt 0 ] && printf '0x%x' "$value"
+    return 0
+}
+
+affinity_mask() {
+    case "${AFFINITY:-auto}" in
+        off) return 0 ;;
+        auto) mining_cpus | cpu_mask ;;
+        *) printf '%s' "${AFFINITY}" ;;
+    esac
+}
+
+# What the box is, in one line, for `doctor` and for a support ticket.
+topology_line() {
+    local cores threads numa
+    cores=$(core_count)
+    threads=$(thread_count)
+    numa=0
+    [ -d "$SYS/devices/system/node" ] && numa=$(find "$SYS/devices/system/node" -maxdepth 1 -name 'node[0-9]*' 2>/dev/null | wc -l | tr -d ' ')
+    printf '%s core(s), %s thread(s)' "$cores" "$threads"
+    [ "${threads:-0}" -gt "${cores:-0}" ] 2>/dev/null && printf ', SMT on'
+    [ "${numa:-0}" -gt 1 ] 2>/dev/null && printf ', %s NUMA nodes' "$numa"
+    return 0
+}
+
 run() {
     if [ "$DRYRUN" = "1" ]; then
         printf 'dry-run: %s\n' "$*"
@@ -115,6 +196,12 @@ load_conf() {
     AUTO_REBOOT=$(conf_default AUTO_REBOOT "1")
     CHANNEL=$(conf_default CHANNEL "stable")
     EXTRA_ARGS=$(conf_default EXTRA_ARGS "")
+    AUTO_AUTOTUNE=$(conf_default AUTO_AUTOTUNE "1")
+    # Set once the machine has measured itself. It is a decision the operator can
+    # take back (`zmrig-os autotune`), which is why it is written down rather
+    # than inferred: "auto" that has already been answered is not "auto".
+    AUTOTUNED=$(conf_default AUTOTUNED "")
+    AFFINITY=$(conf_default AFFINITY "auto")
 
     if [ -f "$kc" ]; then
         local v
@@ -143,6 +230,9 @@ WORKER="${WORKER}"
 MODE="${MODE}"
 ALGO="${ALGO}"
 THREADS="${THREADS}"
+AFFINITY="${AFFINITY:-auto}"
+AUTO_AUTOTUNE="${AUTO_AUTOTUNE:-1}"
+AUTOTUNED="${AUTOTUNED:-}"
 DONATE="${DONATE}"
 MSR="${MSR}"
 API_PORT="${API_PORT}"
@@ -239,10 +329,39 @@ msr_usable() {
 # The flags handed to the miner. Printed by `zmrig-os args` so the exact command
 # line can be copied into a bug report, and written to run/zmrig/args so the
 # supervisor and the doctor never disagree about it.
+# Should this machine measure its own thread count? A pure function of the
+# config, so every branch is testable without a miner and without a CPU.
+autotune_due() {
+    [ "${AUTO_AUTOTUNE:-1}" = "1" ] || return 1
+    [ "${THREADS:-auto}" = "auto" ] || return 1
+    [ -z "${AUTOTUNED:-}" ] || return 1
+
+    # A machine that cannot hold the dataset cannot measure it either: the run
+    # would swap, or fail, or pick a number that has nothing to do with mining.
+    local need=2400 mb
+    [ "${MODE:-max}" = "light" ] && need=600
+    mb=$(awk '/^MemTotal:/ { printf "%d", $2 / 1024 }' /proc/meminfo 2>/dev/null || echo 0)
+    [ "${mb:-0}" -ge "$need" ] || return 1
+    return 0
+}
+
+# Restart the miner without touching the supervisor. The supervisor owns the
+# reboot counter and the log, and it already re-reads the config on every start,
+# so a marker file is the whole handshake.
+reload_miner() {
+    running || return 0
+    : > "$RUN/reload" 2>/dev/null || true
+    kill "$(cat "$PIDFILE" 2>/dev/null || echo 0)" 2>/dev/null || true
+    say "the miner restarts with the new settings; the machine keeps running"
+}
+
 build_args() {
     local cores threads prio args=""
 
-    cores=$(nproc 2>/dev/null || echo 1)
+    # Physical cores, not threads: `balanced` on a 16-thread Ryzen used to ask
+    # for 15 mining threads on 8 cores, which is the fastest way to make a
+    # RandomX rig slower and hotter at the same time.
+    cores=$(core_count)
     threads="$THREADS"
     [ "$threads" = "auto" ] && threads=$(mode_threads "$cores")
     prio=$(mode_priority)
@@ -271,6 +390,12 @@ build_args() {
         off) args="$args --no-msr" ;;
         auto) msr_usable && args="$args --msr" || args="$args --no-msr" ;;
     esac
+
+    # Pinning is the one flag that also protects the thread count chosen above:
+    # without it the scheduler is free to put two of those threads on one core's
+    # sibling pair the moment a housekeeping task wakes up.
+    mask=$(affinity_mask)
+    [ -n "$mask" ] && args="$args --cpu-affinity $mask"
 
     [ -n "$EXTRA_ARGS" ] && args="$args $EXTRA_ARGS"
 
@@ -324,6 +449,8 @@ supervise() {
         return 0
     fi
 
+    autotuned_this_boot=0
+
     while :; do
         # Re-read the config on every restart: the wizard writes it while this
         # loop is already running, and a fleet may rewrite it over ssh. Waiting
@@ -346,6 +473,17 @@ supervise() {
         child=$!
         printf '%s\n' "$child" > "$PIDFILE"
 
+        # One measurement per boot, taken while the miner is already earning:
+        # waiting four minutes of benchmarking before the first share is the
+        # part of self-tuning that makes people turn it off.
+        if [ "$autotuned_this_boot" = "0" ]; then
+            autotuned_this_boot=1
+            if autotune_due; then
+                ( sleep "${AUTOTUNE_AFTER:-180}"; "$0" autotune --auto ) >>"$OSLOG" 2>&1 &
+                log_os "this rig will measure its own thread count in ${AUTOTUNE_AFTER:-180}s (AUTO_AUTOTUNE=0 turns it off)"
+            fi
+        fi
+
         set +e
         wait "$child"
         rc=$?
@@ -353,6 +491,16 @@ supervise() {
 
         rm -f "$PIDFILE"
         log_os "exit $rc after $(( $(date +%s) - started ))s"
+
+        # Someone (autotune, a mode change over ssh) asked for a restart with
+        # different settings. That is not a failure: the count is cleared and the
+        # loop goes straight back to starting the miner with the new config.
+        if [ -e "$RUN/reload" ]; then
+            rm -f "$RUN/reload"
+            fails=0
+            log_os "reloading with the settings on disk"
+            continue
+        fi
 
         # A clean 0 is the user stopping us. Anything else is a crash, a pool
         # that stayed refused, or the health restart deciding the miner was
@@ -458,6 +606,13 @@ cmd_mode() {
     esac
 
     MODE="$mode"
+    # A new mode is a different thread budget, so a count measured for the old
+    # one no longer applies: hand the decision back and let it be measured again.
+    if [ -n "${AUTOTUNED:-}" ]; then
+        THREADS="auto"
+        AUTOTUNED=""
+        say "the thread count measured for the old mode is cleared (it will be measured again)"
+    fi
     save_conf
     say "mode $MODE; $(build_args)"
 
@@ -484,7 +639,11 @@ cmd_boot() {
 }
 
 cmd_tune() {
-    local tune
+    local tune cores thp swappiness irq
+    # `zmrig-os tune` is documented as a standalone command and used to fail
+    # when it was the first thing to run, because MODE was only loaded by its
+    # caller.
+    load_conf
     tune=$(P /usr/local/lib/zmrig/tune-linux.sh)
 
     if [ ! -x "$tune" ]; then
@@ -492,10 +651,24 @@ cmd_tune() {
         return 1
     fi
 
+    cores=$(core_count)
+    # `always` is what this image documents and what the kernel is built with;
+    # `madvise` is the same setting one notch weaker, for the two modes whose
+    # point is to leave memory and heat for something else.
     case "$MODE" in
-        eco)   run "$tune" --profile watt --thp madvise --swappiness 10 ;;
-        light) run "$tune" --hugepages off --thp always --swappiness 10 ;;
-        *)     run "$tune" --profile free --thp madvise --swappiness 1 ;;
+        eco|light) thp="madvise"; swappiness=10 ;;
+        *)         thp="always";  swappiness=1  ;;
+    esac
+
+    # Steering interrupts only makes sense when there is somewhere to steer
+    # them to: on a two-core box, moving every IRQ onto CPU 0 moves half the
+    # machine's work onto the core the miner is also using.
+    [ "${cores:-1}" -ge 4 ] && irq="steer" || irq="keep"
+
+    case "$MODE" in
+        eco)   run "$tune" --profile watt --thp "$thp" --swappiness "$swappiness" --numa off --irq "$irq" ;;
+        light) run "$tune" --hugepages off --thp "$thp" --swappiness "$swappiness" --numa keep --irq keep ;;
+        *)     run "$tune" --profile free --thp "$thp" --swappiness "$swappiness" --numa off --irq "$irq" ;;
     esac
 }
 
@@ -596,17 +769,42 @@ cmd_bench() {
     exec "$bin" $args --bench=$(( seconds * 1000 ))
 }
 
-# Threads are the one setting where the best answer is machine-specific: the
-# cache heuristic assumes 2 MiB of L3 per thread, which is right for a stock
-# Ryzen and wrong for a machine with a small or uneven L3. zmrig can measure it
-# (`--autotune`), so the image offers that instead of asking the operator to
-# guess; the winning count is written to the config and survives restarts.
+# Threads are the one setting whose best answer is the machine's: the cache
+# heuristic assumes 2 MiB of L3 per thread, which is right for a stock Ryzen and
+# wrong for a machine with a small or uneven L3. zmrig can measure it
+# (`--autotune`), so the image measures instead of guessing: once, on a machine
+# that has already started earning, and only while nothing is pinned.
+#
+#   zmrig-os autotune          # measure now, 8 s per candidate
+#   zmrig-os autotune 20       # spend longer, for a noisy machine
+#   zmrig-os autotune --auto   # what the supervisor runs on its own
 cmd_autotune() {
-    local seconds="${1:-8}" bin args out best
+    local seconds=8 auto=0 bin args out best before
+
+    case "${1:-}" in
+        --auto)     auto=1 ;;
+        '')         ;;
+        *[!0-9]*)   die "usage: zmrig-os autotune [seconds] | --auto" ;;
+        *)          seconds="$1" ;;
+    esac
 
     load_conf
+    # The supervisor calls this on every boot; the config decides whether this
+    # machine still wants to be measured.
+    if [ "$auto" = "1" ] && ! autotune_due; then
+        return 0
+    fi
+
     bin=$(zmrig_bin)
-    [ -x "$bin" ] || die "miner binary not found: $bin"
+    if [ ! -x "$bin" ]; then
+        [ "$auto" = "1" ] && { log_os "autotune skipped: no miner binary at $bin"; return 0; }
+        die "miner binary not found: $bin"
+    fi
+
+    # Tune first. The measurement runs the real miner, and a run that starts on a
+    # machine with the wrong page reservation and a power-saving governor measures
+    # a machine nobody will ever mine on.
+    cmd_tune || warn "tuning reported a problem; measuring anyway"
 
     args=$(build_args)
     # Drop the flags that make no sense for a benchmark, including -t: this
@@ -616,15 +814,58 @@ cmd_autotune() {
 
     say "measuring this machine, ${seconds}s per candidate (this builds the dataset each time)"
     # shellcheck disable=SC2086
-    out=$("$bin" $args --autotune="$seconds" 2>&1) || die "the autotune run failed"
+    if ! out=$("$bin" $args --autotune="$seconds" 2>&1); then
+        [ "$auto" = "1" ] && { log_os "autotune failed; the miner keeps the heuristic count"; return 0; }
+        die "the autotune run failed"
+    fi
 
     printf '%s\n' "$out" | grep -E '^ *[0-9]+ |^best:|^autotune-best' || true
     best=$(printf '%s\n' "$out" | sed -n 's/^autotune-best-threads=\([0-9]*\)$/\1/p' | tail -1)
-    [ -n "$best" ] || die "autotune printed no thread count"
+    if [ -z "$best" ]; then
+        [ "$auto" = "1" ] && { log_os "autotune printed no thread count; the miner keeps the heuristic count"; return 0; }
+        die "autotune printed no thread count"
+    fi
 
+    before="$THREADS"
     THREADS="$best"
+    AUTOTUNED=$(date '+%Y-%m-%d %H:%M' 2>/dev/null || echo yes)
     save_conf
-    say "pinned ${best} thread(s) in $CONF (THREADS=\"auto\" goes back to the heuristic)"
+    say "pinned ${best} thread(s) in $CONF (was $before; THREADS=\"auto\" goes back to the heuristic)"
+
+    # The miner is running with the old count; restart it so the measurement
+    # means something on this machine and not on the next reboot.
+    [ "$auto" = "1" ] && reload_miner
+    return 0
+}
+
+# What the tool decided about this machine, and why: the number a support ticket
+# needs when a rig reports 8 threads on a 16-thread CPU and one core's worth of
+# hashrate.
+cmd_topology() {
+    load_conf
+    local cores threads mask
+    cores=$(core_count)
+    threads=$(thread_count)
+    mask=$(affinity_mask)
+
+    printf 'cores      %s physical, %s threads\n' "$cores" "$threads"
+    printf 'mining on  %s\n' "$(mining_cpus | tr '\n' ' ' | sed 's/ *$//')"
+    if [ -n "$mask" ]; then
+        printf 'affinity   %s (--cpu-affinity)\n' "$mask"
+    else
+        printf 'affinity   none: %s\n' "$(affinity_reason)"
+    fi
+    printf 'threads    %s (THREADS=%s, mode %s)\n' \
+        "$( [ "$THREADS" = "auto" ] && { t=$(mode_threads "$cores"); printf '%s' "${t:-the miner decides}"; } || printf '%s' "$THREADS" )" \
+        "$THREADS" "$MODE"
+}
+
+affinity_reason() {
+    case "${AFFINITY:-auto}" in
+        off) printf 'disabled by AFFINITY=off' ;;
+        auto) printf 'this machine reports no topology (a container, or a kernel without sysfs)' ;;
+        *) printf 'AFFINITY is set to "%s" and it is not a mask zmrig can use' "$AFFINITY" ;;
+    esac
 }
 
 cmd_doctor() {
@@ -648,6 +889,8 @@ cmd_doctor() {
         check fail wallet "not configured (zmrig-os setup)"
     fi
 
+    check ok topology "$(topology_line)$(mask=$(affinity_mask); [ -n "$mask" ] && printf ', pinned to %s' "$mask")"
+
     free_mb=$(awk '/^MemTotal:/ { printf "%d", $2 / 1024 }' /proc/meminfo 2>/dev/null || echo 0)
     [ "$MODE" = "light" ] && need_mb=400
     if [ "$free_mb" -ge "$need_mb" ]; then
@@ -656,7 +899,7 @@ cmd_doctor() {
         check fail memory "${free_mb} MB total, need ${need_mb} MB: use --mode light or a bigger box"
     fi
 
-    pages_need=$(( need_mb / 2 + $(nproc 2>/dev/null || echo 1) * 2 + 8 ))
+    pages_need=$(( need_mb / 2 + $(core_count) * 2 + 8 ))
     pages_have=$(awk '/^HugePages_Total:/ { print $2 }' /proc/meminfo 2>/dev/null || echo 0)
     if [ "$MODE" = "light" ]; then
         check ok hugepages "not needed in light mode"
@@ -921,6 +1164,7 @@ main() {
         bench)    cmd_bench "$@" ;;
         doctor)   cmd_doctor "$@" ;;
         autotune) cmd_autotune "$@" ;;
+        topology) cmd_topology "$@" ;;
         update)   cmd_update "$@" ;;
         persist)  cmd_persist "$@" ;;
         ssh-key)  cmd_ssh_key "$@" ;;

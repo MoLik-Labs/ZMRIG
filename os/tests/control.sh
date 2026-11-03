@@ -252,6 +252,76 @@ contains "failed" "$CHECK_MSG" && ok "doctor prints a verdict" || bad "doctor pr
 contains "wallet" "$CHECK_MSG" && ok "doctor checks the wallet" || bad "doctor checks the wallet"
 contains "thp" "$CHECK_MSG" && ok "doctor checks transparent huge pages" || bad "doctor checks transparent huge pages"
 
+# ------------------------------------------------------------- topology
+# A fake 8-core / 16-thread machine. The kernel exposes thread_siblings_list per
+# CPU and that is the only thing the tool reads, so the whole decision - thread
+# count, affinity mask, the doctor line - can be checked on a machine that has
+# one core. `nproc` says 16 here; the tool must say 8.
+FAKESYS="$ROOTDIR/fakesys"
+for cpu in $(seq 0 15); do
+    mkdir -p "$FAKESYS/devices/system/cpu/cpu$cpu/topology"
+    if [ "$cpu" -lt 8 ]; then
+        printf '%s,%s\n' "$cpu" "$((cpu + 8))" > "$FAKESYS/devices/system/cpu/cpu$cpu/topology/thread_siblings_list"
+    else
+        printf '%s,%s\n' "$((cpu - 8))" "$cpu" > "$FAKESYS/devices/system/cpu/cpu$cpu/topology/thread_siblings_list"
+    fi
+done
+
+expect_ok "topology counts cores, not hyperthreads" env ZMRIG_OS_SYS="$FAKESYS" "$TOOL" topology
+contains "8 physical, 16 threads" "$CHECK_MSG" && ok "8 cores on a 16-thread machine" || bad "8 cores on a 16-thread machine"
+contains "0xff" "$CHECK_MSG" && ok "the mask is one bit per physical core" || bad "the mask is one bit per physical core"
+
+# The bug this replaces: `balanced` subtracted one from nproc, so a 16-thread
+# machine asked for 15 mining threads on 8 cores.
+printf 'MODE="balanced"\nTHREADS="auto"\nWALLET="%s"\n' "$WALLET" > "$ROOTDIR/etc/zmrig/os.conf"
+ARGS=$(ZMRIG_OS_SYS="$FAKESYS" "$TOOL" args)
+contains "-t 7" " $ARGS" && ok "balanced asks for cores - 1, not threads - 1" || bad "balanced asks for cores - 1, not threads - 1"
+contains "--cpu-affinity 0xff" "$ARGS" && ok "the miner is pinned to those cores" || bad "the miner is pinned to those cores"
+
+printf 'MODE="max"\nTHREADS="auto"\nWALLET="%s"\nAFFINITY="off"\n' "$WALLET" > "$ROOTDIR/etc/zmrig/os.conf"
+ARGS=$(ZMRIG_OS_SYS="$FAKESYS" "$TOOL" args)
+contains "--cpu-affinity" "$ARGS" && bad "AFFINITY=off must remove the flag" || ok "AFFINITY=off removes the flag"
+
+printf 'MODE="max"\nTHREADS="auto"\nWALLET="%s"\nAFFINITY="0x3"\n' "$WALLET" > "$ROOTDIR/etc/zmrig/os.conf"
+ARGS=$(ZMRIG_OS_SYS="$FAKESYS" "$TOOL" args)
+contains "--cpu-affinity 0x3" "$ARGS" && ok "an explicit mask is passed through" || bad "an explicit mask is passed through"
+
+# A machine with no topology at all (a container, a very old kernel) falls back
+# to nproc rather than silently pinning everything to one core.
+EMPTYSYS="$ROOTDIR/emptysys"
+mkdir -p "$EMPTYSYS"
+printf 'MODE="max"\nTHREADS="auto"\nWALLET="%s"\n' "$WALLET" > "$ROOTDIR/etc/zmrig/os.conf"
+expect_ok "no topology is not a failure" env ZMRIG_OS_SYS="$EMPTYSYS" "$TOOL" topology
+contains "0x" "$CHECK_MSG" && bad "no topology must not invent a mask" || ok "no topology produces no mask"
+
+# ------------------------------------------------------------- self-tuning
+# The image measures each machine once, in the background, after it has already
+# started earning. What it must never do is measure a rig whose operator pinned
+# the thread count on purpose.
+printf 'MODE="max"\nTHREADS="4"\nWALLET="%s"\n' "$WALLET" > "$ROOTDIR/etc/zmrig/os.conf"
+expect_ok "autotune --auto is a no-op when threads are pinned" "$TOOL" autotune --auto
+contains 'THREADS="4"' "$(cat "$ROOTDIR/etc/zmrig/os.conf")" && ok "a pinned count is left alone" || bad "a pinned count is left alone"
+
+printf 'MODE="max"\nTHREADS="auto"\nWALLET="%s"\n' "$WALLET" > "$ROOTDIR/etc/zmrig/os.conf"
+cat > "$ROOTDIR/usr/local/bin/zmrig" <<'EOF'
+#!/bin/sh
+printf 'autotune-best-threads=6\n'
+EOF
+chmod +x "$ROOTDIR/usr/local/bin/zmrig"
+expect_ok "autotune --auto measures an unpinned rig" "$TOOL" autotune --auto
+contains 'THREADS="6"' "$(cat "$ROOTDIR/etc/zmrig/os.conf")" && ok "the measurement is pinned" || bad "the measurement is pinned"
+contains 'AUTOTUNED="' "$(cat "$ROOTDIR/etc/zmrig/os.conf")" && ok "and it is remembered, so it is not measured again" || bad "and it is remembered, so it is not measured again"
+
+# Once measured, a second boot must not spend four minutes re-measuring.
+printf 'MODE="max"\nTHREADS="auto"\nWALLET="%s"\n' "$WALLET" > "$ROOTDIR/etc/zmrig/os.conf"
+expect_ok "autotune --auto runs again when nothing is recorded" "$TOOL" autotune --auto
+contains 'AUTOTUNED="' "$(cat "$ROOTDIR/etc/zmrig/os.conf")" && ok "the second run records itself too" || bad "the second run records itself too"
+
+# A different mode is a different thread budget: the old measurement is dropped.
+expect_ok "a mode change clears the old measurement" "$TOOL" mode eco
+contains 'THREADS="auto"' "$(cat "$ROOTDIR/etc/zmrig/os.conf")" && ok "the thread count goes back to auto" || bad "the thread count goes back to auto"
+contains 'AUTOTUNED=""' "$(cat "$ROOTDIR/etc/zmrig/os.conf")" && ok "and the measurement marker is cleared" || bad "and the measurement marker is cleared"
+
 # ---------------------------------------------------------------- dry run
 expect_ok "stop with nothing running is not an error" "$TOOL" stop
 

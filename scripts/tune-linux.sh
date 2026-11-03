@@ -28,9 +28,17 @@ THP_MODE="always"       # always | madvise | off
 SWAPPINESS="10"
 SET_GOVERNOR="performance"
 PROFILE="auto"
+NUMA_BALANCE="keep"     # off | on | keep
+IRQ_MODE="keep"         # steer | keep
 # Overridable so the profile/gonernor logic can be tested against a fake tree
 # instead of real sysfs (a governor test must not change the test machine).
 CPU_ROOT="${CPU_ROOT:-/sys/devices/system/cpu}"
+# Narrower overrides for the interrupt and NUMA steps below: the rest of the
+# script still writes absolute paths, so these exist only so the new logic can be
+# exercised against a fake tree instead of the machine running the test.
+SYS_ROOT="${SYS_ROOT:-/sys}"
+PROC_SYS="${PROC_SYS:-/proc/sys}"
+PROC_IRQ="${PROC_IRQ:-/proc/irq}"
 POWER_SUPPLY_ROOT="${POWER_SUPPLY_ROOT:-/sys/class/power_supply}"
 DRY_RUN=0
 STATUS_ONLY=0
@@ -71,6 +79,10 @@ while [ $# -gt 0 ]; do
         --no-governor)    SET_GOVERNOR="" ;;
         --profile)        PROFILE="${2:-auto}"; shift ;;
         --profile=*)      PROFILE="${1#*=}" ;;
+        --numa)           NUMA_BALANCE="${2:-off}"; shift ;;
+        --numa=*)         NUMA_BALANCE="${1#*=}" ;;
+        --irq)            IRQ_MODE="${2:-steer}"; shift ;;
+        --irq=*)          IRQ_MODE="${1#*=}" ;;
         --algo)           ALGO="${2:-rx/0}"; shift ;;
         --algo=*)         ALGO="${1#*=}" ;;
         -q|--quiet)       QUIET=1 ;;
@@ -270,6 +282,69 @@ write_value /proc/sys/vm/swappiness "$SWAPPINESS"
 if [ -w /proc/sys/vm/compact_memory ]; then
     info "compacting memory so the 2MB reservations can be fulfilled"
     run sh -c 'echo 1 > /proc/sys/vm/compact_memory' || true
+fi
+
+step "3b. NUMA balancing"
+# The kernel migrates pages between NUMA nodes while a process runs. A miner's
+# 2.3 GiB dataset is walked uniformly at random, so a migration is a stalled hash
+# that buys nothing: the threads are memory-bound and they never move node. On a
+# single-node machine the setting exists and does nothing, which is the cost.
+case "$NUMA_BALANCE" in
+    off|on)
+        if [ -w "${PROC_SYS}/kernel/numa_balancing" ]; then
+            if [ "$NUMA_BALANCE" = "off" ]; then
+                write_value "${PROC_SYS}/kernel/numa_balancing" 0
+            else
+                write_value "${PROC_SYS}/kernel/numa_balancing" 1
+            fi
+        else
+            info "numa_balancing is not exposed by this kernel"
+        fi
+        ;;
+    keep)
+        info "numa_balancing left as it was"
+        ;;
+    *)
+        warn "unknown --numa value '$NUMA_BALANCE' (off, on or keep)"
+        ;;
+esac
+
+step "3c. Interrupts and unbound work"
+# An interrupt that lands on a core running a RandomX thread costs that thread
+# its working set. Steering device interrupts to the first core keeps the mining
+# cores quiet, and the first core is the one that would have been doing this
+# anyway. On a two-core machine there is nowhere to steer to, so it is skipped.
+if [ "$IRQ_MODE" = "steer" ]; then
+    if [ "${cores:-1}" -lt 4 ]; then
+        info "${cores} core(s): too few to steer interrupts away from the miner"
+    else
+        steered=0
+        for f in "${PROC_IRQ}"/[0-9]*/smp_affinity_list; do
+            [ -w "$f" ] || continue
+            [ "$(cat "$f" 2>/dev/null)" = "0" ] && continue
+            if [ "$DRY_RUN" -eq 1 ]; then
+                printf '   would write 0 to %s\n' "$f"
+            else
+                printf '0' > "$f" 2>/dev/null || continue
+            fi
+            steered=$((steered + 1))
+        done
+        info "interrupts on CPU 0: ${steered} handler(s) moved"
+
+        # Unbound workqueues are the other half: they run kernel work on whatever
+        # CPU looks idle, which is the CPU the miner is using.
+        for f in "${SYS_ROOT}/devices/virtual/workqueue/cpumask" "${SYS_ROOT}"/devices/virtual/workqueue/*/cpumask; do
+            [ -w "$f" ] || continue
+            if [ "$DRY_RUN" -eq 1 ]; then
+                printf '   would write 1 to %s\n' "$f"
+            else
+                printf '1' > "$f" 2>/dev/null || continue
+            fi
+        done
+        info "unbound workqueues on CPU 0"
+    fi
+else
+    info "interrupt affinity left as it was"
 fi
 
 step "4. CPU governor"

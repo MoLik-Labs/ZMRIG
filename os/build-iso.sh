@@ -444,6 +444,16 @@ ISO_SHA=$(cut -d' ' -f1 "${ISO_PATH}.sha256")
 ISO_SIZE=$(stat -c %s "$ISO_PATH" 2>/dev/null || stat -f %z "$ISO_PATH")
 REPO_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-NggKhaiz/ZMRIG}/releases/latest/download"
 
+# What this image is actually made of, for the manifest and for `zmrig-os
+# version` on the machine: the point release apk resolved, and the kernel that
+# came with it. Both are read out of the rootfs the build just produced, so they
+# cannot disagree with the image they describe.
+ALPINE_BUILT=$(cat "${ROOTFS}/etc/alpine-release" 2>/dev/null | tr -d '\n' || true)
+KERNEL_BUILT=$(basename "$(find "${ROOTFS}/lib/modules" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | head -1)" 2>/dev/null || true)
+[ -n "$ALPINE_BUILT" ] || ALPINE_BUILT="unknown"
+[ -n "$KERNEL_BUILT" ] || KERNEL_BUILT="unknown"
+printf 'alpine %s, kernel %s\n' "$ALPINE_BUILT" "$KERNEL_BUILT" > "${ROOTFS}/etc/zmrig/base" 2>/dev/null || true
+
 cat > "${OUT}/${ISO_NAME}.json" <<EOF
 {
   "product": "zmrig-os",
@@ -451,6 +461,8 @@ cat > "${OUT}/${ISO_NAME}.json" <<EOF
   "version": "${VERSION}",
   "arch": "${ARCH_LEVEL}",
   "kernel": "${KERNEL_PKG}",
+  "kernel_version": "${KERNEL_BUILT}",
+  "alpine": "${ALPINE_BUILT}",
   "iso_url": "${REPO_URL}/${ISO_NAME}.iso",
   "iso_sha256": "${ISO_SHA}",
   "iso_bytes": ${ISO_SIZE},
