@@ -38,7 +38,7 @@ function text(value) {
 /** One entry, validated. Returns `{ entry, problems }`; a bad field is dropped
  *  rather than taking the whole rig with it, because a rig that is in the
  *  roster but misconfigured still needs to be reachable. */
-function normalise(id, raw, owners) {
+function normalise(id, raw, defaults) {
   const problems = [];
   const entry = { id, desired: {} };
   if (raw === null || raw === undefined) return { entry, problems };
@@ -54,10 +54,13 @@ function normalise(id, raw, owners) {
   const label = text(raw.label);
   if (label) entry.label = label.slice(0, 40);
 
-  const owner = text(raw.owner) || owners.default;
+  const owner = text(raw.owner) || defaults.owner;
   if (owner) entry.owner = owner;
 
-  const wallet = text(raw.wallet);
+  // `wallet`/`pool` at the top of the roster are the ones a farm shares: six
+  // machines in a shed mine into one address, and writing it six times is six
+  // chances to mistype one and quietly split the balance.
+  const wallet = text(raw.wallet) || defaults.wallet;
   const coin = text(raw.coin).toLowerCase() || 'xmr';
   if (raw.coin !== undefined && !COINS.has(coin)) {
     problems.push(`${id}: unknown coin "${raw.coin}"`);
@@ -69,7 +72,7 @@ function normalise(id, raw, owners) {
     else problems.push(`${id}: wallet is not valid for ${entry.desired.coin}`);
   }
 
-  const pool = text(raw.pool);
+  const pool = text(raw.pool) || defaults.pool;
   if (pool) {
     if (validPool(pool)) entry.desired.pool = pool;
     else problems.push(`${id}: pool must be host:port`);
@@ -114,17 +117,21 @@ function shape(parsed, problems) {
       }
       rigs.set(id, item);
     }
-    return { rigs, owners: { default: text(parsed.length && parsed[0] && parsed[0].owner) } };
+    return { rigs, defaults: { owner: text(parsed.length && parsed[0] && parsed[0].owner) } };
   }
   if (!parsed || typeof parsed !== 'object') {
     problems.push('the roster is not an object');
-    return { rigs: new Map(), owners: { default: '' } };
+    return { rigs: new Map(), defaults: { owner: '' } };
   }
-  const owners = { default: text(parsed.owner) };
+  const defaults = {
+    owner: text(parsed.owner),
+    wallet: text(parsed.wallet),
+    pool: text(parsed.pool),
+  };
   const source = parsed.rigs && typeof parsed.rigs === 'object' ? parsed.rigs : parsed;
   const rigs = new Map();
   for (const [key, value] of Object.entries(source)) {
-    if (key.startsWith('$') || key === 'owner') continue;
+    if (key.startsWith('$') || key === 'owner' || key === 'wallet' || key === 'pool' || key === 'rigs') continue;
     const id = key.trim().toUpperCase();
     if (!ids.isDeviceId(id)) {
       problems.push(`${key}: not a Device ID (ZMR-XXXX-XXXX-XXXX)`);
@@ -132,7 +139,7 @@ function shape(parsed, problems) {
     }
     rigs.set(id, value);
   }
-  return { rigs, owners };
+  return { rigs, defaults };
 }
 
 /** Parse roster JSON. Never throws: a broken roster must not stop the bot, it
@@ -148,10 +155,10 @@ function parse(raw, log = () => {}) {
     return { rigs: new Map(), problems };
   }
 
-  const { rigs, owners } = shape(parsed, problems);
+  const { rigs, defaults } = shape(parsed, problems);
   const clean = new Map();
   for (const [id, value] of rigs) {
-    const { entry, problems: bad } = normalise(id, value, owners);
+    const { entry, problems: bad } = normalise(id, value, defaults);
     problems.push(...bad);
     clean.set(id, entry);
   }

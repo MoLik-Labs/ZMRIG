@@ -1,11 +1,11 @@
 {
   "$comment": "The fleet, written down. Copy the object into Render's FLEET_ROSTER variable, or save this file as fleet/roster.json and commit it — the environment wins when both exist. Nothing here is secret: a Device ID is public and a wallet is an address. Every field except the ID is optional, and an entry that sets nothing still enrols the rig so commands can reach it.",
   "owner": "tg:123456789",
+  "wallet": "46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ",
+  "pool": "gulf.moneroocean.stream:10001",
   "rigs": {
     "ZMR-1A2B-3C4D-5E6F": {
       "label": "basement",
-      "wallet": "46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ",
-      "pool": "gulf.moneroocean.stream:10001",
       "coin": "xmr",
       "mode": "safe",
       "maxtemp": 72,
@@ -14,6 +14,7 @@
     "ZMR-AAAA-BBBB-CCCC": {
       "label": "garage",
       "owner": "dc:987654321",
+      "wallet": "888tNkZrPN6JsEgekjMnABU4TBzc2Dt29EPAvkRxbANsAnjyPbb3iQ1YBRk1UXcdRsiKc9dhwMVgN5S9cQUiyoogDavup3H",
       "mode": "max",
       "threads": 8
     },

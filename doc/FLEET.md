@@ -142,11 +142,11 @@ should be running:
 ```json
 {
   "owner": "tg:123456789",
+  "wallet": "46SQL...",
+  "pool": "gulf.moneroocean.stream:10001",
   "rigs": {
     "ZMR-1A2B-3C4D-5E6F": {
       "label": "basement",
-      "wallet": "46SQL...",
-      "pool": "gulf.moneroocean.stream:10001",
       "coin": "xmr",
       "mode": "safe",
       "maxtemp": 72,
@@ -157,13 +157,18 @@ should be running:
 }
 ```
 
+`wallet` and `pool` at the top are the ones the whole farm shares. Six machines in
+a shed mine into one address; writing it six times is six chances to mistype one
+and split the balance between two addresses nobody is watching. A rig that sets
+its own `wallet` keeps it, so a borrowed machine still pays its owner.
+
 The same JSON can live in `fleet/roster.json` if you would rather keep it in the
 repository; the environment wins when both exist, so one entry can be overridden
 by a deploy hook without editing a file. `fleet/roster.example.json` has every
 field, and nothing in it is secret: a Device ID is public and a wallet is an
 address.
 
-Two consequences worth understanding:
+Three consequences worth understanding:
 
 * **A rig in the roster is enrolled before it has ever checked in.** The roster
   knows the Device ID and not the key — it cannot, the key never leaves the
@@ -177,6 +182,14 @@ Two consequences worth understanding:
   at most once per rig per five minutes, and never twice while a change is
   already in flight. Restarting the service changes nothing, because nothing was
   remembered.
+* **Hashrate is added up per wallet, not per machine.** The dashboard and the
+  `status` command group every rig by the address it reports and show one number
+  per address with its share of the fleet: that is the number the pool pays, and
+  the rigs are only how it gets produced. A rig that has gone quiet stops adding
+  to the total — it has not stopped mining, but its last reading is not the
+  present — while still being counted as a rig of the farm. A rig that has not
+  reported a wallet yet is listed as its own group, last, because a machine
+  mining into the wrong address is the mistake that view exists to make visible.
 
 Empty `FLEET_ROSTER` is a supported state: the bot then works exactly as before,
 with enrolments living in `FLEET_STATE` until the next restart.
@@ -342,7 +355,7 @@ One request a minute from the rig:
 ```json
 POST /v1/hello
 Authorization: Bearer <64 hex characters: the device key>
-{"device":"ZMR-1A2B-3C4D-5E6F","version":"6.42.0",
+{"device":"ZMR-1A2B-3C4D-5E6F","version":"6.43.0",
  "status":{"state":"mining","hashrate":1201.4,"temp":64,"uptime":86400,
            "mode":"max","wallet":"4...","pool":"gulf.moneroocean.stream:10001",
            "coin":"xmr","threads":"8","slot":"a","installed":true},

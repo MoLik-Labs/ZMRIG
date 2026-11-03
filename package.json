@@ -1,6 +1,6 @@
 {
   "name": "zmrig",
-  "version": "6.42.0",
+  "version": "6.43.0",
   "description": "ZMRIG - RandomX miner with a 1% developer fee that is printed and switchable off, by @nggkhaiz",
   "main": "index.js",
   "directories": {

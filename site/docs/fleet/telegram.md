@@ -38,7 +38,7 @@ rigs as you own.
 | --- | --- |
 | `/enroll <id> <code> [name]` | link a rig to you |
 | `/devices` | every rig: state, hashrate, temperature, last seen |
-| `/status` | one screen: rigs, total hashrate, hottest, offline count |
+| `/status` | one screen: rigs, total hashrate, hottest, offline count, then one line per wallet once there is more than one |
 | `/device <rig>` | one rig, with buttons |
 | `/wallet <rig> 4…` | set the wallet, validated before it is queued |
 | `/pool <rig> host:port` | set the pool |
@@ -106,11 +106,11 @@ and, optionally, what it should be running:
 ```json
 {
   "owner": "tg:123456789",
+  "wallet": "46SQL...",
+  "pool": "gulf.moneroocean.stream:10001",
   "rigs": {
     "ZMR-1A2B-3C4D-5E6F": {
       "label": "basement",
-      "wallet": "46SQL...",
-      "pool": "gulf.moneroocean.stream:10001",
       "mode": "safe",
       "maxtemp": 72,
       "threads": 8
@@ -118,6 +118,10 @@ and, optionally, what it should be running:
   }
 }
 ```
+
+`wallet` and `pool` at the top are the ones the whole farm shares: six machines in
+a shed mine into one address, and writing it six times is six chances to mistype
+one and split the balance. A rig that sets its own keeps it.
 
 It can also live in `fleet/roster.json`; the environment wins when both exist.
 Nothing in it is secret — a Device ID is public and a wallet is an address — and a

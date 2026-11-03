@@ -8,7 +8,7 @@
 
 by **[@nggkhaiz](https://github.com/NggKhaiz)**
 
-[![release](https://img.shields.io/badge/release-6.42.0-f2763f)](CHANGELOG.md)
+[![release](https://img.shields.io/badge/release-6.43.0-f2763f)](CHANGELOG.md)
 [![licence](https://img.shields.io/badge/licence-GPL--3.0-blue)](LICENSE)
 [![dev fee](https://img.shields.io/badge/developer%20fee-1%25%20%C2%B7%20off%20switch-f2763f)](doc/FEE.md)
 [![platform](https://img.shields.io/badge/platform-Linux%20x86--64%20%C2%B7%20macOS%20%C2%B7%20Windows-lightgrey)](#build-from-source)
@@ -381,8 +381,10 @@ set -a; . ./.env; set +a; npm start
 ```
 
 Prefer a page to a chat? Set `FLEET_WEB_PASSWORD` and the same fleet is a
-server-rendered dashboard on the same port — fleet total, one row per rig, per-rig
-controls, enrolment, and a download page for the ISO. One password, no accounts,
+server-rendered dashboard on the same port — fleet total, one row per rig, **one
+row per wallet** (everything mining into the same address is one number at the
+pool, so it is one number here), per-rig controls, enrolment, and a download page
+for the ISO. One password, no accounts,
 CSRF on every form, Brotli plus `ETag`/`304`. Clear the variable and the bot runs
 exactly as before with no HTML surface at all.
 
@@ -559,8 +561,8 @@ checks while two of the rows are wrong.
 | `zmrig/tests/cli.sh` | 49 | flags, exit codes, `--help` covers the parser, `--check` reports the memory of the coin it was asked about and which huge-page mechanism backs it |
 | `zmrig/tests/net.sh` | 29 | TCP/TLS/WS/WSS against a fake pool, ban and refusal handling, failover, seed change |
 | `zmrig/tests/health.sh` | 7 | the watchdog, both directions: an honest pool is not a fault, an all-reject pool is |
-| `tests/oneclick/*.sh` | 70 | plan, config, governor, purge (removes only its own paths), branch switching, `--coin` mapping and the algorithm-name guard |
-| `fleet` `npm test` | 69 | the control plane without a token: Device ID derivation, the store's atomic writes and corrupt-file rescue, enrolment rules, the roster (three JSON shapes, a broken one reported rather than thrown, and a fleet that is still enrolled after its disk is emptied), reconciliation (one correction, not one a minute), every command's validation and refusals, the HTTP protocol end to end, the Telegram and Discord renderers, configuration that refuses to start half-done, and the dashboard — login and throttling, CSRF refusal, queued actions, escaping, Brotli/`ETag`/`304`, a GitHub releases call that fails without taking the page down, and the two hashrate alerts: one against the previous check-in, one against the rate the rig measured on itself |
+| `tests/oneclick/*.sh` | 77 | plan, config, governor, tuner targets (against a fake `/proc` and `/sys`), purge (removes only its own paths), branch switching, `--coin` mapping and the algorithm-name guard |
+| `fleet` `npm test` | 84 | the control plane without a token: Device ID derivation, the store's atomic writes and corrupt-file rescue, enrolment rules, the roster (three JSON shapes, a broken one reported rather than thrown, and a fleet that is still enrolled after its disk is emptied), reconciliation (one correction, not one a minute), every command's validation and refusals, the HTTP protocol end to end, the Telegram and Discord renderers, configuration that refuses to start half-done, and the dashboard — login and throttling, CSRF refusal, queued actions, escaping, Brotli/`ETag`/`304`, a GitHub releases call that fails without taking the page down, and the two hashrate alerts: one against the previous check-in, one against the rate the rig measured on itself, and hashrate added up per wallet so a shed of rigs is one number |
 | `tests/upstream/upstream.test.sh` | 17 |
 | `tests/lint/no-debug.sh` | 3 | no `set -x` in a boot script, no `console.debug` in the agent, no `--inspect`, no stray `TODO` anywhere this project ships | what the image is built from, and whether the weekly rebuild has anything to do: the Alpine point release and kernel are read from the mirror's own index, an older base in the published manifest means rebuild, a legacy manifest without one triggers exactly one, an unreachable mirror is reported instead of crashed on |
 | `tests/releases/latest-iso.test.sh` | 29 | the download helper against a recorded reply — the GitHub list and the smaller document `serve/` publishes: asset selection by CPU variant, `--beta`, `--json`, `--host`, a checksum that travels with the image, and an API that is down |

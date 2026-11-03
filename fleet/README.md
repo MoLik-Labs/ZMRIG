@@ -99,11 +99,11 @@ therefore written down in the environment instead:
 ```json
 {
   "owner": "tg:123456789",
+  "wallet": "46SQL...",
+  "pool": "gulf.moneroocean.stream:10001",
   "rigs": {
     "ZMR-1A2B-3C4D-5E6F": {
       "label": "basement",
-      "wallet": "46SQL...",
-      "pool": "gulf.moneroocean.stream:10001",
       "mode": "safe",
       "maxtemp": 72
     }
@@ -126,9 +126,9 @@ held to it, exactly as if the rig had enrolled itself in the chat.
 ### The dashboard (optional)
 
 Set `FLEET_WEB_PASSWORD` (twelve characters or more) and the same process serves a
-server-rendered dashboard: fleet totals, per-rig controls, enrolment, and the
-current ISO with its checksum. One password, no accounts; leave the variable
-empty and no HTML exists at all. `doc/FLEET.md` §3 walks through every page, and
+server-rendered dashboard: fleet totals, one row per wallet, one row per rig,
+per-rig controls, enrolment, and the current ISO with its checksum. One password,
+no accounts; leave the variable empty and no HTML exists at all. `doc/FLEET.md` §3 walks through every page, and
 the same page on the site is `docs/fleet/dashboard`.
 
 A free instance **sleeps after 15 minutes without traffic**, and a sleeping bot
@@ -191,6 +191,7 @@ fleet/
   src/ids.js         Device ID and enrolment code, identical to the shell
   src/store.js       one JSON file, atomic writes, queue, audit
   src/commands.js    the whole command surface, platform-free and testable
+  src/farms.js       hashrate grouped by wallet: one address, one number
   src/alerts.js      heat, stops, hashrate drops, and the silence sweep
   src/http.js        POST /v1/hello, /healthz, the landing page
   src/telegram.js    long polling, HTML rendering, inline keyboards

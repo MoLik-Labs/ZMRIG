@@ -1,3 +1,36 @@
+# 6.43.0 — one wallet, one number
+
+Six machines in a shed mine into one address, and until now the dashboard showed
+six hashrates and a total. The total was right and the useful number was missing:
+what the farm is worth at the pool is per address, because that is what the pool
+pays and what an exchange sees. The fleet now groups by wallet.
+
+## What changed
+
+* **Hashrate is added up per wallet.** The dashboard's overview has a "By wallet"
+  table — address, hashrate, share of the fleet right now, how many rigs, hottest,
+  how many are mining — and `/status` in the chat grows the same lines once there
+  is more than one address. One wallet, one row, and the breakdown hides itself
+  when there is nothing to break down.
+* **A silent rig stops contributing, but is still counted.** A rig last heard from
+  an hour ago has probably not stopped mining, but its last reading is not the
+  present, and adding it to a fresh number is a lie by omission. It still counts
+  as a rig of the farm, and the group says how many are online.
+* **A rig with no wallet is its own row, last.** A machine mining into the wrong
+  address is the mistake this view exists to make visible, so it is never folded
+  into somebody else's total — and a rig nobody owns is not counted at all.
+* **The roster takes `wallet` and `pool` at the top.** Six machines, one address:
+  writing it six times is six chances to mistype one and split the balance between
+  two addresses nobody is watching. A rig that sets its own keeps it, so a
+  borrowed machine still pays its owner. A bad top-level address is reported and
+  the rigs keep everything else.
+* New `fleet/src/farms.js`, and 10 more tests (fleet suite 74 → 84) covering the
+  sum, the two-wallet order, the offline rig, the walletless rig, the share when
+  everything is down, the unowned record, and both presentations.
+
+Everything here is derived from check-ins held in memory; nothing new is stored,
+on disk or anywhere else.
+
 # 6.42.0 — the miner gets the cores, not the hyperthreads
 
 `nproc` counts SMT siblings, and every thread rule in the image was written

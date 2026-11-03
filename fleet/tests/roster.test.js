@@ -271,6 +271,38 @@ test('the first key to present a roster id is the one it keeps', async () => {
   assert.equal(second.code, 403);
 });
 
+test('one wallet at the top is the wallet of the whole farm', () => {
+  const roster = rosterModule.parse({
+    wallet: WALLET,
+    pool: 'gulf.moneroocean.stream:10001',
+    rigs: {
+      'ZMR-1A2B-3C4D-5E6F': { label: 'shed-1' },
+      'ZMR-AAAA-BBBB-CCCC': { label: 'shed-2' },
+      // A rig with its own address keeps it: the top-level value is a default,
+      // not an override.
+      'ZMR-1111-2222-3333': { label: 'borrowed', wallet: '4' + 'A'.repeat(94) },
+    },
+  });
+
+  assert.deepEqual(roster.problems, []);
+  assert.equal(roster.rigs.get('ZMR-1A2B-3C4D-5E6F').desired.wallet, WALLET);
+  assert.equal(roster.rigs.get('ZMR-AAAA-BBBB-CCCC').desired.wallet, WALLET);
+  assert.equal(roster.rigs.get('ZMR-AAAA-BBBB-CCCC').desired.pool, 'gulf.moneroocean.stream:10001');
+  assert.notEqual(roster.rigs.get('ZMR-1111-2222-3333').desired.wallet, WALLET);
+  assert.equal(roster.rigs.size, 3, 'the top-level keys are not rigs');
+});
+
+test('a bad top-level wallet is reported once, and the rigs keep the rest', () => {
+  const roster = rosterModule.parse({
+    wallet: 'not-an-address',
+    rigs: { 'ZMR-1A2B-3C4D-5E6F': { label: 'shed' } },
+  });
+
+  assert.equal(roster.rigs.size, 1);
+  assert.equal(roster.rigs.get('ZMR-1A2B-3C4D-5E6F').desired.wallet, undefined);
+  assert.ok(roster.problems.some((line) => /wallet/.test(line)), 'the bad default is reported');
+});
+
 test('a rig that is not in the roster is untouched', async () => {
   const dir = tmpdir();
   const store = storeAt(dir);

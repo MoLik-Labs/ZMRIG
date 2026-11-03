@@ -7,6 +7,7 @@ const format = require('../format');
 const { presence } = require('../store');
 const { page, escape, VERSION } = require('./layout');
 const { COINS } = require('../commands');
+const farms = require('../farms');
 
 // `commands.js` exports the two tables the bot accepts; the dashboard must offer
 // exactly the same words or a form would queue something the rig refuses.
@@ -88,6 +89,31 @@ function dashboard({ store, config, now, csrf }) {
 
   const list = rigTable(devices, config, now);
 
+  // One row per wallet, because a wallet is the unit the pool pays in. Shown as
+  // soon as there is more than one rig: a single rig has nothing to compare.
+  const groups = farms.group(devices, config, now);
+  const byWallet = devices.length > 1 && groups.length
+    ? `<div class="panel"><h3 style="margin-top:0">By wallet</h3>
+        <p class="muted small">Every rig mining to the same address is one number at the pool, so it is one
+        number here. Rigs that have not reported a wallet are listed last.</p>
+        <table>
+          <thead><tr><th>wallet</th><th class="num">hashrate</th><th class="num">share</th><th class="num">rigs</th><th class="num">hottest</th><th>state</th></tr></thead>
+          <tbody>${groups
+            .map((entry) => {
+              const share = rate > 0 ? Math.round((entry.rate / rate) * 100) : 0;
+              return `<tr>
+                <td><code>${escape(entry.label)}</code></td>
+                <td class="num">${escape(format.hashrate(entry.rate))}</td>
+                <td class="num">${share}%</td>
+                <td class="num">${entry.rigs}</td>
+                <td class="num">${entry.hottest ? escape(format.temperature(entry.hottest)) : '-'}</td>
+                <td>${entry.online ? `${entry.mining} mining, ${entry.online} online` : 'offline'}</td>
+              </tr>`;
+            })
+            .join('')}</tbody>
+        </table></div>`
+    : '';
+
   const watch = attention.length
     ? `<div class="panel"><h3 style="margin-top:0">Needs attention</h3><ul class="queue">${attention
         .map((record) => {
@@ -104,7 +130,7 @@ function dashboard({ store, config, now, csrf }) {
         .join('')}</ul></div>`
     : '';
 
-  const body = `<h1>Fleet</h1>${cards}${watch}<h2>Rigs</h2>${list}`;
+  const body = `<h1>Fleet</h1>${cards}${watch}${byWallet}<h2>Rigs</h2>${list}`;
   return page({ title: 'Fleet', active: '/', body, csrf });
 }
 

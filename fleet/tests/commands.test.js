@@ -13,6 +13,7 @@ const commands = require('../src/commands');
 const { build } = require('../src/index');
 
 const WALLET = '46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ';
+const OTHER = '888tNkZrPN6JsEgekjMnABU4TBzc2Dt29EPAvkRxbANsAnjyPbb3iQ1YBRk1UXcdRsiKc9dhwMVgN5S9cQUiyoogDavup3H';
 const CONFIG = { interval: 60, offline_after: 300, queue_limit: 10, alert_temp: 85, alert_cooldown: 1800 };
 
 const OWNER = { platform: 'tg', key: 'tg:1', id: '1', name: 'owner', role: 'admin' };
@@ -204,6 +205,25 @@ test('the fleet screen totals the rigs that are actually up', () => {
 
   const devices = say(store, '/devices').text;
   assert.match(devices, /3 rigs/);
+});
+
+test('two wallets are two farms on the status screen', () => {
+  const { store, record, key } = fleet();
+  say(store, `/enroll ${record.id} ${ids.enrolCode(key)}`);
+  const second = store.claim(crypto.randomBytes(32).toString('hex'));
+  second.owner = 'tg:1';
+  second.status = { state: 'mining', hashrate: 800, temp: 65, wallet: OTHER };
+  second.last_seen = Date.now() - 10_000;
+
+  const text = say(store, '/status').text;
+  assert.match(text, /By wallet/, 'more than one address gets a breakdown');
+  assert.match(text, new RegExp(`${record.status.wallet.slice(0, 6)}`), 'the farm is named by its wallet');
+  assert.match(text, /60%/, 'the bigger farm is 60% of what the fleet is producing');
+  assert.match(text, /40%/);
+
+  // One wallet and there is nothing to break down: the breakdown must not appear.
+  store.devices().find((d) => d.status && d.status.wallet === OTHER).status.wallet = record.status.wallet;
+  assert.doesNotMatch(say(store, '/status').text, /By wallet/);
 });
 
 test('unknown commands are refused, not guessed', () => {
