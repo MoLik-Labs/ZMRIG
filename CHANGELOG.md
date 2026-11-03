@@ -51,8 +51,21 @@ anything this project ships. The scan found none — which is the point of writi
 it down: `set -x` in a boot script writes every variable, including the wallet,
 to a serial console, and nothing else here would notice.
 
-Tests: control **180** (was 157), lint **3** (new), upstream 17, fleet 26,
-self-check.
+## The control plane sees it too
+
+The rig now reports the rate it measured (`measured` in the check-in payload), so
+the bot and the dashboard have a second hashrate rule: below half of the rate the
+rig measured on itself. The existing rule compares each check-in with the one a
+minute before and catches a rig that fell over just now; this one catches the rig
+that has been sliding for a week. The dashboard prints the baseline next to the
+live rate, and the alert names the difference:
+
+```
+🐌 rig-2 is at 640.0 H/s, 45% of the 1.4 kH/s it measured itself
+```
+
+Tests: control **180** (was 157), lint **3** (new), fleet 59 (was 58), upstream
+17, self-check.
 
 # 6.39.0 — the image measures itself, and knows what it is built from
 

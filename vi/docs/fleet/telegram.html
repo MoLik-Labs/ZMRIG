@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.e1cb14c0.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.0eb70918.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/runtime~main.34fcb67b.js" defer="defer"></script>
 <script src="/ZMRIG/vi/assets/js/main.a9f59f68.js" defer="defer"></script>
 </head>
 <body>
@@ -39,10 +39,13 @@ control plane cũng không lừa được rig dùng ví mà nó sẽ từ chối
 <li class="">nhiệt độ từ 85 °C trở lên;</li>
 <li class="">miner dừng khi đang đào;</li>
 <li class="">hashrate dưới một nửa lần check-in trước;</li>
+<li class="">hashrate dưới một nửa mức rig tự đo được trên chính nó — bắt được cái máy đã
+tụt dần cả tuần, chứ không phải cái vừa ngã trong một phút;</li>
 <li class="">mọi kết quả lệnh, kể cả bị từ chối.</li>
 </ul>
 <p>Mỗi loại có thời gian chờ riêng cho từng rig, nên máy nóng không hét lên mỗi
-phút.</p>
+phút. Luật hashrate thứ hai là luật chậm, và nó nói rõ nó so với cái gì:</p>
+<div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token plain">🐌 rig-2 is at </span><span class="token number" style="color:rgb(247, 140, 108)">640.0</span><span class="token plain"> H/s, </span><span class="token number" style="color:rgb(247, 140, 108)">45</span><span class="token plain">% of the </span><span class="token number" style="color:rgb(247, 140, 108)">1.4</span><span class="token plain"> kH/s it measured itself</span><br></div></code></pre></div></div>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="tự-host">Tự host<a href="#tự-host" class="hash-link" aria-label="Đường dẫn trực tiếp đến Tự host" title="Đường dẫn trực tiếp đến Tự host" translate="no">​</a></h2>
 <p>Một tiến trình Node, <strong>không phụ thuộc gì</strong>, trạng thái là một file JSON.</p>
 <div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token builtin class-name" style="color:rgb(255, 203, 107)">cd</span><span class="token plain"> fleet</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain"></span><span class="token function" style="color:rgb(130, 170, 255)">cp</span><span class="token plain"> config.example.env .env      </span><span class="token comment" style="color:rgb(105, 112, 152);font-style:italic"># TELEGRAM_BOT_TOKEN, FLEET_ADMIN_IDS</span><span class="token plain"></span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain"></span><span class="token builtin class-name" style="color:rgb(255, 203, 107)">set</span><span class="token plain"> -a</span><span class="token punctuation" style="color:rgb(199, 146, 234)">;</span><span class="token plain"> </span><span class="token builtin class-name" style="color:rgb(255, 203, 107)">.</span><span class="token plain"> ./.env</span><span class="token punctuation" style="color:rgb(199, 146, 234)">;</span><span class="token plain"> </span><span class="token builtin class-name" style="color:rgb(255, 203, 107)">set</span><span class="token plain"> +a</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain"></span><span class="token function" style="color:rgb(130, 170, 255)">npm</span><span class="token plain"> run check                   </span><span class="token comment" style="color:rgb(105, 112, 152);font-style:italic"># in cấu hình, không mở socket</span><span class="token plain"></span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain"></span><span class="token function" style="color:rgb(130, 170, 255)">npm</span><span class="token plain"> start</span><br></div></code></pre></div></div>

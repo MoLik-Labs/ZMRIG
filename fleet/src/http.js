@@ -56,7 +56,7 @@ function bearer(request) {
 
 function cleanStatus(status) {
   if (!status || typeof status !== 'object') return {};
-  const keep = ['state', 'hashrate', 'temp', 'uptime', 'mode', 'wallet', 'pool', 'worker', 'coin', 'threads', 'version', 'slot', 'installed', 'reason'];
+  const keep = ['state', 'hashrate', 'measured', 'temp', 'uptime', 'mode', 'wallet', 'pool', 'worker', 'coin', 'threads', 'version', 'slot', 'installed', 'reason'];
   const out = {};
   for (const key of keep) {
     const value = status[key];

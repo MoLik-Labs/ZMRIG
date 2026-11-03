@@ -63,10 +63,16 @@ control plane cũng không lừa được rig dùng ví mà nó sẽ từ chối
 * nhiệt độ từ 85 °C trở lên;
 * miner dừng khi đang đào;
 * hashrate dưới một nửa lần check-in trước;
+* hashrate dưới một nửa mức rig tự đo được trên chính nó — bắt được cái máy đã
+  tụt dần cả tuần, chứ không phải cái vừa ngã trong một phút;
 * mọi kết quả lệnh, kể cả bị từ chối.
 
 Mỗi loại có thời gian chờ riêng cho từng rig, nên máy nóng không hét lên mỗi
-phút.
+phút. Luật hashrate thứ hai là luật chậm, và nó nói rõ nó so với cái gì:
+
+```
+🐌 rig-2 is at 640.0 H/s, 45% of the 1.4 kH/s it measured itself
+```
 
 ## Tự host
 

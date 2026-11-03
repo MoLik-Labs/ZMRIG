@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.e1cb14c0.css">
-<script src="/ZMRIG/assets/js/runtime~main.fc657d7f.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/runtime~main.e37b94e5.js" defer="defer"></script>
 <script src="/ZMRIG/assets/js/main.a55502bf.js" defer="defer"></script>
 </head>
 <body>
@@ -40,9 +40,14 @@ request to the control plane cannot talk a rig into a wallet it would reject.</p
 <li class="">temperature at or above 85 °C;</li>
 <li class="">the miner stopping when it was mining;</li>
 <li class="">hashrate below half of the previous check-in;</li>
+<li class="">hashrate below half of the rate the rig measured on itself, which catches the
+machine that has been sliding for a week rather than the one that fell over
+just now;</li>
 <li class="">every command result, including refusals.</li>
 </ul>
-<p>Each kind has a cooldown per rig, so a hot machine does not shout every minute.</p>
+<p>Each kind has a cooldown per rig, so a hot machine does not shout every minute.
+The second hashrate rule is the slow one, and it says what it compared:</p>
+<div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token plain">🐌 rig-2 is at </span><span class="token number" style="color:rgb(247, 140, 108)">640.0</span><span class="token plain"> H/s, </span><span class="token number" style="color:rgb(247, 140, 108)">45</span><span class="token plain">% of the </span><span class="token number" style="color:rgb(247, 140, 108)">1.4</span><span class="token plain"> kH/s it measured itself</span><br></div></code></pre></div></div>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="hosting-it">Hosting it<a href="#hosting-it" class="hash-link" aria-label="Direct link to Hosting it" title="Direct link to Hosting it" translate="no">​</a></h2>
 <p>One Node process, <strong>no dependencies</strong>, one JSON file of state.</p>
 <div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token builtin class-name" style="color:rgb(255, 203, 107)">cd</span><span class="token plain"> fleet</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain"></span><span class="token function" style="color:rgb(130, 170, 255)">cp</span><span class="token plain"> config.example.env .env      </span><span class="token comment" style="color:rgb(105, 112, 152);font-style:italic"># TELEGRAM_BOT_TOKEN, FLEET_ADMIN_IDS</span><span class="token plain"></span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain"></span><span class="token builtin class-name" style="color:rgb(255, 203, 107)">set</span><span class="token plain"> -a</span><span class="token punctuation" style="color:rgb(199, 146, 234)">;</span><span class="token plain"> </span><span class="token builtin class-name" style="color:rgb(255, 203, 107)">.</span><span class="token plain"> ./.env</span><span class="token punctuation" style="color:rgb(199, 146, 234)">;</span><span class="token plain"> </span><span class="token builtin class-name" style="color:rgb(255, 203, 107)">set</span><span class="token plain"> +a</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain"></span><span class="token function" style="color:rgb(130, 170, 255)">npm</span><span class="token plain"> run check                   </span><span class="token comment" style="color:rgb(105, 112, 152);font-style:italic"># prints the config, opens no socket</span><span class="token plain"></span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain"></span><span class="token function" style="color:rgb(130, 170, 255)">npm</span><span class="token plain"> start</span><br></div></code></pre></div></div>

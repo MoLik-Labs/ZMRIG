@@ -65,6 +65,26 @@ function onHello(record, config, now, before) {
     });
   }
 
+  // The comparison above is between two check-ins a minute apart: it catches a
+  // rig that just fell over and says nothing about one that has been sliding
+  // for a week. This is the other half -- the rate the rig measured on itself
+  // when it tuned, which does not move with the weather.
+  const measured = Number(status.measured) || 0;
+  if (
+    status.state === 'mining' &&
+    measured > 0 &&
+    rate > 0 &&
+    rate < measured * config.alert_hashrate_drop &&
+    cooling(record, 'drift', config, now)
+  ) {
+    mark(record, 'drift', now);
+    out.push({
+      kind: 'drift',
+      level: 'warn',
+      text: `🐌 **${name(record)}** is at ${format.hashrate(rate)}, ${Math.round((rate / measured) * 100)}% of the ${format.hashrate(measured)} it measured itself`,
+    });
+  }
+
   return out;
 }
 

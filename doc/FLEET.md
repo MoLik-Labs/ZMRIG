@@ -16,6 +16,7 @@ before: it mines and it never contacts anything.
 | find out a rig is hot by touching it | an alert the moment it passes the limit |
 | discover a rig went offline when the payout drops | an alert after three missed check-ins |
 | update each rig by hand | `/update <rig>`, and the daily job stays |
+| notice a rig has been slow for a week | an alert against the rate the rig measured on itself |
 
 ## The Device ID
 
@@ -113,7 +114,7 @@ Any other host works the same way: Node 20+, one port, two environment variables
 | `FLEET_INTERVAL` | `60` | seconds between check-ins |
 | `FLEET_OFFLINE_AFTER` | `300` | silence before "offline" (never below 3 intervals) |
 | `FLEET_ALERT_TEMP` | `85` | °C that raises an alert |
-| `FLEET_ALERT_HASHRATE_DROP` | `0.5` | alert when hashrate falls below this fraction |
+| `FLEET_ALERT_HASHRATE_DROP` | `0.5` | alert below this fraction of the previous check-in, and of the rate the rig measured on itself |
 | `FLEET_ALERT_COOLDOWN` | `1800` | seconds before the same rig may repeat an alert |
 | `FLEET_RATE_LIMIT` | `30` | commands per window per operator |
 | `FLEET_QUEUE_LIMIT` | `10` | instructions a rig may have waiting |
@@ -121,6 +122,22 @@ Any other host works the same way: Node 20+, one port, two environment variables
 
 With no admin id the process refuses to start: a bot nobody owns would accept
 commands from an Internet stranger.
+
+The hashrate rule is two rules, because a fleet fails in two time scales. One
+compares each check-in with the one before it (a minute apart) and catches a rig
+that fell over just now. The other compares the rig with the rate it measured on
+itself when it tuned (`MEASURED_HS`, reported on every check-in) and catches the
+one that has been sliding for a week — dust, a failing DIMM, a background job
+somebody left running. The second is reported once per cooldown, and the message
+names the difference:
+
+```
+🐌 rig-2 is at 640.0 H/s, 45% of the 1.4 kH/s it measured itself
+```
+
+The rig acts on the same comparison by itself; see
+[the appliance page](OS.md#when-the-rig-stops-keeping-its-own-number). The
+alert is for the operator who wants to know before the rig decides to re-measure.
 
 ## 3. The browser dashboard
 

@@ -64,9 +64,17 @@ request to the control plane cannot talk a rig into a wallet it would reject.
 * temperature at or above 85 °C;
 * the miner stopping when it was mining;
 * hashrate below half of the previous check-in;
+* hashrate below half of the rate the rig measured on itself, which catches the
+  machine that has been sliding for a week rather than the one that fell over
+  just now;
 * every command result, including refusals.
 
 Each kind has a cooldown per rig, so a hot machine does not shout every minute.
+The second hashrate rule is the slow one, and it says what it compared:
+
+```
+🐌 rig-2 is at 640.0 H/s, 45% of the 1.4 kH/s it measured itself
+```
 
 ## Hosting it
 

@@ -140,7 +140,11 @@ function rig({ record, config, now, csrf, flash, flashBad }) {
 
   const facts = `<dl class="kv">
     <dt>state</dt><dd>${dot(state)}${escape(state)}</dd>
-    <dt>hashrate</dt><dd>${escape(format.hashrate(status.hashrate))}</dd>
+    <dt>hashrate</dt><dd>${escape(format.hashrate(status.hashrate))}${
+      Number(status.measured) > 0
+        ? ` <span class="muted">· measured ${escape(format.hashrate(status.measured))}</span>`
+        : ''
+    }</dd>
     <dt>temperature</dt><dd>${escape(format.temperature(status.temp))}</dd>
     <dt>uptime</dt><dd>${escape(format.duration(status.uptime))}</dd>
     <dt>wallet</dt><dd><code>${escape(format.wallet(status.wallet))}</code></dd>

@@ -213,6 +213,32 @@ test('alerts fire on heat, on a stop and on a return', async () => {
   }
 });
 
+test('a rig mining under its own measurement is reported once', async () => {
+  const fleet = await rig();
+  try {
+    const record = (await (await hello(fleet, { status: { state: 'mining', hashrate: 900, measured: 2000 } })).json(), fleet.store.get(ids.deviceId(fleet.key)));
+    fleet.store.enrol(record.id, 'tg:1');
+
+    const drift = fleet.events.find((event) => event.kind === 'drift');
+    assert.ok(drift, 'a rig at half its measured rate is an alert');
+    assert.match(drift.text, /45%/);
+    assert.match(drift.text, /2\.0 kH\/s/);
+
+    // An alert is an event, not a state: the next check-in says the same thing
+    // and must not say it again.
+    fleet.advance(3000);
+    await (await hello(fleet, { status: { state: 'mining', hashrate: 900, measured: 2000 } })).json();
+    assert.equal(fleet.events.filter((event) => event.kind === 'drift').length, 1);
+
+    // A rig with no measurement, or one that is fine, says nothing.
+    fleet.advance(60_000 * 10);
+    await (await hello(fleet, { status: { state: 'mining', hashrate: 1900, measured: 2000 } })).json();
+    assert.equal(fleet.events.filter((event) => event.kind === 'drift').length, 1);
+  } finally {
+    await fleet.close();
+  }
+});
+
 test('a command result is reported back to the operators', async () => {
   const fleet = await rig();
   try {
