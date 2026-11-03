@@ -86,9 +86,46 @@ npm run check                   # in cấu hình, không mở socket
 npm start
 ```
 
-`fleet/render.yaml` là blueprint cho Render. Gói free sẽ ngủ sau 15 phút không có
-traffic, nên trỏ một uptime monitor miễn phí vào `/healthz` mỗi 5 phút — bot ngủ
-thì không trả lời, nhưng rig vẫn đào và bắt kịp khi bot tỉnh.
+Blueprint ở gốc repo deploy bot, Discord và dashboard thành **một** service. Ba
+sự thật về gói free của Render quyết định hình dạng của cả hệ thống:
+
+| Sự thật | Ý nghĩa ở đây |
+| --- | --- |
+| **750 instance-hours** mỗi workspace mỗi tháng | tháng 31 ngày là 744 giờ, nên chỉ vừa cho **một** service chạy 24/7; hai service sẽ vượt hạn mức và Render treo các service free tới tháng sau |
+| ngủ sau **15 phút** không có traffic vào | rig check-in mỗi phút chính là traffic giữ nó thức; `.github/workflows/keepalive.yml` gọi `/healthz` hai lần mỗi giờ cho lúc vắng |
+| filesystem **ephemeral** | không có gì của fleet được lưu ở đó — xem roster bên dưới |
+
+### Roster: vì sao restart không đổi gì
+
+`FLEET_ROSTER` — một giá trị JSON trong tab *Environment* của Render — ghi tên
+từng rig và (tuỳ chọn) nó phải chạy cái gì:
+
+```json
+{
+  "owner": "tg:123456789",
+  "rigs": {
+    "ZMR-1A2B-3C4D-5E6F": {
+      "label": "basement",
+      "wallet": "46SQL...",
+      "pool": "gulf.moneroocean.stream:10001",
+      "mode": "safe",
+      "maxtemp": 72,
+      "threads": 8
+    }
+  }
+}
+```
+
+Cũng có thể đặt trong `fleet/roster.json`; biến môi trường thắng khi cả hai tồn
+tại. Không có gì trong đó là bí mật — Device ID là công khai, ví là địa chỉ — và
+một rig có tên trong roster là đã được enrol trước cả lần check-in đầu tiên.
+
+Roster là **trạng thái mong muốn, không phải tin nhắn**. Mỗi lần check-in, server
+so roster với những gì rig vừa báo và xếp hàng phần khác biệt: tối đa một lần mỗi
+năm phút cho mỗi rig, không bao giờ hai lần khi một thay đổi đang trên đường, và
+ngay lập tức khi cần. Lệnh trong hàng đợi là tin nhắn có thể không bao giờ tới;
+một mục trong roster là sự thật được kiểm lại một phút sau. Vì thế redeploy,
+restart hay spin-down đều để fleet nguyên chỗ cũ.
 
 Token nằm trong biến môi trường, không bao giờ trong file của repo. Chỉ id của
 bạn được bot trả lời cho đến khi bạn thêm người khác vào `FLEET_ADMIN_IDS`.

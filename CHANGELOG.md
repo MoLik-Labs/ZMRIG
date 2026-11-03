@@ -1,3 +1,57 @@
+# 6.41.0 — a control plane that survives its own host
+
+Render's free plan gives 750 instance hours per workspace per month, one always-on
+service, and a filesystem that is empty after every deploy, restart and spin-down.
+The bot was written for a laptop: it kept the fleet in a JSON file, so every
+restart forgot who owned which rig. That is fixed by moving the fleet into the
+environment, where it never depended on a disk in the first place.
+
+## The roster
+
+`FLEET_ROSTER` is one JSON object naming every rig and, optionally, what it should
+be running:
+
+```json
+{"owner": "tg:123456789",
+ "rigs": {"ZMR-1A2B-3C4D-5E6F": {"label": "basement", "wallet": "46SQL...", "mode": "safe", "maxtemp": 72}}}
+```
+
+It can also live in `fleet/roster.json`; the environment wins when both exist.
+Nothing in it is secret — a Device ID is public and a wallet is an address — and a
+rig listed there is enrolled before it has ever checked in. The roster knows the
+ID and not the key, because the key never leaves the machine, so the first secret
+that hashes to that ID binds the record and every later request is held to it
+exactly as if the rig had enrolled itself in the chat.
+
+## Desired state, not messages
+
+On every check-in the server compares what the roster says a rig should be with
+what the rig says it is, and queues the difference. A queued command is a message
+that may never arrive; a roster entry is a fact that is re-checked a minute from
+now, and the minute after that. So a rig whose config was edited on the box, or
+whose mode change shed threads, is brought back without anybody noticing, and a
+restart of the service changes nothing because nothing was remembered.
+
+The correction is pushed at most once per rig per five minutes (a rig that refuses
+a command reports the old value for ever, and a robot shouting once a minute is
+not a control plane), never while a setup is already in flight, and immediately
+when the roster itself changes.
+
+## One service, and the arithmetic behind it
+
+A 31-day month is 744 hours, so exactly one always-on free service fits inside
+750. The root `render.yaml` therefore deploys the bot, the Discord bot and the
+dashboard as one process, and the pool blueprint moved to `deploy/render-pool.yaml`
+for whoever wants it on a different workspace. `FLEET_STATE` is now documented as
+what it is — a scratch cache — and `.github/workflows/keepalive.yml` asks
+`/healthz` twice an hour, which covers a fleet that is quiet, while a fleet that
+is checking in every minute keeps the service awake by itself.
+
+Tests: fleet **69** (was 59) — three roster shapes, a broken roster reported
+rather than thrown, a correction queued once instead of once a minute, and the
+test that matters: the same fleet, a brand new empty store, still enrolled and
+still reconciled.
+
 # 6.40.1 — a portable build that compiles the portable way
 
 The Render deploy failed with one line naming a source file:

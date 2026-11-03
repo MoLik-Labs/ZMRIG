@@ -14,6 +14,8 @@ const { Releases } = require('./releases');
 const { Telegram } = require('./telegram');
 const { Discord } = require('./discord');
 const format = require('./format');
+const rosterModule = require('./roster');
+const reconcile = require('./reconcile');
 
 function stamp() {
   return new Date().toISOString().replace('T', ' ').slice(0, 19);
@@ -40,6 +42,27 @@ function build(env = process.env) {
   };
 
   const limiter = new gate.RateLimiter(config.rate_limit, config.rate_window);
+
+  // The roster is the fleet written down: it is what makes an enrolment survive
+  // a restart on a host whose filesystem does not. Loaded from
+  // FLEET_ROSTER (JSON in the environment) or fleet/roster.json, applied to the
+  // store now, and re-applied to every check-in by reconcile.run().
+  const roster = rosterModule.load(env, { log, file: require('node:path').join(__dirname, '..', 'roster.json') });
+  const claimed = rosterModule.apply(store, roster, Date.now());
+  if (roster.source) log(`roster   ${roster.rigs.size} rig(s) from ${roster.source}`);
+
+  /** What a check-in has to be reconciled against. Pure function of the roster
+   *  entry and the status the rig just reported. */
+  function onCheckIn(record, stamp) {
+    const entry = roster.rigs.get(record.id);
+    if (!entry) return;
+    const record2 = reconcile.run(store, record, entry, {
+      now: stamp,
+      log,
+      queue_limit: config.queue_limit,
+    });
+    if (record2.queued) log(`queued   ${record.id} ${record2.why}`);
+  }
 
   /** Alerts go to every admin on every configured platform. A rig going offline
    *  is worth one DM per operator, and nothing more clever than that. */
@@ -95,7 +118,7 @@ function build(env = process.env) {
     onCallback: (payload) => reply(commands.press, payload, { store, config }),
   };
 
-  return { config, store, log, platform, handlers, broadcast, onEvent, limiter, releases };
+  return { config, store, log, platform, handlers, broadcast, onEvent, onCheckIn, limiter, releases, roster, claimed };
 }
 
 function start(env = process.env) {
@@ -117,12 +140,16 @@ function start(env = process.env) {
     log: app.log,
     releases: app.releases,
     onEvent: app.onEvent,
+    onCheckIn: app.onCheckIn,
   });
 
   server.listen(config.port, config.bind, () => {
     app.log(`http     ${config.bind}:${config.port}`);
     app.log(`state    ${path.resolve(config.state)}`);
     app.log(`rigs     ${app.store.devices().filter((device) => device.owner).length} enrolled`);
+    if (app.roster.source) {
+      app.log(`roster   ${app.roster.rigs.size} rig(s) from ${app.roster.source}, ${app.claimed.length} record(s) refreshed`);
+    }
     app.log(`admins   ${config.admins.join(' ') || 'none'}`);
     app.log(`interval ${config.interval}s, offline after ${config.offline_after}s`);
     app.log(`web      ${web ? 'enabled at /' : 'off (no FLEET_WEB_PASSWORD)'}`);

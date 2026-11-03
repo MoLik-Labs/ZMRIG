@@ -1,83 +1,66 @@
-# Render blueprint for Ocean Pool.
+# Render blueprint: the control plane — Telegram bot, Discord bot and the web
+# dashboard, in one process.
 #
-# Free web services get one HTTPS port and no raw TCP, so the pool runs in
-# WebSocket-only mode: miners connect with
-#   zmrig -o wss://<service>.onrender.com/stratum -u <address>
+#   Render -> New -> Blueprint -> this repository -> apply
+#   then fill in the variables marked `sync: false` once, and never again.
 #
-# A free instance sleeps after 15 minutes without traffic. Attach a disk (paid
-# plans) or the ledger is lost on every restart -- acceptable while testing,
-# not once real miners are pointed at it.
-
+# Why one service and not two: a free workspace gets **750 instance hours per
+# calendar month**, shared by every free service. A 31-day month is 744 hours,
+# so exactly one always-on service fits and a second one puts the workspace over
+# the limit, at which point Render suspends the free services until the next
+# month. The pool is therefore not part of this blueprint: it is needed only
+# while somebody is actually mining, and it has its own file next to this one
+# (deploy/render-pool.yaml) for whoever wants to run it.
+#
+# Nothing is stored on this host. The filesystem is ephemeral - emptied on every
+# deploy, restart and spin-down - so the fleet's memory is the environment:
+# FLEET_ROSTER says who the rigs are and what they should be running, and every
+# check-in is reconciled against it. A restart changes nothing.
 services:
   - type: web
-    name: ocean-pool
-    runtime: docker
-    dockerfilePath: ./deploy/Dockerfile
-    dockerContext: .
-    plan: free
-    region: frankfurt
-    healthCheckPath: /healthz
-    autoDeploy: true
-    envVars:
-      - key: PORT
-        value: 8080
-      - key: HTTP_PORT
-        value: 8080
-      - key: POOL_FEE_PERCENT
-        value: 1
-      - key: POOL_NAME
-        value: Ocean Pool
-      - key: VERIFY_SHARES
-        value: true
-      # Point this at a node you run: a public node will rate-limit you.
-      - key: DAEMON
-        sync: false
-      # Leave empty to use the address compiled into pool/src/operator.js.
-      - key: OPERATOR_ADDRESS
-        value: ""
-      - key: PAYOUT_MODE
-        value: ledger
-      - key: LOG_LEVEL
-        value: info
-
-  # The documentation site, the download page and the release feed, served by
-  # `serve/`. It is one Node process with no dependencies: the site is built
-  # once at deploy time, the files are read into memory at boot, and every
-  # request after that is a Map lookup.
-  #
-  #   https://<service>.onrender.com/            the documentation
-  #   https://<service>.onrender.com/download    the current images
-  #   https://<service>.onrender.com/iso/v3      permanent link to the newest v3
-  #   https://<service>.onrender.com/iso/v2      ... and v2, and /iso/beta
-  #   https://<service>.onrender.com/api/releases.json
-  #
-  # GitHub Pages keeps serving the same site at /ZMRIG/; this service exists so
-  # the download page can redirect to the newest asset without a redeploy.
-  - type: web
-    name: zmrig-site
+    name: zmrig-fleet
     runtime: node
     plan: free
     region: frankfurt
+    rootDir: fleet
+    # Zero dependencies, so there is nothing to install and nothing to trust.
+    # A YAML value with a colon inside it has to be quoted as a whole; the inner
+    # quotes do not protect it, and the blueprint is rejected at parse time.
+    buildCommand: 'echo "no build: zero dependencies"'
+    startCommand: node src/index.js
     healthCheckPath: /healthz
+    # Every rig checks in once a minute, which is traffic, so the service stays
+    # awake on its own while there is a fleet to serve. See doc/FLEET.md for the
+    # arithmetic and for the keep-alive workflow that covers an empty fleet.
     autoDeploy: true
-    buildCommand: >-
-      npm --prefix site install --no-audit --no-fund &&
-      SITE_BASE_URL=/ SITE_URL="${RENDER_EXTERNAL_URL:-https://zmrig.onrender.com}"
-      SITE_DOWNLOAD_URL="${RENDER_EXTERNAL_URL:-https://zmrig.onrender.com}/download"
-      npm --prefix site run build &&
-      npm --prefix serve run build
-    startCommand: node serve/server.js
+
     envVars:
+      # --- secrets: Render asks for these and never reads them from the repo
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: DISCORD_BOT_TOKEN
+        sync: false
+      - key: FLEET_ADMIN_IDS
+        sync: false
+      - key: DISCORD_ADMIN_IDS
+        sync: false
+      # The dashboard at /. Leave it empty to run the chats only.
+      - key: FLEET_WEB_PASSWORD
+        sync: false
+      # The fleet itself. See fleet/roster.example.json for the shape.
+      - key: FLEET_ROSTER
+        sync: false
+      - key: FLEET_PUBLIC_URL
+        sync: false
+
+      # --- not secret, set here so a deploy is reproducible
+      # A scratch cache, not state: losing it costs one round of "what was this
+      # rig doing", which the next check-in answers.
+      - key: FLEET_STATE
+        value: /tmp/fleet.json
+      - key: FLEET_INTERVAL
+        value: 60
+      - key: FLEET_ALERT_TEMP
+        value: 85
       - key: NODE_VERSION
-        value: "22"
-      - key: SITE_ROOT
-        value: site/build
-      - key: GITHUB_REPO
-        value: MoLik-Labs/ZMRIG
-      # Ten minutes: 60 anonymous API calls an hour, well inside the 60/hour
-      # unauthenticated limit, and short enough that a new release shows up
-      # while somebody is still looking at the page.
-      - key: RELEASES_TTL
-        value: "600000"
-      - key: ZMRIG_VERSION
-        value: "6.40.1"
+        value: 22
