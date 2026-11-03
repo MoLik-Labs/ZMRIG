@@ -241,6 +241,34 @@ threads        auto (đang đo máy)
 threads        8
 ```
 
+### Khi rig không còn giữ nổi con số của chính nó
+
+Một lần đo là một lời hứa về tương lai, và cái máy chỉ đôi khi giữ được lời hứa
+đó: tản nhiệt đầy bụi, một thanh RAM bắt đầu lỗi, một tiến trình nền ai đó để
+chạy. Không cái nào tự lên tiếng, và cả ba đều hiện ra giống nhau — hashrate thấp
+hơn mức chính máy này đã đo.
+
+Vì vậy ảnh lưu kết quả đo ngay cạnh số thread (`MEASURED_HS`, `MEASURED_THREADS`,
+`TUNED_AT`) và so hai số đó mỗi mười lăm phút:
+
+```
+measured      1234 H/s at 4 thread(s), 6 h ago
+```
+
+Quy tắc cố tình dè dặt, vì một lần đo lại không cần thiết tốn hơn phần hashrate
+mà nó đi tìm:
+
+| Điều kiện | Vì sao |
+| --- | --- |
+| lấy hashrate 15 phút, không lấy 10 giây | dựng dataset hay nối lại pool làm cửa sổ ngắn nhảy loạn |
+| thấp hơn 75 % mức đã đo | rig ở 90 % là rig đang có một ngày bình thường |
+| mức đo được ít nhất 250 H/s | máy nhỏ thì hai lần chạy lệch nhau hàng chục phần trăm |
+| cách lần đo trước ít nhất 6 giờ | lúc đo lại, rig chạy sai số thread khoảng 90 giây |
+| vẫn đúng số thread mà lần đo đã chọn | con số do người đặt thì không bao giờ bị xét lại |
+
+Khi cả năm điều kiện đúng, rig ghi lại nó thấy gì và đo lại. `zmrig-os doctor`
+in đúng phép so sánh đó khi bạn muốn xem.
+
 ## Ảnh được build từ gì
 
 | | |

@@ -257,6 +257,34 @@ threads        auto (the machine is being measured)
 threads        8
 ```
 
+### When the rig stops keeping its own number
+
+A measurement is a claim about the future, and a machine only sometimes keeps it:
+a dust-filled heat sink, a stick of RAM that started erroring, a background job
+left running. None of that announces itself, and all of it looks the same — a
+hashrate under the rate this box measured.
+
+The image therefore stores the result next to the thread count (`MEASURED_HS`,
+`MEASURED_THREADS`, `TUNED_AT`) and compares the two every fifteen minutes:
+
+```
+measured      1234 H/s at 4 thread(s), 6 h ago
+```
+
+The rule is conservative, because a needless re-measure costs more than the drift
+it chases:
+
+| Condition | Why |
+| --- | --- |
+| the 15-minute rate, not the 10-second one | a dataset build or a pool reconnect moves the short window |
+| below 75 % of the measured rate | a rig at 90 % is having a normal day |
+| at least 250 H/s measured | on a small rig two runs differ by tens of percent |
+| at least 6 h since the last measurement | a re-measure runs at the wrong count for ~90 s |
+| still the count the measurement chose | a number set by hand is never revisited |
+
+When all five hold, the rig says what it saw and measures again. `zmrig-os doctor`
+reports the same comparison on demand.
+
 ## What it is built from
 
 | | |

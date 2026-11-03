@@ -8,7 +8,7 @@
 
 by **[@nggkhaiz](https://github.com/NggKhaiz)**
 
-[![release](https://img.shields.io/badge/release-6.39.0-f2763f)](CHANGELOG.md)
+[![release](https://img.shields.io/badge/release-6.40.0-f2763f)](CHANGELOG.md)
 [![licence](https://img.shields.io/badge/licence-GPL--3.0-blue)](LICENSE)
 [![dev fee](https://img.shields.io/badge/developer%20fee-1%25%20%C2%B7%20off%20switch-f2763f)](doc/FEE.md)
 [![platform](https://img.shields.io/badge/platform-Linux%20x86--64%20%C2%B7%20macOS%20%C2%B7%20Windows-lightgrey)](#build-from-source)
@@ -552,7 +552,8 @@ checks while two of the rows are wrong.
 | `zmrig/tests/health.sh` | 7 | the watchdog, both directions: an honest pool is not a fault, an all-reject pool is |
 | `tests/oneclick/*.sh` | 70 | plan, config, governor, purge (removes only its own paths), branch switching, `--coin` mapping and the algorithm-name guard |
 | `fleet` `npm test` | 58 | the control plane without a token: Device ID derivation, the store's atomic writes and corrupt-file rescue, enrolment rules, every command's validation and refusals, the HTTP protocol end to end, the Telegram and Discord renderers, configuration that refuses to start half-done, and the dashboard — login and throttling, CSRF refusal, queued actions, escaping, Brotli/`ETag`/`304`, and a GitHub releases call that fails without taking the page down |
-| `tests/upstream/upstream.test.sh` | 17 | what the image is built from, and whether the weekly rebuild has anything to do: the Alpine point release and kernel are read from the mirror's own index, an older base in the published manifest means rebuild, a legacy manifest without one triggers exactly one, an unreachable mirror is reported instead of crashed on |
+| `tests/upstream/upstream.test.sh` | 17 |
+| `tests/lint/no-debug.sh` | 3 | no `set -x` in a boot script, no `console.debug` in the agent, no `--inspect`, no stray `TODO` anywhere this project ships | what the image is built from, and whether the weekly rebuild has anything to do: the Alpine point release and kernel are read from the mirror's own index, an older base in the published manifest means rebuild, a legacy manifest without one triggers exactly one, an unreachable mirror is reported instead of crashed on |
 | `tests/releases/latest-iso.test.sh` | 29 | the download helper against a recorded reply — the GitHub list and the smaller document `serve/` publishes: asset selection by CPU variant, `--beta`, `--json`, `--host`, a checksum that travels with the image, and an API that is down |
 | `serve` `npm test` | 45 | the web host over a real socket: the file table, byte-for-byte negotiation, the 304 path, traversal attempts, HTML escaping of everything GitHub returns (including a `javascript:` asset URL), the three permanent redirects, a release feed that fails, a stale precompressed copy, `q=0` in `Accept-Encoding`, the policy on the only page this process renders, and the process booting and stopping on SIGTERM |
 | `os/tests/fleet.sh` | 26 | the shell agent against that real server: key generation and stability, a wallet applied to `os.conf` and acknowledged, a bad wallet refused with nothing written, stop on a real process, a log request round trip, pacing, and an unreachable server that is not an error |
@@ -560,7 +561,7 @@ checks while two of the rows are wrong.
 | `site` `npm test` | 67 | command builder and its blocked states, calculator arithmetic against hand-computed numbers including break-even, pool table vs `oneclick.sh` and `doc/POOLS.md`, coin matrix and ranking (a missing number is never a zero, no invented pool or price), en/vi key parity and no dead or duplicated message |
 | `tests/docs/pages.sh` | 22 | the published site as Pages serves it: Docusaurus entry point, 26 sidebar pages in both locales, all 2808 local `href`/`src`, both sitemaps, language and theme controls, one localised social card per page, a title/description/lang on every page with no leaked placeholder, old-URL redirects, committed build not stale |
 | `zmrig/tests/thermal.sh` | 10 | the safe mode against a real process and a real pool: cool is not throttled, heat sheds threads, one thread and hot stops hashing, cooling resumes, no sensor changes nothing |
-| `os/tests/control.sh` | 157 | the appliance tool: wallet validation (length, base58 alphabet, prefix), a command line per mode, kernel-command-line overrides, the supervisor waiting for a wallet, an updater that refuses a checksum mismatch, the installer's partition table and its refusals, A/B slot arithmetic and the 1024-byte GRUB environment block, the tuner running before the measurement, a mode change invalidating it, and every version string in the repository agreeing — all with no root, no miner, no disk and no network |
+| `os/tests/control.sh` | 180 | the appliance tool: wallet validation (length, base58 alphabet, prefix), a command line per mode, kernel-command-line overrides, the supervisor waiting for a wallet, an updater that refuses a checksum mismatch, the installer's partition table and its refusals, A/B slot arithmetic and the 1024-byte GRUB environment block, the tuner running before the measurement, a mode change invalidating it, and every version string in the repository agreeing — all with no root, no miner, no disk and no network |
 
 ## Documentation
 

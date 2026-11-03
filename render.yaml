@@ -80,4 +80,4 @@ services:
       - key: RELEASES_TTL
         value: "600000"
       - key: ZMRIG_VERSION
-        value: "6.39.0"
+        value: "6.40.0"

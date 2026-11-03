@@ -79,6 +79,11 @@ jobs:
             os/overlay/usr/local/lib/zmrig/firstboot.sh \
             os/init os/chroot-setup.sh os/make-initramfs.sh os/upstream.sh
 
+      # Nothing shipped still talks to the person who wrote it: no `set -x` in a
+      # boot script, no debug port, no stray TODO in the appliance.
+      - name: No debug leftovers
+        run: bash tests/lint/no-debug.sh
+
       - name: Self-check (files, syntax, exec bits)
         run: bash os/build-iso.sh --self-check
 

@@ -269,6 +269,37 @@ never overwritten; `zmrig-os mode …` clears the measurement, because safe shed
 threads under heat and eco and light start lower, so a count taken in one mode is
 the wrong answer in another.
 
+### When the rig stops keeping its own number
+
+A measurement is a claim about the future, and a machine only sometimes keeps it:
+a heat sink fills with dust, one stick of RAM starts erroring, a background job
+is left running by whoever borrowed the box. None of that announces itself, and
+all of it shows up the same way — as a hashrate under the rate this same machine
+measured.
+
+So the measurement is stored with its result, not just its thread count
+(`MEASURED_THREADS`, `MEASURED_HS`, `TUNED_AT` in `os.conf`), and the supervisor
+compares the two every fifteen minutes:
+
+```
+measured      1234 H/s at 4 thread(s), 6 h ago
+```
+
+The rule is deliberately conservative, because a wrong re-measure costs more than
+the drift it chases:
+
+| Condition | Why |
+| --- | --- |
+| the 15-minute rate, not the 10-second one | a dataset build or a pool reconnect moves the short window |
+| below 75 % of the measured rate | a rig at 90 % is a rig having a normal day |
+| the measurement was at least 250 H/s | on a small rig two runs differ by tens of percent |
+| at least 6 h since the last measurement | a re-measure runs at the wrong count for ~90 s |
+| the count is still the one the measurement chose | a number typed by hand is never revisited |
+
+When all five hold, the rig logs one line saying what it saw and what it
+measured, and runs the measurement again. `zmrig-os doctor` reports the same
+comparison on demand, and `zmrig-os status` always prints it.
+
 ## Configuration
 
 `/etc/zmrig/os.conf` is a `KEY="value"` file; the tool never `source`s it, so a
@@ -282,6 +313,9 @@ config file cannot execute anything as root.
 | `MODE` | `max` | `max`/`balanced`/`eco`/`light` |
 | `ALGO` | `auto` | `auto` advertises every RandomX variant; or pin one |
 | `THREADS` | `auto` | force `-t N` |
+| `AUTO_AUTOTUNE` | `1` | measure the machine and keep watching it |
+| `MEASURED_HS` | — | the rate the measurement recorded; the baseline drift is judged against |
+| `TUNED_AT` | — | when that measurement was taken (epoch seconds) |
 | `DONATE` | `1` | the developer fee, 0–10 |
 | `MSR` | `auto` | `on`/`off`; `auto` uses it only on bare metal as root |
 | `API_PORT` | `0` | `zmrig`'s HTTP API for external monitoring (off by default) |
@@ -413,14 +447,14 @@ building anything:
 ```
 
 ```
-ZMRIG OS 6.39.0
+ZMRIG OS 6.40.0
 
   base               Alpine Linux 3.22.1 (x86_64, OpenRC, musl)
   kernel             linux-lts 6.12.61
   root filesystem    squashfs, zstd level 19, 1 MiB blocks
   bootloader         GRUB, BIOS and UEFI, built with the image
 
-  published: v6.39.0
+  published: v6.40.0
              built on Alpine 3.22.1
              os-beta (rolling beta)
 
@@ -484,8 +518,8 @@ run with `publish=true`, creates or refreshes a release.
 
 It does this:
 
-1. `shellcheck -s error` over every script, then `os/tests/control.sh` (66
-   checks, no root needed).
+1. `shellcheck -s error` over every script, `tests/lint/no-debug.sh`, then
+   `os/tests/control.sh` (180 checks, no root needed).
 2. Builds `x86-64-v3` and `x86-64-v2` in parallel.
 3. Boots the v3 image in QEMU and reads the serial console.
 4. Publishes: pushes to `master` create or refresh the release for the version in

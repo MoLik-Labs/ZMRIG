@@ -37,7 +37,7 @@
 
 set -eu
 
-VERSION="6.39.0"
+VERSION="6.40.0"
 MANIFEST_URL="https://github.com/MoLik-Labs/ZMRIG/releases/latest/download"
 # A full URL wins over the derived one, so the test suite can serve a manifest
 # from a file:// path and a fleet can pin an exact release.
@@ -150,6 +150,12 @@ load_conf() {
     # miner starts immediately and reloads when the measurement finishes.
     AUTO_AUTOTUNE=$(conf_default AUTO_AUTOTUNE "1")
     AUTOTUNED=$(conf_default AUTOTUNED "")
+    # What the measurement actually saw, and when. A number on its own says what
+    # the machine *can* do; keeping the rate next to it is what lets the rig
+    # notice that it no longer does.
+    MEASURED_THREADS=$(conf_default MEASURED_THREADS "")
+    MEASURED_HS=$(conf_default MEASURED_HS "")
+    TUNED_AT=$(conf_default TUNED_AT "")
     # The control plane. Empty means "no fleet", which is the default: nothing
     # here contacts anything until somebody names a server.
     FLEET_URL=$(conf_default FLEET_URL "")
@@ -203,6 +209,9 @@ AUTO_UPDATE="${AUTO_UPDATE:-1}"
 AUTO_IMAGE="${AUTO_IMAGE:-0}"
 AUTO_AUTOTUNE="${AUTO_AUTOTUNE:-1}"
 AUTOTUNED="${AUTOTUNED:-}"
+MEASURED_THREADS="${MEASURED_THREADS:-}"
+MEASURED_HS="${MEASURED_HS:-}"
+TUNED_AT="${TUNED_AT:-}"
 CHANNEL="${CHANNEL}"
 EXTRA_ARGS="${EXTRA_ARGS}"
 FLEET_URL="${FLEET_URL}"
@@ -462,6 +471,67 @@ autotune_due() { # threads, autotuned, enabled
     return 0
 }
 
+# Is the miner running well under the rate this same machine measured? Kept as a
+# pure function of numbers so the test can assert every branch without a miner,
+# a clock or a run loop.
+#
+# The reading is the 15-minute rate from the miner's own log, not the 10-second
+# one: a fresh dataset build, a pool reconnect and a share burst all move the
+# short window, and a measurement taken over that noise costs more hashrate than
+# the drift it was chasing. Below the floor the difference between two runs of
+# the same machine is in the tens of percent, so small rigs are left alone; and
+# a re-measure is allowed at most once per gap, because the usual answer is
+# "the machine is fine" and the measurement itself runs at the wrong count.
+DRIFT_FLOOR=250
+DRIFT_MIN_PCT=75
+DRIFT_GAP=21600
+
+drift_due() { # rate, measured, tuned_at, now, [floor], [min_pct], [gap]
+    local rate="${1:-}" measured="${2:-}" tuned="${3:-}" now="${4:-}"
+    local floor="${5:-$DRIFT_FLOOR}" pct="${6:-$DRIFT_MIN_PCT}" gap="${7:-$DRIFT_GAP}"
+
+    case "$rate" in ''|*[!0-9]*) return 1 ;; esac
+    case "$measured" in ''|*[!0-9]*) return 1 ;; esac
+    case "$tuned" in ''|*[!0-9]*) return 1 ;; esac
+    case "$now" in ''|*[!0-9]*) return 1 ;; esac
+
+    [ "$measured" -ge "$floor" ] || return 1
+    [ "$rate" -gt 0 ] || return 1
+    [ "$((now - tuned))" -ge "$gap" ] || return 1
+    [ "$((rate * 100))" -lt "$((measured * pct))" ] || return 1
+    return 0
+}
+
+# "901.500" + "H/s" -> "901", "1.234" + "kH/s" -> "1234". The miner reports the
+# size of the unit it printed, so the tool never has to guess which one it got.
+to_hs() { # value, unit
+    local value="${1:-}" unit="${2:-H/s}" whole frac="" c digits=0 i=0
+    case "$value" in ''|*[!0-9.]*) return 1 ;; esac
+    whole="${value%%.*}"
+    case "$value" in *.*) frac="${value#*.}" ;; esac
+    [ -n "$whole" ] || whole=0
+    case "$unit" in
+        H/s)  digits=0 ;;
+        kH/s) digits=3 ;;
+        MH/s) digits=6 ;;
+        GH/s) digits=9 ;;
+        TH/s) digits=12 ;;
+        *)    return 1 ;;
+    esac
+    # No substring expansion in POSIX sh, so the decimals are taken one at a
+    # time; this runs once per measurement, not per share.
+    while [ "$i" -lt "$digits" ]; do
+        c=$(printf '%s' "$frac" | cut -c "$((i + 1))")
+        [ -n "$c" ] || c=0
+        whole="${whole}${c}"
+        i=$((i + 1))
+    done
+    # 0.5 MH/s arrives as "0.5": six decimals are owed, and they are zeros.
+    while [ "${#whole}" -gt 1 ] && [ "${whole#0}" != "$whole" ]; do whole="${whole#0}"; done
+    case "$whole" in ''|*[!0-9]*) return 1 ;; esac
+    printf '%s' "$whole"
+}
+
 # Ask the supervisor to start the miner again with whatever is in the config
 # now. It must not be `zmrig-os restart`: that starts a *second* supervisor
 # around the miner the first one is still waiting for.
@@ -491,6 +561,49 @@ rotate_logs() {
     done
 }
 
+# A watcher, not a scheduler: it exists so a machine that was measured once does
+# not spend the next two years quietly below its own number. Dust in a heat sink,
+# a stick of RAM that started erroring, a background job somebody left running --
+# none of them announce themselves, and all of them show up the same way, as a
+# 15-minute rate well under what this box measured on the day it was tuned.
+#
+# One per supervisor: it holds the supervisor's pid and exits with it, so a
+# restart of the service cannot leave a second watcher behind.
+watch_drift() {
+    local supervisor="$1" rate
+
+    while kill -0 "$supervisor" 2>/dev/null; do
+        sleep "${DRIFT_EVERY:-900}"
+        kill -0 "$supervisor" 2>/dev/null || break
+
+        load_conf
+        [ "${AUTO_AUTOTUNE:-1}" = "1" ] || continue
+        [ "$AUTOTUNED" = "1" ] || continue
+
+        # A count somebody typed is that person's decision, in every mode: the
+        # measurement may only revisit a count it chose itself.
+        [ "$THREADS" = "$MEASURED_THREADS" ] || continue
+        [ -n "$MEASURED_HS" ] || continue
+
+        rate=$(last_rate)
+        case "$rate" in ''|*[!0-9]*) continue ;; esac
+        rate="${rate%%.*}"
+
+        if drift_due "$rate" "$MEASURED_HS" "${TUNED_AT:-0}" "$(date +%s)"; then
+            log_os "hashrate ${rate} H/s is below the ${MEASURED_HS} H/s this machine measured; measuring again"
+            "$0" autotune --auto --retune >>"$OSLOG" 2>&1 || true
+        fi
+    done
+}
+
+drift_watching() {
+    [ -f "$RUN/drift.pid" ] || return 1
+    local pid
+    pid=$(cat "$RUN/drift.pid" 2>/dev/null || echo "")
+    [ -n "$pid" ] || return 1
+    kill -0 "$pid" 2>/dev/null
+}
+
 supervise() {
     local bin args rc fails=0 started autotuned_this_boot=0
     bin=$(zmrig_bin)
@@ -501,6 +614,15 @@ supervise() {
     if [ -e "$RUN/nostart" ]; then
         log_os "not starting: zmrig.os.nostart=1 was on the kernel command line"
         return 0
+    fi
+
+    # Armed once, before the first miner starts, so the first reading it can act
+    # on is the one after the measurement itself completed. Its output goes to
+    # the log and its stdin to nowhere: a watcher that inherits the caller's
+    # stdout keeps `zmrig-os run` from returning to whoever started it.
+    if [ "${AUTO_AUTOTUNE:-1}" = "1" ] && ! drift_watching; then
+        watch_drift "$$" </dev/null >>"$OSLOG" 2>&1 &
+        printf '%s\n' "$!" > "$RUN/drift.pid"
     fi
 
     while :; do
@@ -639,7 +761,16 @@ cmd_setup() {
                 die "--max-temp must be 45..95 degrees Celsius"
             ;;
     esac
-    [ -n "$threads" ] && THREADS="$threads"
+    if [ -n "$threads" ]; then
+        THREADS="$threads"
+        # A hand-picked count is not a measurement, and leaving one behind
+        # would have the drift watcher comparing the new count against a rate
+        # the old one produced.
+        AUTOTUNED=""
+        MEASURED_THREADS=""
+        MEASURED_HS=""
+        TUNED_AT=""
+    fi
     [ -n "$donate" ] && DONATE="$donate"
 
     case "$MODE" in
@@ -683,6 +814,9 @@ cmd_mode() {
     # light start lower), so a count measured under the old mode is the wrong
     # answer for the new one: clear the marker and let the supervisor re-measure.
     AUTOTUNED=""
+    MEASURED_THREADS=""
+    MEASURED_HS=""
+    TUNED_AT=""
     save_conf
     say "mode $MODE; $(build_args)"
 
@@ -817,6 +951,18 @@ cmd_status() {
     else
         printf '%-14s %s\n' "threads" "$THREADS"
     fi
+    # What the machine did when it was measured, next to what it does now: the
+    # pair is the only way to see drift without waiting for the watcher to act.
+    if [ -n "$MEASURED_HS" ]; then
+        local age="at some point" h
+        if [ -n "$TUNED_AT" ]; then
+            h=$(( ( $(date +%s) - TUNED_AT ) / 3600 ))
+            # Hours up to two days, then days: "498251 h ago" is a number nobody
+            # reads, and the age is the part that says whether to trust it.
+            if [ "$h" -ge 48 ]; then age="$(( h / 24 )) d ago"; else age="${h} h ago"; fi
+        fi
+        printf '%-14s %s\n' "measured" "${MEASURED_HS} H/s at ${MEASURED_THREADS:-?} thread(s), ${age}"
+    fi
     printf '%-14s %s\n' "wallet"   "$(wallet_short)"
     printf '%-14s %s\n' "pool"     "$POOL"
     printf '%-14s %s\n' "worker"   "$WORKER"
@@ -898,16 +1044,19 @@ cmd_bench() {
 #   zmrig-os autotune                 measure and pin the result
 #   zmrig-os autotune --seconds 20    a longer sample on a noisy machine
 #   zmrig-os autotune --auto          what the supervisor runs on its own
+#   zmrig-os autotune --auto --retune the same, even though a measurement exists
+#                                     (what the drift watcher runs)
 #
 # It tunes the machine *first*. Measuring threads on an untuned box answers the
 # wrong question: a powersave governor, THP off and no huge pages give every
 # candidate the same handicap, and the number it picks is the best of a bad set.
 cmd_autotune() {
-    local seconds="8" auto=0 bin args out best tuned=0
+    local seconds="8" auto=0 retune=0 bin args out best tuned=0 rate unit measured=""
 
     while [ $# -gt 0 ]; do
         case "$1" in
             --auto)         auto=1 ;;
+            --retune)       retune=1 ;;
             --seconds)      seconds="${2:?}"; shift ;;
             --seconds=*)    seconds="${1#*=}" ;;
             ''|*[!0-9]*)    die "unknown option: $1 (try --seconds N or --auto)" ;;
@@ -930,9 +1079,17 @@ cmd_autotune() {
         die "miner binary not found: $bin"
     fi
 
+    # A machine that was measured once and has since fallen off its own number
+    # is the one case --auto must not skip: there is a measurement, and that is
+    # the reason to look again. A count chosen by hand is still never touched,
+    # and the drift watcher checks that before it asks for this.
     if autotune_due "$THREADS" "$AUTOTUNED" "$AUTO_AUTOTUNE"; then
         :
-    elif [ "$auto" = "1" ]; then
+    elif [ "$auto" = "1" ] && [ "$retune" = "0" ]; then
+        return 0
+    elif [ "$retune" = "1" ] && [ "$AUTOTUNED" != "1" ]; then
+        # Nothing to re-measure: the measurement this was meant to revisit is
+        # gone (a mode change did it).
         return 0
     fi
 
@@ -957,7 +1114,19 @@ cmd_autotune() {
         die "autotune printed no thread count"
     fi
 
-    log_os "autotune: ${best} threads (was ${THREADS:-auto})"
+    # The rate the winner produced is the number this machine should keep
+    # producing; keeping it is what turns "measured once" into "still on spec".
+    rate=$(printf '%s\n' "$out" | sed -n 's/^autotune-best-rate=\(.*\)$/\1/p' | tail -1)
+    unit=$(printf '%s\n' "$out" | sed -n 's/^autotune-rate-unit=\(.*\)$/\1/p' | tail -1)
+    if measured=$(to_hs "$rate" "${unit:-H/s}" 2>/dev/null) && [ -n "$measured" ]; then
+        MEASURED_HS="$measured"
+    else
+        MEASURED_HS=""
+    fi
+    MEASURED_THREADS="$best"
+    TUNED_AT=$(date +%s)
+
+    log_os "autotune: ${best} threads (was ${THREADS:-auto})${MEASURED_HS:+, ${MEASURED_HS} H/s}"
     THREADS="$best"
     AUTOTUNED="1"
     save_conf
@@ -986,6 +1155,22 @@ cmd_doctor() {
 
     bin=$(zmrig_bin)
     if [ -x "$bin" ]; then check ok binary "$($bin --version 2>/dev/null | head -1)"; else check fail binary "missing: $bin"; fi
+
+    # The one number on this machine that only makes sense against another
+    # number: today's rate against the one the measurement recorded.
+    if [ -n "$MEASURED_HS" ]; then
+        local now_rate
+        now_rate=$(last_rate)
+        case "$now_rate" in
+            ''|*[!0-9.]*) now_rate=0 ;;
+        esac
+        now_rate="${now_rate%%.*}"
+        if [ "$now_rate" -gt 0 ] && drift_due "$now_rate" "$MEASURED_HS" "${TUNED_AT:-0}" "$(date +%s)" "$DRIFT_FLOOR" "$DRIFT_MIN_PCT" "0"; then
+            check warn hashrate "$now_rate H/s, but this machine measured $MEASURED_HS H/s (it will be measured again)"
+        else
+            check ok hashrate "${now_rate:-?} H/s (measured $MEASURED_HS H/s)"
+        fi
+    fi
 
     if [ -n "$WALLET" ]; then
         if validate_wallet "$WALLET" "$ALGO"; then check ok wallet "$(wallet_short)"; else check fail wallet "invalid for $ALGO"; fi
@@ -1444,6 +1629,9 @@ AUTO_UPDATE="${AUTO_UPDATE:-1}"
 AUTO_IMAGE="${AUTO_IMAGE:-0}"
 AUTO_AUTOTUNE="${AUTO_AUTOTUNE:-1}"
 AUTOTUNED="${AUTOTUNED:-}"
+MEASURED_THREADS="${MEASURED_THREADS:-}"
+MEASURED_HS="${MEASURED_HS:-}"
+TUNED_AT="${TUNED_AT:-}"
 CHANNEL="${CHANNEL}"
 EXTRA_ARGS="${EXTRA_ARGS}"
 FLEET_URL="${FLEET_URL}"

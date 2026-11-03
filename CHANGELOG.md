@@ -1,3 +1,59 @@
+# 6.40.0 — the rig notices when it stops keeping its own number
+
+A measurement is a claim about the future, and a machine only sometimes keeps it.
+A heat sink fills with dust, one stick of RAM starts erroring, somebody leaves a
+background job running on the box. None of that announces itself, and all of it
+looks the same from the outside: a hashrate under the rate the same machine
+measured when it was tuned.
+
+## The measurement is now stored with its result
+
+`zmrig-os autotune` used to keep the thread count and throw the rate away. It now
+writes three more keys next to it — `MEASURED_THREADS`, `MEASURED_HS` and
+`TUNED_AT` — so the rig can answer "is this still what I measured?" instead of
+only "how many threads was I told to use?".
+
+`zmrig-os status` prints the pair, and it is the useful shape of both numbers:
+
+```
+measured      1234 H/s at 4 thread(s), 6 h ago
+hashrate      1231.4 H/s
+```
+
+## It re-measures itself, on a conservative rule
+
+The supervisor watches the two numbers every fifteen minutes. All five of these
+must hold before it acts, because a needless re-measure costs more hashrate than
+the drift it chases:
+
+| Condition | Why |
+| --- | --- |
+| the 15-minute rate, not the 10-second one | a dataset build, a pool reconnect or a burst of shares moves the short window |
+| below 75 % of the measured rate | a rig at 90 % is a rig having a normal day |
+| at least 250 H/s measured | on a small machine two runs of the same box differ by tens of percent |
+| at least 6 h since the last measurement | while it measures, the rig runs at the wrong count for about 90 s |
+| still the count the measurement chose | a number set by hand is that person's decision, in every mode |
+
+When it fires, the rig logs one line — what it saw, what it measured — and runs
+the measurement again through the same reload handshake as 6.39.0, so nothing is
+counted as a crash and nothing reboots. `zmrig-os doctor` reports the same
+comparison on demand, and `zmrig-os autotune --auto --retune` is the manual form.
+
+A count chosen by hand now clears the baseline it replaces, and so does a mode
+change: comparing a rig against a rate the old mode produced would be measuring
+the wrong machine.
+
+## Debug leftovers have a test now
+
+`tests/lint/no-debug.sh` fails on `set -x` in a boot script, `console.debug` in
+the agent, `echo DEBUG`, `dbg!(`, `--inspect` and a stray `TODO`/`FIXME` in
+anything this project ships. The scan found none — which is the point of writing
+it down: `set -x` in a boot script writes every variable, including the wallet,
+to a serial console, and nothing else here would notice.
+
+Tests: control **180** (was 157), lint **3** (new), upstream 17, fleet 26,
+self-check.
+
 # 6.39.0 — the image measures itself, and knows what it is built from
 
 Three things a rig should never need a person for: choosing its own thread count,

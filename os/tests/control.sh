@@ -334,6 +334,78 @@ contains 'AUTOTUNED=""' "$(cat "$ROOTDIR/etc/zmrig/os.conf")" &&
     ok "a mode change clears the measurement, so it is taken again" ||
     bad "a mode change keeps a measurement that no longer applies"
 
+# ------------------------------------------------- hashrate drift and re-measure
+# The measurement is only worth keeping if the rig is still on it. These assert
+# the decision, not the sleep loop: drift_due is a pure function of four
+# numbers, and the thresholds are the ones the watcher uses.
+drift() { ZMRIG_OS_NO_MAIN=1 ZMRIG_OS_ROOT="$ROOTDIR" sh -c '. "$1"; shift; drift_due "$@"' _ "$TOOL" "$@"; }
+
+drift 900 1000 1000 100000 && bad "a rig at 90% of its measurement is measured again" || ok "a rig at 90% of its measurement is left alone"
+drift 600 1000 1000 100000 && ok "a rig at 60% of its measurement is measured again" || bad "a rig at 60% of its measurement is measured again"
+drift 900 1000 1000 10400 && bad "drift is acted on five minutes after a measurement" || ok "drift is not acted on five minutes after a measurement"
+drift 600 1000 1000 100000 250 75 0 && ok "the thresholds are parameters, not magic numbers" || bad "the thresholds are parameters"
+drift 100 120 1000 100000 && bad "a small rig is re-measured over noise" || ok "a small rig is not re-measured over the noise of 20% swings"
+drift 0 1200 0 100000 && bad "a stopped miner looks like drift" || ok "a stopped miner is not drift"
+drift '?' 1200 0 100000 && bad "an unreadable rate looks like drift" || ok "an unreadable rate is not drift"
+drift 600 1000 '' 100000 && bad "a measurement with no timestamp is trusted" || ok "a measurement with no timestamp is not used"
+drift 600 "" 1000 100000 && bad "an empty baseline is compared" || ok "an empty baseline is not compared"
+
+# The miner prints the unit it chose; the tool must not assume H/s.
+hs() { ZMRIG_OS_NO_MAIN=1 ZMRIG_OS_ROOT="$ROOTDIR" sh -c '. "$1"; shift; to_hs "$@"' _ "$TOOL" "$@"; }
+[ "$(hs 901.500 H/s)" = "901" ] && ok "a plain rate is kept as-is" || bad "a plain rate is kept as-is ($(hs 901.500 H/s))"
+[ "$(hs 1.234 kH/s)" = "1234" ] && ok "kH/s becomes H/s" || bad "kH/s becomes H/s ($(hs 1.234 kH/s))"
+[ "$(hs 2.5 MH/s)" = "2500000" ] && ok "a short mantissa is padded, not shifted" || bad "a short mantissa is padded ($(hs 2.5 MH/s))"
+hs 900 bogus >/dev/null 2>&1 && bad "an unknown unit is accepted" || ok "an unknown unit is refused"
+
+# The rate and the number have to be written by the command that writes the count.
+cat > "$ROOTDIR/usr/local/bin/zmrig" <<'EOF'
+#!/bin/sh
+printf '       4    1.234 kH/s   best so far\n'
+printf 'autotune-best-threads=4\n'
+printf 'autotune-best-rate=1.234\n'
+printf 'autotune-rate-unit=kH/s\n'
+EOF
+chmod +x "$ROOTDIR/usr/local/bin/zmrig"
+"$TOOL" setup --wallet "$WALLET" >/dev/null 2>&1
+expect_ok "autotune runs with a unit-carrying miner" "$TOOL" autotune 1
+conf=$(cat "$ROOTDIR/etc/zmrig/os.conf")
+contains 'MEASURED_HS="1234"' "$conf" && ok "the measured rate is recorded in H/s" || bad "the measured rate is recorded ($conf)"
+contains 'MEASURED_THREADS="4"' "$conf" && ok "and the count it belongs to" || bad "and the count it belongs to"
+contains 'TUNED_AT=' "$conf" && ok "and when it was taken" || bad "and when it was taken"
+
+out=$("$TOOL" status 2>&1)
+contains "measured" "$out" && contains "1234 H/s" "$out" && ok "status shows the measurement next to the live rate" || bad "status shows the measurement"
+
+# Reloading the miner is the only way a new measurement takes effect, and only a
+# drift re-measure may revisit an existing one.
+cat > "$ROOTDIR/usr/local/bin/zmrig" <<'EOF'
+#!/bin/sh
+printf 'autotune-best-threads=2\n'
+printf 'autotune-best-rate=600.0\n'
+printf 'autotune-rate-unit=H/s\n'
+EOF
+chmod +x "$ROOTDIR/usr/local/bin/zmrig"
+"$TOOL" autotune --auto >/dev/null 2>&1
+contains 'MEASURED_HS="1234"' "$(cat "$ROOTDIR/etc/zmrig/os.conf")" &&
+    ok "--auto leaves an existing measurement alone" || bad "--auto overwrote an existing measurement"
+"$TOOL" autotune --auto --retune >/dev/null 2>&1
+contains 'MEASURED_HS="600"' "$(cat "$ROOTDIR/etc/zmrig/os.conf")" &&
+    ok "--auto --retune measures again and records the new rate" || bad "--auto --retune did not measure again"
+
+# ... and with nothing to re-measure, it does nothing at all.
+printf 'THREADS="4"\nAUTOTUNED=""\nWALLET="%s"\n' "$WALLET" > "$ROOTDIR/etc/zmrig/os.conf"
+expect_ok "--auto --retune with no measurement is a no-op" "$TOOL" autotune --auto --retune
+contains 'AUTOTUNED=""' "$(cat "$ROOTDIR/etc/zmrig/os.conf")" &&
+    ok "and it does not invent one" || bad "and it does not invent one"
+
+# A count somebody typed is never the business of the watcher, so it must not
+# carry a baseline either.
+printf 'THREADS="auto"\nAUTOTUNED="1"\nMEASURED_THREADS="4"\nMEASURED_HS="1234"\nTUNED_AT="1000"\nWALLET="%s"\n' "$WALLET" > "$ROOTDIR/etc/zmrig/os.conf"
+"$TOOL" setup --wallet "$WALLET" --threads 6 >/dev/null 2>&1
+conf=$(cat "$ROOTDIR/etc/zmrig/os.conf")
+contains 'THREADS="6"' "$conf" && contains 'MEASURED_HS=""' "$conf" && contains 'AUTOTUNED=""' "$conf" &&
+    ok "a hand-picked count clears the measurement it replaced" || bad "a hand-picked count kept a stale measurement"
+
 # `zmrig-os version` prints the base the image was built from.
 mkdir -p "$ROOTDIR/etc/zmrig"
 printf 'alpine 3.22.1\nkernel linux-lts\nsquashfs zstd-19\ninitramfs zst\n' > "$ROOTDIR/etc/zmrig/base"
