@@ -5,11 +5,17 @@
 # actually live. Writes /tmp/initramfs.cpio.gz; the host script copies it into
 # the ISO tree next to the kernel.
 #
-# Arguments: make-initramfs.sh <init-script> <output-cpio-gz>
+# Arguments: make-initramfs.sh <init-script> <output> [codec]
+#
+# `codec` is `zst` when the kernel's own config says CONFIG_RD_ZSTD=y and the
+# zstd binary is in the chroot, `gz` otherwise. build-iso.sh reads that config;
+# this script does not guess. A ~25 % smaller initramfs is decompressed at every
+# boot of every rig, so it is worth the two lines.
 set -eu
 
 INIT_SCRIPT="${1:?path to the init script}"
 OUT="${2:?path to the output archive}"
+CODEC="${3:-gz}"
 
 export PATH=/sbin:/bin:/usr/sbin:/usr/bin
 
@@ -105,6 +111,19 @@ EOF
 cd "$STAGE"
 # busybox cpio has no --null; nothing in this tree has a space in its name, and
 # every file is named by this script.
-find . | cpio -o -H newc 2>/dev/null | gzip -9 > "$OUT"
+case "$CODEC" in
+    zst)
+        if command -v zstd >/dev/null 2>&1; then
+            # The kernel autodetects by magic bytes, so no header work is needed.
+            find . | cpio -o -H newc 2>/dev/null | zstd -19 -T0 -q -o "$OUT"
+        else
+            printf 'warning: zstd requested but not installed; falling back to gzip\n' >&2
+            find . | cpio -o -H newc 2>/dev/null | gzip -9 > "$OUT"
+        fi
+        ;;
+    *)
+        find . | cpio -o -H newc 2>/dev/null | gzip -9 > "$OUT"
+        ;;
+esac
 
 printf 'initramfs: %s (%s)\n' "$OUT" "$(du -h "$OUT" | cut -f1)"

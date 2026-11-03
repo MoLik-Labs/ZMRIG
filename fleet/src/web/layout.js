@@ -3,7 +3,7 @@
 
 'use strict';
 
-const VERSION = '6.38.0';
+const VERSION = '6.39.0';
 
 const ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 

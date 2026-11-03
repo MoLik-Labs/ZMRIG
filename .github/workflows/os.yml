@@ -77,7 +77,7 @@ jobs:
           shellcheck -s sh -S error \
             os/overlay/usr/local/bin/zmrig-os \
             os/overlay/usr/local/lib/zmrig/firstboot.sh \
-            os/init os/chroot-setup.sh os/make-initramfs.sh
+            os/init os/chroot-setup.sh os/make-initramfs.sh os/upstream.sh
 
       - name: Self-check (files, syntax, exec bits)
         run: bash os/build-iso.sh --self-check
@@ -90,9 +90,48 @@ jobs:
       - name: Fleet agent (enrol, configure, report)
         run: bash os/tests/fleet.sh
 
+      # What the image is built from, and whether the weekly rebuild has anything
+      # to do. Fixtures, no network, same script the scheduled job runs.
+      - name: Upstream and the base
+        run: bash tests/upstream/upstream.test.sh
+
+  # Does the weekly rebuild have anything to do? The image resolves Alpine's
+  # `latest-stable`, so a new point release upstream is a new image - but a
+  # Monday that finds nothing is 15 minutes of ISO builds and 300 MB of upload
+  # for an identical file. A push always builds; only the schedule asks.
+  upstream:
+    name: What the image is built from
+    needs: control
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Report the base
+        run: sh os/upstream.sh
+
+      - name: Would a rebuild change anything?
+        id: check
+        run: |
+          if sh os/upstream.sh --check; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=No rebuild::upstream is on the same Alpine as the published image"
+          fi
+
   iso:
     name: ISO ${{ matrix.arch }}
-    needs: control
+    needs: [control, upstream]
+    # A scheduled run goes ahead only when upstream moved. Everything else - a
+    # push, a tag, a pull request, a manual run - builds unconditionally.
+    if: |
+      always() &&
+      needs.control.result == 'success' &&
+      (github.event_name != 'schedule' || needs.upstream.outputs.changed == 'true')
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     strategy:
@@ -212,6 +251,8 @@ jobs:
     # with publish=true ever reached this job, so an ordinary merge built an
     # image, uploaded an artifact that expires in 14 days, and published nothing.
     if: |
+      always() &&
+      needs.iso.result == 'success' &&
       github.event_name != 'pull_request' && (
         (github.event_name == 'workflow_dispatch' && inputs.publish) ||
         startsWith(github.ref, 'refs/tags/v') ||

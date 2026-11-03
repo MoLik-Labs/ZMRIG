@@ -1,0 +1,11 @@
+[
+  {"tag_name": "v6.38.0", "prerelease": false, "draft": false,
+   "published_at": "2026-10-30T10:00:00Z",
+   "assets": [
+     {"name": "zmrig-os-6.38.0-x86-64-v3.iso", "browser_download_url": "https://example.test/a.iso"},
+     {"name": "zmrig-os-stable-x86-64-v3.json", "browser_download_url": "https://example.test/m.json"}
+   ]},
+  {"tag_name": "os-beta", "prerelease": true, "draft": false,
+   "published_at": "2026-11-01T10:00:00Z",
+   "assets": [{"name": "zmrig-os-beta-x86-64-v3.json", "browser_download_url": "https://example.test/b.json"}]}
+]

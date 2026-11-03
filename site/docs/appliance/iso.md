@@ -243,6 +243,35 @@ zmrig-os autotune 8     # 8 s per candidate, winning count pinned in the config
 ```
 
 The result is written to `os.conf`; `THREADS="auto"` returns to the heuristic.
+It tunes the machine first — huge pages, THP, governor — because measuring an
+untuned box answers the wrong question.
+
+**It also happens on its own.** On a rig that has never been measured, the miner
+starts immediately and, ninety seconds later, the supervisor measures the machine
+while it mines. The answer is written to the config and the miner reloads once.
+No idle boot, no reboot, and the reload is not counted as a crash. `AUTO_AUTOTUNE=0`
+turns it off, and a thread count you set by hand is never overwritten:
+
+```
+threads        auto (the machine is being measured)
+threads        8
+```
+
+## What it is built from
+
+| | |
+| --- | --- |
+| base | Alpine Linux `latest-stable` — `3.22.x` today — musl, OpenRC |
+| kernel | `linux-lts` (`linux-virt` for a VM) |
+| root filesystem | squashfs, zstd level 19, 1 MiB blocks, read-only |
+| initramfs | busybox + ~30 modules, zstd when the kernel's config says it can unpack it, gzip otherwise |
+| boot | GRUB, BIOS and UEFI, both built with the image |
+
+The image writes that table to `/etc/zmrig/base`, and `zmrig-os version` prints
+it, so a bug report carries its own base. `./os/upstream.sh` prints the same from
+the source, and `--check` answers whether a rebuild would change anything — the
+Alpine mirror serves `latest-stable`, so the weekly build compares it with the
+`alpine` field of the last published manifest instead of rebuilding to be sure.
 
 ## Keeping the settings
 
@@ -327,6 +356,15 @@ change, and every release keeps its ISO. The workflow also runs on pull requests
 that touch `os/`, so a broken image fails before it is merged. The build also publishes the manifest
 `zmrig-os update` consumes, so an image in the field can move forward without
 being rewritten.
+
+Five steps, and every one of them is a build step rather than a person
+remembering: a push builds and boots both architectures in QEMU; `master`
+publishes `v<version>` and `BETA` publishes the rolling `os-beta`, replacing
+assets in place so a version's link never rots; a Monday run asks
+`os/upstream.sh --check` whether Alpine moved and skips the build if it did not;
+the job then fetches every asset over HTTPS and rewrites the notes with the
+links; and each rig's daily job applies the miner, or the whole image into the
+spare A/B slot with `AUTO_IMAGE=1`.
 
 ## What it is not
 

@@ -1,0 +1,9 @@
+{
+  "product": "zmrig-os",
+  "channel": "stable",
+  "version": "6.37.0",
+  "arch": "x86-64-v3",
+  "kernel": "linux-lts",
+  "alpine": "3.21.3",
+  "squashfs": "zstd-15"
+}

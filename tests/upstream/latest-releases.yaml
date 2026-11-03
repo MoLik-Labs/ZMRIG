@@ -1,0 +1,10 @@
+# The shape Alpine publishes at /latest-stable/releases/x86_64/.
+releases:
+  - name: 3.22.1
+    file: alpine-minirootfs-3.22.1-x86_64.tar.gz
+    sha256: 0f5a3b1c8d2e4f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8
+    size: 3400000
+  - name: 3.22.1
+    file: alpine-virt-3.22.1-x86_64.iso
+    sha256: 11ee22ff33aa44bb55cc66dd77ee88ff99aa00bb11cc22dd33ee44ff55aa66bb
+    size: 60000000

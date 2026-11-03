@@ -1,3 +1,93 @@
+# 6.39.0 — the image measures itself, and knows what it is built from
+
+Three things a rig should never need a person for: choosing its own thread count,
+telling you which base it came from, and staying on the newest image without
+anybody remembering to rebuild it.
+
+## It tunes itself, while it mines
+
+On a rig that has never been measured, with `THREADS="auto"` and `AUTO_AUTOTUNE=1`
+(the default), the supervisor starts the miner immediately and ninety seconds
+later runs the measurement in the background. The winner is written to
+`os.conf` and the miner reloads — one restart, no reboot, and the rig was never
+idle waiting for a benchmark.
+
+Three details that make this safe rather than clever:
+
+* the machine is **tuned before it is measured** (huge pages, THP, governor,
+  swappiness). A benchmark on an untuned box gives every candidate the same
+  handicap and the number it picks is the best of a bad set;
+* the reload is a handshake (`$RUN/reload`), not `zmrig-os restart`. Restarting
+  would start a *second* supervisor around a miner the first one is still
+  waiting for, and the reload is not counted as a crash, so a healthy rig is not
+  walked towards the five-failures-then-reboot limit by its own tuning;
+* `zmrig-os mode …` clears the measurement, because `safe` sheds threads under
+  heat and `eco`/`light` start lower — a count taken in one mode is the wrong
+  answer in another. A count set by hand is never overwritten, and
+  `AUTO_AUTOTUNE=0` turns the whole thing off.
+
+`zmrig-os status` says where the number came from: `auto`, `auto (the machine is
+being measured)`, or the number.
+
+## Which base is this?
+
+Alpine Linux `latest-stable`, `linux-lts`, squashfs at zstd level 19, a
+busybox initramfs. That is the answer, and it now lives in three places instead
+of one of them being somebody's memory:
+
+* the build writes it into the image at `/etc/zmrig/base`, and `zmrig-os version`
+  prints it — a bug report carries its own base;
+* the release manifest carries `"alpine"` and `"squashfs"`, so the published
+  image says what it was built on;
+* `./os/upstream.sh` prints the same from the source, next to what each channel
+  published.
+
+`latest-stable` is deliberate: a pin means the image stops taking security fixes
+the day nobody is looking. The cost of that is the opposite question, and
+`os/upstream.sh --check` answers it by comparing the Alpine release the mirror
+serves today with the `alpine` field of the last published manifest — exit 0 when
+a rebuild would change something. The weekly build now runs that check first and
+skips both architectures when nothing moved, instead of producing an identical
+158 MB file every Monday.
+
+## Smaller, and faster to unpack
+
+* **initramfs**: zstd instead of gzip, but only when the kernel's own
+  `/boot/config-*` says `CONFIG_RD_ZSTD=y` — read from the package the image is
+  built with, not assumed, with gzip as the fallback. The kernel finds the
+  archive by magic bytes, so the installer and the smoke test look for either
+  name.
+* **root filesystem**: zstd level 19 instead of the default 15. Decompression
+  speed is the same at every zstd level; only the build takes longer.
+
+Neither is a measured claim here: this sandbox has no `mksquashfs`, no
+`xorriso` and no root, so the ISO size and boot time for 6.39.0 are whatever the
+CI job reports. What is asserted locally is the decision itself — the codec comes
+from the kernel config, and `grub.cfg` names the file the build wrote.
+
+## Automation
+
+* the scheduled build asks `os/upstream.sh --check` and skips when upstream has
+  not moved;
+* `publish` now requires the ISO job to have actually succeeded, so a skipped
+  build cannot reach the upload step with an empty `dist/`;
+* the control-tool tests assert that every version string in the repository
+  agrees. They found one that did not: `zmrig-os` still reported 6.37.0 while the
+  miner said 6.38.0, which is exactly the drift that makes an updater offer an
+  update a rig already has.
+
+## Measured
+
+| | |
+| --- | ---: |
+| `os/tests/control.sh` | 157 passed (was 141) |
+| `tests/upstream/upstream.test.sh` | 17 passed (new) |
+| `os/build-iso.sh --self-check` | passed |
+| `fleet` `npm test` | 58 passed |
+| `serve` `npm test` | 45 passed |
+| `site` `npm test` | 67 passed |
+| `tests/docs/links.sh` / `pages.sh` / `identity.sh` | 99 / 22 / 25 |
+
 # 6.38.0 — a web host that serves the docs and the downloads, and releases that are links
 
 Two conveniences that were missing from 6.37.0: the site and the images now live

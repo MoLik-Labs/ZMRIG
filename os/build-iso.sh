@@ -134,6 +134,29 @@ size_report() { # rootfs_dir squashfs
     return 0
 }
 
+# Can this kernel unpack a zstd initramfs? Alpine ships the config it was built
+# with in /boot, so the answer is a grep rather than an assumption, and the
+# answer decides a file name and one command. `gz` is the fallback for a kernel
+# package that does not ship its config at all - an unverifiable yes is not a
+# good enough reason to make an image that might not boot.
+initramfs_codec() { # rootfs_dir -> zst | gz
+    local rootfs="$1" config rc=1
+
+    for config in "$rootfs"/boot/config-* "$rootfs"/boot/config; do
+        [ -f "$config" ] || continue
+        if grep -q '^CONFIG_RD_ZSTD=y' "$config"; then rc=0; break; fi
+    done
+
+    if [ "$rc" != "0" ]; then printf 'gz'; return 0; fi
+    # The config says the kernel can do it; the chroot still has to have the
+    # tool that produces it.
+    if [ -x "$rootfs/usr/bin/zstd" ] || [ -x "$rootfs/bin/zstd" ]; then
+        printf 'zst'
+    else
+        printf 'gz'
+    fi
+}
+
 plan() {
     cat <<EOF
 ZMRIG OS ${VERSION} (${ARCH_LEVEL}, channel ${CHANNEL}, kernel ${KERNEL_PKG})
@@ -144,10 +167,10 @@ ZMRIG OS ${VERSION} (${ARCH_LEVEL}, channel ${CHANNEL}, kernel ${KERNEL_PKG})
   1. fetch Alpine ${ALPINE_VER} x86_64 minirootfs into ${CACHE}
   2. build zmrig: zmrig/build.sh --static --arch=${ARCH_LEVEL}
   3. chroot: apk add alpine-base ${KERNEL_PKG} openrc e2fsprogs util-linux curl
-            ca-certificates chrony openssh pciutils ifupdown-ng dhcpcd
+            ca-certificates chrony openssh pciutils ifupdown-ng dhcpcd zstd
   4. overlay: /usr/local/bin/zmrig{,-os}, /usr/local/lib/zmrig/tune-linux.sh,
      /etc/init.d/zmrig{,-firstboot}, /etc/sysctl.d/99-zmrig.conf, sshd (keys only)
-  5. squashfs: mksquashfs rootfs -comp zstd -b 1M -all-root
+  5. squashfs: mksquashfs rootfs -comp zstd -Xcompression-level ${SQUASHFS_LEVEL:-19} -b 1M
   6. initramfs: busybox + the 30 modules needed to find the media
   7. ISO: GRUB BIOS + UEFI, five boot entries (max/balanced/eco/light/debug)
   8. checksums + ${ISO_NAME}.iso.json manifest
@@ -208,6 +231,29 @@ if [ "$SELF_CHECK" = "1" ]; then
         printf '  ok    mounts are torn down before mksquashfs\n'
     else
         printf '  BAD   mksquashfs would run with /proc, /sys or /dev still mounted\n'
+        fail=1
+    fi
+
+    # grub.cfg and the build have to agree on the initramfs name. They are two
+    # places in the same file, which is exactly how they drift: the build wrote
+    # initramfs.gz and the menu asked for it by name, so a codec change would
+    # have shipped an image whose every boot entry pointed at a missing file.
+    if grep -q 'initrd /boot/initramfs\.\${INITRAMFS_EXT}' "${HERE}/build-iso.sh" &&
+        ! grep -q 'initrd /boot/initramfs\.gz' "${HERE}/build-iso.sh"; then
+        printf '  ok    every boot entry asks for the initramfs the build wrote\n'
+    else
+        printf '  BAD   grub.cfg names an initramfs the build may not write\n'
+        fail=1
+    fi
+
+    # The initramfs codec is a decision about somebody else's kernel. If the
+    # probe is removed, the build silently promises zstd to a kernel that may
+    # not have it.
+    if grep -q '^initramfs_codec()' "${HERE}/build-iso.sh" &&
+        grep -q 'CONFIG_RD_ZSTD=y' "${HERE}/build-iso.sh"; then
+        printf '  ok    the initramfs codec is read from the kernel config\n'
+    else
+        printf '  BAD   the initramfs codec is assumed, not checked\n'
         fail=1
     fi
 
@@ -301,6 +347,12 @@ if [ ! -s "$ROOTFS_TAR" ]; then
     file=$(printf '%s\n' "$listing" | sed -n 's/^ *file: *\(alpine-minirootfs-.*x86_64\.tar\.gz\)$/\1/p' | head -1)
     [ -n "$file" ] || die "no minirootfs in the Alpine release listing"
 
+    # The exact point release, recorded in the manifest: "built on 3.22" is a
+    # fact a bug report can use, and it is what lets os/upstream.sh tell the
+    # Monday rebuild whether anything upstream actually moved.
+    ALPINE_RESOLVED=$(printf '%s\n' "$file" | sed -n 's/^alpine-minirootfs-\([0-9][0-9.]*\)-x86_64\.tar\.gz$/\1/p')
+    [ -n "$ALPINE_RESOLVED" ] || ALPINE_RESOLVED="$ALPINE_VER"
+
     say "downloading ${file}"
     curl -fsSL --retry 3 --max-time 300 \
         -o "${ROOTFS_TAR}.part" "${ALPINE_MIRROR}/${ALPINE_VER}/releases/x86_64/${file}" ||
@@ -308,6 +360,9 @@ if [ ! -s "$ROOTFS_TAR" ]; then
     mv "${ROOTFS_TAR}.part" "$ROOTFS_TAR"
 else
     say "cached ${ROOTFS_TAR}"
+    # A cached tarball still knows which release it is.
+    ALPINE_RESOLVED=$(basename "$ROOTFS_TAR" | sed -n 's/^alpine-minirootfs-\([0-9][0-9.]*\)-x86_64\.tar\.gz$/\1/p')
+    ALPINE_RESOLVED="${ALPINE_RESOLVED:-$ALPINE_VER}"
 fi
 
 step "unpacking the root filesystem"
@@ -404,10 +459,34 @@ cp "${HERE}/init" "${ROOTFS}/tmp/init"
 cp "${HERE}/make-initramfs.sh" "${ROOTFS}/tmp/make-initramfs.sh"
 chmod 755 "${ROOTFS}/tmp/init" "${ROOTFS}/tmp/make-initramfs.sh"
 
-chroot "$ROOTFS" /bin/sh /tmp/make-initramfs.sh /tmp/init /tmp/initramfs.cpio.gz ||
+# Which compressor the kernel can unpack is a fact in its own config file, which
+# Alpine ships in /boot, so ask it instead of assuming. zstd is ~25 % smaller
+# than gzip and decompresses faster; if the config does not say
+# `CONFIG_RD_ZSTD=y` (or the zstd binary is missing from the chroot), gzip is
+# still correct and this stays a one-line decision instead of a broken image.
+INITRAMFS_CODEC=$(initramfs_codec "$ROOTFS")
+
+chroot "$ROOTFS" /bin/sh /tmp/make-initramfs.sh /tmp/init "/tmp/initramfs.cpio.${INITRAMFS_CODEC:-gz}" \
+    "${INITRAMFS_CODEC:-gz}" ||
     die "the initramfs build failed"
-cp "${ROOTFS}/tmp/initramfs.cpio.gz" "${ISODIR}/boot/initramfs.gz"
-say "initramfs.gz: $(du -h "${ISODIR}/boot/initramfs.gz" | cut -f1)"
+# The kernel finds the initrd by the `initrd` line in grub.cfg, not by the file
+# name, so the name here is for the person reading the image.
+INITRAMFS_EXT="gz"
+[ "$INITRAMFS_CODEC" = "zst" ] && INITRAMFS_EXT="zst"
+cp "${ROOTFS}/tmp/initramfs.cpio.${INITRAMFS_EXT}" "${ISODIR}/boot/initramfs.${INITRAMFS_EXT}"
+rm -f "${ISODIR}/boot/initramfs.gz"
+say "initramfs.${INITRAMFS_EXT}: $(du -h "${ISODIR}/boot/initramfs.${INITRAMFS_EXT}" | cut -f1) (${INITRAMFS_CODEC})"
+
+# What this image is built from, on the image itself. "Which Alpine is this?"
+# is a question a bug report asks, and the answer should not involve anybody
+# remembering the week it was built. Written here rather than with the rest of
+# the overlay because the initramfs codec is only known once it has been built.
+{
+    printf 'alpine %s\n' "${ALPINE_RESOLVED:-$ALPINE_VER}"
+    printf 'kernel %s\n' "${KERNEL_PKG}"
+    printf 'squashfs zstd-%s\n' "${SQUASHFS_LEVEL:-19}"
+    printf 'initramfs %s\n' "${INITRAMFS_EXT}"
+} > "${ROOTFS}/etc/zmrig/base"
 
 KERNEL_IMG=$(find "${ROOTFS}/boot" -maxdepth 1 -name 'vmlinuz*' | sort | head -1)
 [ -n "$KERNEL_IMG" ] || die "no kernel in ${ROOTFS}/boot (package ${KERNEL_PKG}?)"
@@ -441,16 +520,26 @@ step "building rootfs.squashfs"
 # zstd is the smallest-and-fastest of the compressors squashfs-tools supports
 # here; xz compresses a little better and costs seconds of unpacking on every
 # boot of every rig.
+#
+# Level 19 rather than the default 15: on this image it is a few megabytes off
+# the download for build time nobody watches, and zstd decompression speed is
+# the same at every level (that is the whole point of the format). The level is
+# probed, because squashfs-tools before 4.4 has no `-Xcompression-level`.
 rm -f "${ISODIR}/zmrig/rootfs.squashfs"
-if mksquashfs -help 2>&1 | grep -q -- '-comp'; then
-    timeout 900 mksquashfs "$ROOTFS" "${ISODIR}/zmrig/rootfs.squashfs" \
+SQUASHFS_LEVEL="${SQUASHFS_LEVEL:-19}"
+if mksquashfs -help 2>&1 | grep -q -- '-Xcompression-level' && [ "${SQUASHFS_LEVEL}" != "0" ]; then
+    timeout 1800 mksquashfs "$ROOTFS" "${ISODIR}/zmrig/rootfs.squashfs" \
+        -noappend -no-progress -all-root -b 1M -comp zstd -Xcompression-level "$SQUASHFS_LEVEL" >/dev/null ||
+        die "mksquashfs failed or timed out after 1800 s"
+elif mksquashfs -help 2>&1 | grep -q -- '-comp'; then
+    timeout 1800 mksquashfs "$ROOTFS" "${ISODIR}/zmrig/rootfs.squashfs" \
         -noappend -no-progress -all-root -b 1M -comp zstd >/dev/null ||
-        timeout 900 mksquashfs "$ROOTFS" "${ISODIR}/zmrig/rootfs.squashfs" \
+        timeout 1800 mksquashfs "$ROOTFS" "${ISODIR}/zmrig/rootfs.squashfs" \
             -noappend -no-progress -all-root -b 1M >/dev/null ||
-        die "mksquashfs failed or timed out after 900 s"
+        die "mksquashfs failed or timed out after 1800 s"
 else
-    timeout 900 mksquashfs "$ROOTFS" "${ISODIR}/zmrig/rootfs.squashfs" -noappend -no-progress >/dev/null ||
-        die "mksquashfs failed or timed out after 900 s"
+    timeout 1800 mksquashfs "$ROOTFS" "${ISODIR}/zmrig/rootfs.squashfs" -noappend -no-progress >/dev/null ||
+        die "mksquashfs failed or timed out after 1800 s"
 fi
 say "rootfs.squashfs: $(du -h "${ISODIR}/zmrig/rootfs.squashfs" | cut -f1)"
 
@@ -544,27 +633,27 @@ set zmrig_params="quiet loglevel=3 nowatchdog console=tty0 console=ttyS0,115200"
 
 menuentry "ZMRIG OS ${VERSION} - max hashrate" {
     linux /boot/vmlinuz \$zmrig_params zmrig.os.mode=max transparent_hugepage=always
-    initrd /boot/initramfs.gz
+    initrd /boot/initramfs.${INITRAMFS_EXT}
 }
 
 menuentry "ZMRIG OS ${VERSION} - balanced (one core free)" {
     linux /boot/vmlinuz \$zmrig_params zmrig.os.mode=balanced transparent_hugepage=always
-    initrd /boot/initramfs.gz
+    initrd /boot/initramfs.${INITRAMFS_EXT}
 }
 
 menuentry "ZMRIG OS ${VERSION} - eco (half the cores, max per watt)" {
     linux /boot/vmlinuz \$zmrig_params zmrig.os.mode=eco transparent_hugepage=madvise
-    initrd /boot/initramfs.gz
+    initrd /boot/initramfs.${INITRAMFS_EXT}
 }
 
 menuentry "ZMRIG OS ${VERSION} - light (512 MB RAM, no dataset)" {
     linux /boot/vmlinuz \$zmrig_params zmrig.os.mode=light zmrig.os.hugepages=0 transparent_hugepage=always
-    initrd /boot/initramfs.gz
+    initrd /boot/initramfs.${INITRAMFS_EXT}
 }
 
 menuentry "ZMRIG OS ${VERSION} - safe (never above 72 C, one core free)" {
     linux /boot/vmlinuz \$zmrig_params zmrig.os.mode=safe zmrig.os.maxtemp=72 transparent_hugepage=madvise
-    initrd /boot/initramfs.gz
+    initrd /boot/initramfs.${INITRAMFS_EXT}
 }
 
 # The CPU mitigations cost real hashrate on recent silicon and protect against
@@ -573,17 +662,17 @@ menuentry "ZMRIG OS ${VERSION} - safe (never above 72 C, one core free)" {
 # it is offered as a menu entry, never as the default.
 menuentry "ZMRIG OS ${VERSION} - max hashrate (CPU mitigations off)" {
     linux /boot/vmlinuz \$zmrig_params zmrig.os.mode=max transparent_hugepage=always mitigations=off
-    initrd /boot/initramfs.gz
+    initrd /boot/initramfs.${INITRAMFS_EXT}
 }
 
 menuentry "ZMRIG OS ${VERSION} - troubleshooting (no huge pages, no MSR)" {
     linux /boot/vmlinuz \$zmrig_params zmrig.os.mode=max zmrig.os.hugepages=0 transparent_hugepage=madvise nomodeset
-    initrd /boot/initramfs.gz
+    initrd /boot/initramfs.${INITRAMFS_EXT}
 }
 
 menuentry "ZMRIG OS ${VERSION} - debug shell (no mining)" {
     linux /boot/vmlinuz \$zmrig_params zmrig.os.debug=1 zmrig.os.nostart=1 nomodeset
-    initrd /boot/initramfs.gz
+    initrd /boot/initramfs.${INITRAMFS_EXT}
 }
 EOF
 
@@ -683,6 +772,8 @@ cat > "${OUT}/${ISO_NAME}.iso.json" <<EOF
   "version": "${VERSION}",
   "arch": "${ARCH_LEVEL}",
   "kernel": "${KERNEL_PKG}",
+  "alpine": "${ALPINE_RESOLVED}",
+  "squashfs": "zstd-${SQUASHFS_LEVEL:-19}",
   "iso_url": "${REPO_URL}/${ISO_NAME}.iso",
   "iso_sha256": "${ISO_SHA}",
   "iso_bytes": ${ISO_SIZE},

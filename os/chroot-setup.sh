@@ -45,7 +45,8 @@ apk add --no-progress --no-cache \
     chrony \
     openssh \
     ifupdown-ng \
-    dhcpcd
+    dhcpcd \
+    zstd
 
 # ---------------------------------------------------------------- kernel
 # The kernel module tree is the single largest thing in this image - bigger than

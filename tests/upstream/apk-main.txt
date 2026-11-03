@@ -1,0 +1,4 @@
+<a href="linux-lts-6.12.58-r0.apk">linux-lts-6.12.58-r0.apk</a>
+<a href="linux-lts-6.12.61-r0.apk">linux-lts-6.12.61-r0.apk</a>
+<a href="linux-lts-6.12.61-r0.apk.sha256">linux-lts-6.12.61-r0.apk.sha256</a>
+<a href="linux-virt-6.12.61-r0.apk">linux-virt-6.12.61-r0.apk</a>

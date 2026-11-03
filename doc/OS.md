@@ -40,6 +40,27 @@ job instead of the operator's:
 | Crash recovery | nothing | supervisor + health restart + reboot after five failures |
 | Updates | `apt upgrade` changes the kernel under the miner | verified binary swap inside the running image |
 
+## What it is built from
+
+| | |
+| --- | --- |
+| base | **Alpine Linux** `latest-stable` — `3.22.x` today — x86_64, musl, OpenRC |
+| kernel | `linux-lts` (`6.12.x`), `linux-virt` for a VM (`--kernel`) |
+| root filesystem | squashfs, **zstd level 19**, 1 MiB blocks, read-only |
+| initramfs | busybox + ~30 modules, zstd when the kernel's own config says `CONFIG_RD_ZSTD=y`, gzip otherwise |
+| boot | GRUB, BIOS and UEFI, both loaders built with the image |
+
+That table is a fact about the running image, not about this file: the build
+writes it to `/etc/zmrig/base` and `zmrig-os version` prints it, so a bug report
+can say which base it came from. `./os/upstream.sh` prints the same table from
+the source, plus what the published images were built on.
+
+The Alpine version is `latest-stable` rather than a pinned one so the weekly
+build picks up point releases and security fixes without anybody remembering to
+edit a number. What that costs is the reverse question — *did anything actually
+change?* — and `os/upstream.sh --check` answers it by comparing the resolved
+version with the `alpine` field inside the last published manifest.
+
 ## What is in it
 
 - **Kernel**: Alpine `linux-lts` (override with `--kernel linux-virt` for VMs).
@@ -217,10 +238,30 @@ wrong for a small or uneven cache. The image can measure it instead:
 zmrig-os autotune 8        # 8 s per candidate, then pin the winner in os.conf
 ```
 
-It reuses the current mode, drops `-t`, runs `zmrig --autotune`, prints the table
-and stores `autotune-best-threads` in the config. `THREADS="auto"` goes back to
-the heuristic. This is the only place where a number is chosen from a
-measurement on your hardware rather than from a table in the documentation.
+It reuses the current mode, drops `-t`, tunes the machine first (huge pages, THP,
+governor — measuring an untuned box answers the wrong question), runs
+`zmrig --autotune`, prints the table and stores `autotune-best-threads` in the
+config. `THREADS="auto"` goes back to the heuristic. This is the only place where
+a number is chosen from a measurement on your hardware rather than from a table
+in the documentation.
+
+**It also happens by itself.** On a rig that has never been measured,
+`THREADS="auto"` and `AUTO_AUTOTUNE=1` (the default), the supervisor starts
+mining immediately and, 90 seconds later, measures the machine while it mines.
+When the answer is in it writes the thread count and reloads the miner — one
+restart, no reboot, and the rig was never idle waiting for a benchmark. A reload
+is not counted as a crash, so a healthy rig is not walked towards the
+five-failures-then-reboot limit by its own tuning.
+
+```
+threads        auto (the machine is being measured)   # while it runs
+threads        8                                      # after
+```
+
+`AUTO_AUTOTUNE=0` turns it off; `THREADS=8` is a decision made by hand and is
+never overwritten; `zmrig-os mode …` clears the measurement, because safe sheds
+threads under heat and eco and light start lower, so a count taken in one mode is
+the wrong answer in another.
 
 ## Configuration
 
@@ -306,7 +347,7 @@ or pass every value on the kernel command line. The initramfs looks for a
 partition labelled `ZMRIGDATA`, mounts it, and copies `etc/zmrig/os.conf` and
 `root/.ssh/authorized_keys` into the new root.
 
-## Updates
+## Updating from the command line
 
 Three different things, deliberately separate:
 
@@ -329,6 +370,61 @@ a v2 CPU would be an illegal instruction, not a slower hash.
 Channels: `stable` for master releases, `beta` for the rolling `os-beta`
 pre-release. A release carries, per architecture, the ISO, its `.sha256`, and
 `zmrig-os-<channel>-<arch>.json`, which is the manifest `zmrig-os update` reads.
+
+## How a rig ends up on the newest image
+
+Five links in one chain, and every one of them is a build step rather than a
+person remembering:
+
+| step | what happens | where it is defined |
+| --- | --- | --- |
+| 1 | a push touching `os/`, `zmrig/` or the tuner builds both architectures and boots them in QEMU | `.github/workflows/os.yml` |
+| 2 | `master` publishes `v<version>`; `BETA` publishes the rolling `os-beta`; assets are replaced in place, so a version's link never rots | the `publish` job |
+| 3 | Mondays, a scheduled run asks `os/upstream.sh --check` whether Alpine moved; if it did not, no build happens | the `upstream` job |
+| 4 | the job asks GitHub for every asset over HTTPS, then rewrites the release notes with direct links and checksums | the `Verify` and `Notes` steps |
+| 5 | a rig's daily `crond` job applies the miner, and with `AUTO_IMAGE=1` writes the whole image into the spare A/B slot | `zmrig-os auto` |
+
+The rolling beta exists so a change can be tried on one machine before it is a
+versioned release:
+
+```sh
+# on the rig
+zmrig-os update --channel beta --check
+zmrig-os update --channel beta --apply          # or AUTO_IMAGE=1 for the whole system
+```
+
+### The base, and why it says `latest-stable`
+
+The Alpine version is `latest-stable` on purpose: a pin means the image stops
+picking up security fixes the day nobody is looking. The cost of that is the
+opposite question — did anything move? — and `os/upstream.sh` answers it without
+building anything:
+
+```bash
+./os/upstream.sh            # the base, and what each channel published
+./os/upstream.sh --check     # exit 0 = a rebuild would change the image
+./os/upstream.sh --json      # the same facts, for a workflow
+```
+
+```
+ZMRIG OS 6.39.0
+
+  base               Alpine Linux 3.22.1 (x86_64, OpenRC, musl)
+  kernel             linux-lts 6.12.61
+  root filesystem    squashfs, zstd level 19, 1 MiB blocks
+  bootloader         GRUB, BIOS and UEFI, built with the image
+
+  published: v6.39.0
+             built on Alpine 3.22.1
+             os-beta (rolling beta)
+
+  rebuild: no - the published image is already on Alpine 3.22.1
+```
+
+It compares the Alpine release the mirror serves today with the `alpine` field
+inside the last published manifest — which is why the build writes that field.
+An image published before the field existed triggers exactly one rebuild, and
+then that branch is never reached again.
 
 ## Security model
 

@@ -269,6 +269,88 @@ expect_ok "autotune pins the winner" "$TOOL" autotune 1
 contains 'THREADS="3"' "$(cat "$ROOTDIR/etc/zmrig/os.conf")" &&
     ok "the winning thread count is written to os.conf" ||
     bad "the winning thread count is written to os.conf"
+# The marker is what stops the supervisor measuring a machine that already has
+# an answer, so it has to be written by the same command that writes the number.
+contains 'AUTOTUNED="1"' "$(cat "$ROOTDIR/etc/zmrig/os.conf")" &&
+    ok "and it records that this machine has been measured" ||
+    bad "autotune does not record that the machine was measured"
+
+# Measuring an untuned machine answers the wrong question: the tuner runs first,
+# and the test asserts the order, not just that both happened.
+mkdir -p "$ROOTDIR/usr/local/lib/zmrig"
+cat > "$ROOTDIR/usr/local/lib/zmrig/tune-linux.sh" <<'EOF'
+#!/bin/sh
+echo "TUNER-RAN $*"
+EOF
+chmod +x "$ROOTDIR/usr/local/lib/zmrig/tune-linux.sh"
+out=$("$TOOL" autotune 1 2>&1)
+first_tune=$(printf '%s\n' "$out" | grep -n 'TUNER-RAN' | head -1 | cut -d: -f1)
+first_pin=$(printf '%s\n' "$out" | grep -n 'pinned' | head -1 | cut -d: -f1)
+if [ -n "$first_tune" ] && [ -n "$first_pin" ] && [ "$first_tune" -lt "$first_pin" ]; then
+    ok "the machine is tuned before it is measured"
+else
+    bad "the machine is measured before it is tuned (or the tuner never ran)"
+fi
+contains "--thp" "$(cat "$ROOTDIR/var/log/zmrig-os.log" 2>/dev/null; printf '%s' "$out")" &&
+    ok "the tuner is given a profile, not left to its defaults" ||
+    bad "the tuner is given a profile"
+
+# The threshold nobody should have to find by reading the source.
+if ZMRIG_OS_NO_MAIN=1 ZMRIG_OS_ROOT="$ROOTDIR" sh -c '. "$1"; autotune_due auto "" 1' _ "$TOOL"; then
+    ok "an unmeasured machine with the heuristic in charge is due"
+else
+    bad "an unmeasured machine with the heuristic in charge is due"
+fi
+ZMRIG_OS_NO_MAIN=1 ZMRIG_OS_ROOT="$ROOTDIR" sh -c '. "$1"; autotune_due auto 1 1' _ "$TOOL" &&
+    bad "a measured machine is measured again" || ok "a measured machine is not measured again"
+ZMRIG_OS_NO_MAIN=1 ZMRIG_OS_ROOT="$ROOTDIR" sh -c '. "$1"; autotune_due 8 "" 1' _ "$TOOL" &&
+    bad "a hand-picked thread count is overruled" || ok "a hand-picked thread count is left alone"
+ZMRIG_OS_NO_MAIN=1 ZMRIG_OS_ROOT="$ROOTDIR" sh -c '. "$1"; autotune_due auto "" 0' _ "$TOOL" &&
+    bad "AUTO_AUTOTUNE=0 is ignored" || ok "AUTO_AUTOTUNE=0 turns the measurement off"
+
+# --auto is what the supervisor runs: no output to nobody, and no failure that
+# takes the supervisor down when the miner is missing.
+rm -f "$ROOTDIR/usr/local/bin/zmrig"
+expect_ok "autotune --auto survives a missing miner" "$TOOL" autotune --auto
+expect_ok "autotune --auto is quiet when there is nothing to do" "$TOOL" autotune --auto
+expect_fail "a manual autotune still reports a missing miner" "$TOOL" autotune 1
+
+cat > "$ROOTDIR/usr/local/bin/zmrig" <<'EOF'
+#!/bin/sh
+printf 'autotune-best-threads=3\n'
+EOF
+chmod +x "$ROOTDIR/usr/local/bin/zmrig"
+
+# A mode change makes the old answer wrong: safe sheds threads under heat and
+# eco starts lower, so the count must go back to auto.
+printf 'THREADS="3"\nAUTOTUNED="1"\nWALLET="%s"\n' "$WALLET" > "$ROOTDIR/etc/zmrig/os.conf"
+"$TOOL" mode eco >/dev/null 2>&1
+contains 'THREADS="3"' "$(cat "$ROOTDIR/etc/zmrig/os.conf")" &&
+    ok "a chosen thread count survives a mode change" ||
+    bad "a mode change threw away a thread count somebody chose"
+printf 'THREADS="auto"\nAUTOTUNED="1"\nWALLET="%s"\n' "$WALLET" > "$ROOTDIR/etc/zmrig/os.conf"
+"$TOOL" mode max >/dev/null 2>&1
+contains 'AUTOTUNED=""' "$(cat "$ROOTDIR/etc/zmrig/os.conf")" &&
+    ok "a mode change clears the measurement, so it is taken again" ||
+    bad "a mode change keeps a measurement that no longer applies"
+
+# `zmrig-os version` prints the base the image was built from.
+mkdir -p "$ROOTDIR/etc/zmrig"
+printf 'alpine 3.22.1\nkernel linux-lts\nsquashfs zstd-19\ninitramfs zst\n' > "$ROOTDIR/etc/zmrig/base"
+out=$("$TOOL" version 2>&1)
+contains "alpine    3.22.1" "$out" && ok "version prints the Alpine base" || bad "version prints the Alpine base"
+contains "initramfs zst" "$out" && ok "and how the initramfs is packed" || bad "and how the initramfs is packed"
+
+# Every version string in the repository has to agree, or the image reports one
+# number and the release it came from reports another.
+repo_version=$(sed -n 's/^pub const version = "\(.*\)";$/\1/p' "$ROOT/zmrig/src/main.zig" | head -1)
+tool_version=$(ZMRIG_OS_NO_MAIN=1 ZMRIG_OS_ROOT="$ROOTDIR" sh -c '. "$1"; printf "%s" "$VERSION"' _ "$TOOL")
+[ "$repo_version" = "$tool_version" ] &&
+    ok "the control tool and the miner agree on the version ($repo_version)" ||
+    bad "zmrig-os says $tool_version, the miner says $repo_version"
+pkg_version=$(sed -n 's/.*"version": "\([0-9][0-9.]*\)".*/\1/p' "$ROOT/package.json" | head -1)
+[ "$repo_version" = "$pkg_version" ] &&
+    ok "package.json agrees too" || bad "package.json says $pkg_version, the miner says $repo_version"
 
 # ------------------------------------------------- two forms: live / disk
 # The installer is the part of this image that can destroy somebody's disk, so

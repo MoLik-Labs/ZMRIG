@@ -226,7 +226,36 @@ Số thread là con số duy nhất khác nhau theo từng máy, và heuristic t
 zmrig-os autotune 8     # 8 giây mỗi ứng viên, số thread thắng được ghi vào config
 ```
 
-Kết quả được ghi vào `os.conf`; `THREADS="auto"` quay lại heuristic.
+Kết quả được ghi vào `os.conf`; `THREADS="auto"` quay lại heuristic. Lệnh này
+tinh chỉnh máy trước — huge pages, THP, governor — vì đo trên một máy chưa tinh
+chỉnh là trả lời sai câu hỏi.
+
+**Và nó tự chạy.** Trên một rig chưa từng được đo, miner khởi động ngay và chín
+mươi giây sau supervisor đo máy trong lúc máy vẫn đang đào. Kết quả được ghi vào
+config và miner nạp lại đúng một lần. Không có lần boot nào ngồi chờ, không reboot,
+và lần nạp lại đó không bị tính là một lần crash. `AUTO_AUTOTUNE=0` tắt nó đi, và
+số thread bạn tự đặt sẽ không bao giờ bị ghi đè:
+
+```
+threads        auto (đang đo máy)
+threads        8
+```
+
+## Ảnh được build từ gì
+
+| | |
+| --- | --- |
+| nền | Alpine Linux `latest-stable` — hiện là `3.22.x` — musl, OpenRC |
+| kernel | `linux-lts` (`linux-virt` cho VM) |
+| root filesystem | squashfs, zstd mức 19, block 1 MiB, chỉ đọc |
+| initramfs | busybox + khoảng 30 module, zstd khi config của kernel nói nó giải nén được, ngược lại gzip |
+| boot | GRUB, BIOS và UEFI, cả hai đều được build cùng ảnh |
+
+Ảnh ghi bảng đó vào `/etc/zmrig/base`, và `zmrig-os version` in ra, nên một báo lỗi
+tự mang theo nền của nó. `./os/upstream.sh` in đúng bảng đó từ mã nguồn, còn
+`--check` trả lời câu hỏi build lại có thay đổi gì không — mirror Alpine phục vụ
+`latest-stable`, nên lần build thứ Hai so nó với trường `alpine` trong manifest đã
+phát hành thay vì cứ build lại cho chắc.
 
 ## Giữ lại cấu hình
 
@@ -310,6 +339,14 @@ mỗi bản phát hành giữ lại ISO của mình. Workflow cũng chạy trên
 `os/`, nên ảnh hỏng sẽ fail trước khi merge. Bước build cũng phát hành manifest mà
 `zmrig-os update` đọc, nên ảnh ngoài thực địa tiến lên được mà không phải ghi
 lại USB.
+
+Năm bước, và bước nào cũng là một bước build chứ không phải một người phải nhớ:
+một push build và boot cả hai kiến trúc trong QEMU; `master` phát hành
+`v<version>` còn `BETA` phát hành bản cuốn chiếu `os-beta`, thay asset tại chỗ nên
+link của một phiên bản không bao giờ chết; lần chạy thứ Hai hỏi
+`os/upstream.sh --check` xem Alpine có đổi không và bỏ qua build nếu không; sau đó
+job tải lại từng asset qua HTTPS và viết lại ghi chú kèm link; và job hằng ngày
+trên từng rig cài miner, hoặc cả ảnh vào slot A/B còn trống với `AUTO_IMAGE=1`.
 
 ## Không phải là gì
 

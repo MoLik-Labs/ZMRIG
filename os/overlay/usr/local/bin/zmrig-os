@@ -37,7 +37,7 @@
 
 set -eu
 
-VERSION="6.37.0"
+VERSION="6.39.0"
 MANIFEST_URL="https://github.com/MoLik-Labs/ZMRIG/releases/latest/download"
 # A full URL wins over the derived one, so the test suite can serve a manifest
 # from a file:// path and a fleet can pin an exact release.
@@ -145,6 +145,11 @@ load_conf() {
     CHANNEL=$(conf_default CHANNEL "stable")
     AUTO_UPDATE=$(conf_default AUTO_UPDATE "1")
     AUTO_IMAGE=$(conf_default AUTO_IMAGE "0")
+    # Measuring the machine once, on the rig itself, is the difference between
+    # the cache heuristic and the thread count this CPU can actually hold. The
+    # miner starts immediately and reloads when the measurement finishes.
+    AUTO_AUTOTUNE=$(conf_default AUTO_AUTOTUNE "1")
+    AUTOTUNED=$(conf_default AUTOTUNED "")
     # The control plane. Empty means "no fleet", which is the default: nothing
     # here contacts anything until somebody names a server.
     FLEET_URL=$(conf_default FLEET_URL "")
@@ -196,6 +201,8 @@ API_TOKEN="${API_TOKEN}"
 AUTO_REBOOT="${AUTO_REBOOT}"
 AUTO_UPDATE="${AUTO_UPDATE:-1}"
 AUTO_IMAGE="${AUTO_IMAGE:-0}"
+AUTO_AUTOTUNE="${AUTO_AUTOTUNE:-1}"
+AUTOTUNED="${AUTOTUNED:-}"
 CHANNEL="${CHANNEL}"
 EXTRA_ARGS="${EXTRA_ARGS}"
 FLEET_URL="${FLEET_URL}"
@@ -443,6 +450,30 @@ running() {
     kill -0 "$pid" 2>/dev/null
 }
 
+# Should the supervisor measure this machine before trusting the heuristic?
+# Three separate reasons to say no, and each of them is a supported state:
+# the operator turned it off, a measurement already picked a number, or the
+# number was chosen by hand. Kept as a function so the test can assert all
+# eight combinations without a miner, a run loop or a clock.
+autotune_due() { # threads, autotuned, enabled
+    [ "${3:-1}" = "1" ] || return 1
+    [ -n "${2:-}" ] && return 1
+    [ "${1:-auto}" = "auto" ] || return 1
+    return 0
+}
+
+# Ask the supervisor to start the miner again with whatever is in the config
+# now. It must not be `zmrig-os restart`: that starts a *second* supervisor
+# around the miner the first one is still waiting for.
+signal_reload() {
+    [ -d "$RUN" ] || return 0
+    : > "$RUN/reload" 2>/dev/null || true
+    if running; then
+        kill "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null || true
+    fi
+    return 0
+}
+
 log_os() {
     mkdir -p "$(dirname "$OSLOG")" 2>/dev/null || true
     printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$OSLOG" 2>/dev/null || true
@@ -461,7 +492,7 @@ rotate_logs() {
 }
 
 supervise() {
-    local bin args rc fails=0 started
+    local bin args rc fails=0 started autotuned_this_boot=0
     bin=$(zmrig_bin)
     [ -x "$bin" ] || die "miner binary not found: $bin"
 
@@ -482,6 +513,15 @@ supervise() {
             log_os "no wallet configured; waiting 30 s (zmrig-os setup, or zmrig.os.wallet= on the cmdline)"
             sleep 30
             continue
+        fi
+
+        # Measure the machine once, while it is already mining: a rig that waits
+        # 40 s for a benchmark before the first share is a rig somebody thinks is
+        # broken. The measurement saves its answer and asks for a reload.
+        if [ "$autotuned_this_boot" = "0" ] && autotune_due "$THREADS" "$AUTOTUNED" "$AUTO_AUTOTUNE"; then
+            autotuned_this_boot=1
+            log_os "measuring the machine in ${AUTOTUNE_AFTER:-90}s; the miner keeps running meanwhile"
+            ( sleep "${AUTOTUNE_AFTER:-90}"; "$0" autotune --auto ) >>"$OSLOG" 2>&1 &
         fi
 
         rotate_logs
@@ -505,6 +545,17 @@ supervise() {
 
         rm -f "$PIDFILE"
         log_os "exit $rc after $(( $(date +%s) - started ))s"
+
+        # `zmrig-os autotune` asked for this: it wrote the new thread count and
+        # killed the miner so this loop would pick it up. Counting it as a
+        # failure would walk a perfectly healthy rig towards the reboot limit.
+        if [ -e "$RUN/reload" ]; then
+            rm -f "$RUN/reload"
+            fails=0
+            log_os "reloading with the thread count autotune chose"
+            sleep 1
+            continue
+        fi
 
         # A clean 0 is the user stopping us. Anything else is a crash, a pool
         # that stayed refused, or the health restart deciding the miner was
@@ -628,8 +679,16 @@ cmd_mode() {
     fi
 
     MODE="$mode"
+    # Every mode caps threads differently (safe sheds them under heat, eco and
+    # light start lower), so a count measured under the old mode is the wrong
+    # answer for the new one: clear the marker and let the supervisor re-measure.
+    AUTOTUNED=""
     save_conf
     say "mode $MODE; $(build_args)"
+
+    if [ "$THREADS" = "auto" ] && running; then
+        say "the thread count goes back to auto; it will be measured again"
+    fi
 
     if running; then
         cmd_restart
@@ -748,6 +807,16 @@ cmd_status() {
     printf '%-14s %s\n' "state"    "$state"
     printf '%-14s %s\n' "pid"      "$pid"
     printf '%-14s %s\n' "hashrate" "$rate H/s"
+    # Where the thread count came from matters more than the number: "auto" is
+    # the heuristic, "auto (measuring)" is a rig that will reload once with a
+    # measured answer, and a number is a decision somebody or something made.
+    if [ "$THREADS" = "auto" ]; then
+        if [ -n "$AUTOTUNED" ]; then printf '%-14s %s\n' "threads" "auto (pinned from a measurement that no longer applies)"
+        elif [ "$AUTO_AUTOTUNE" = "1" ] && running; then printf '%-14s %s\n' "threads" "auto (the machine is being measured)"
+        else printf '%-14s %s\n' "threads" "auto"; fi
+    else
+        printf '%-14s %s\n' "threads" "$THREADS"
+    fi
     printf '%-14s %s\n' "wallet"   "$(wallet_short)"
     printf '%-14s %s\n' "pool"     "$POOL"
     printf '%-14s %s\n' "worker"   "$WORKER"
@@ -825,12 +894,49 @@ cmd_bench() {
 # Ryzen and wrong for a machine with a small or uneven L3. zmrig can measure it
 # (`--autotune`), so the image offers that instead of asking the operator to
 # guess; the winning count is written to the config and survives restarts.
+#
+#   zmrig-os autotune                 measure and pin the result
+#   zmrig-os autotune --seconds 20    a longer sample on a noisy machine
+#   zmrig-os autotune --auto          what the supervisor runs on its own
+#
+# It tunes the machine *first*. Measuring threads on an untuned box answers the
+# wrong question: a powersave governor, THP off and no huge pages give every
+# candidate the same handicap, and the number it picks is the best of a bad set.
 cmd_autotune() {
-    local seconds="${1:-8}" bin args out best
+    local seconds="8" auto=0 bin args out best tuned=0
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --auto)         auto=1 ;;
+            --seconds)      seconds="${2:?}"; shift ;;
+            --seconds=*)    seconds="${1#*=}" ;;
+            ''|*[!0-9]*)    die "unknown option: $1 (try --seconds N or --auto)" ;;
+            *)              seconds="$1" ;;
+        esac
+        shift
+    done
+
+    case "$seconds" in
+        ''|*[!0-9]*) die "not a number of seconds: $seconds" ;;
+    esac
 
     load_conf
     bin=$(zmrig_bin)
-    [ -x "$bin" ] || die "miner binary not found: $bin"
+
+    if [ ! -x "$bin" ]; then
+        # In --auto a missing binary is not an error: the supervisor will say so
+        # on its own every time it tries to start.
+        [ "$auto" = "1" ] && return 0
+        die "miner binary not found: $bin"
+    fi
+
+    if autotune_due "$THREADS" "$AUTOTUNED" "$AUTO_AUTOTUNE"; then
+        :
+    elif [ "$auto" = "1" ]; then
+        return 0
+    fi
+
+    if cmd_tune; then tuned=1; fi
 
     args=$(build_args)
     # Drop the flags that make no sense for a benchmark, including -t: this
@@ -839,16 +945,31 @@ cmd_autotune() {
     args=$(printf '%s' "$args" | sed 's| --log-file [^ ]*||')
 
     say "measuring this machine, ${seconds}s per candidate (this builds the dataset each time)"
-    # shellcheck disable=SC2086
-    out=$("$bin" $args --autotune="$seconds" 2>&1) || die "the autotune run failed"
+    if ! out=$("$bin" $args --autotune="$seconds" 2>&1); then
+        [ "$auto" = "1" ] && { log_os "autotune failed; keeping THREADS=$THREADS"; return 0; }
+        die "the autotune run failed"
+    fi
 
     printf '%s\n' "$out" | grep -E '^ *[0-9]+ |^best:|^autotune-best' || true
     best=$(printf '%s\n' "$out" | sed -n 's/^autotune-best-threads=\([0-9]*\)$/\1/p' | tail -1)
-    [ -n "$best" ] || die "autotune printed no thread count"
+    if [ -z "$best" ]; then
+        [ "$auto" = "1" ] && { log_os "autotune printed no thread count; keeping THREADS=$THREADS"; return 0; }
+        die "autotune printed no thread count"
+    fi
 
+    log_os "autotune: ${best} threads (was ${THREADS:-auto})"
     THREADS="$best"
+    AUTOTUNED="1"
     save_conf
     say "pinned ${best} thread(s) in $CONF (THREADS=\"auto\" goes back to the heuristic)"
+    [ "$tuned" = "1" ] && say "the machine was tuned before measuring, so the number is the tuned one"
+
+    # A measurement is worthless until the miner uses it.
+    if running; then
+        say "reloading the miner with the new thread count"
+        signal_reload
+    fi
+    return 0
 }
 
 cmd_doctor() {
@@ -1096,7 +1217,11 @@ EOF2
     # discovering a missing kernel halfway through is how a machine becomes a
     # brick and a support ticket at the same time.
     kernel=$(image_file vmlinuz) || die "no kernel on the medium (is this a ZMRIG OS image?)"
-    initramfs=$(image_file initramfs.gz) || initramfs=$(image_file initramfs) || die "no initramfs on the medium"
+    # `.zst` on an image whose kernel config said it can unpack zstd, `.gz`
+    # everywhere else. The kernel decides by the archive's magic bytes, so this
+    # only has to find the file.
+    initramfs=$(image_file initramfs.zst) || initramfs=$(image_file initramfs.gz) || \
+        initramfs=$(image_file initramfs) || die "no initramfs on the medium"
     squashfs=$(image_file rootfs.squashfs) || squashfs=$(image_file rootfs-a.squashfs) || die "no rootfs.squashfs on the medium"
     efi=$(image_file BOOTX64.EFI) || efi=$(image_file bootx64.efi) || die "no BOOTX64.EFI on the medium (rebuild the image)"
     core=$(image_file core.img) || die "no core.img on the medium (rebuild the image)"
@@ -1317,6 +1442,8 @@ API_TOKEN="${API_TOKEN}"
 AUTO_REBOOT="${AUTO_REBOOT}"
 AUTO_UPDATE="${AUTO_UPDATE:-1}"
 AUTO_IMAGE="${AUTO_IMAGE:-0}"
+AUTO_AUTOTUNE="${AUTO_AUTOTUNE:-1}"
+AUTOTUNED="${AUTOTUNED:-}"
 CHANNEL="${CHANNEL}"
 EXTRA_ARGS="${EXTRA_ARGS}"
 FLEET_URL="${FLEET_URL}"
@@ -1520,7 +1647,11 @@ ota_write_slot() { # iso_path version
         return 1
     fi
     run cp "${mnt}/boot/vmlinuz" "${MEDIA}/boot/vmlinuz-${slot}.new" 2>/dev/null || true
-    run cp "${mnt}/boot/initramfs.gz" "${MEDIA}/boot/initramfs-${slot}.new" 2>/dev/null || true
+    for src in "${mnt}/boot/initramfs.zst" "${mnt}/boot/initramfs.gz"; do
+        [ -f "$src" ] || continue
+        run cp "$src" "${MEDIA}/boot/initramfs-${slot}.new" 2>/dev/null || true
+        break
+    done
     run umount "$mnt"
 
     # Verify what is on the medium, then rename all three into place.
@@ -2223,6 +2354,12 @@ cmd_sync() {
 
 cmd_version() {
     printf 'ZMRIG OS %s\n' "$(image_version)"
+    # The base, from the image itself: see os/build-iso.sh.
+    if [ -r "$(P /etc/zmrig/base)" ]; then
+        while read -r key value; do
+            [ -n "$key" ] && printf '  %-9s %s\n' "$key" "$value"
+        done < "$(P /etc/zmrig/base)"
+    fi
     if [ -x "$(zmrig_bin)" ]; then "$(zmrig_bin)" --version 2>/dev/null | head -1; fi
 }
 
