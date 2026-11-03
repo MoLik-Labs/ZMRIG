@@ -74,9 +74,17 @@ curl -s 127.0.0.1:8080/api/worker/4YourMoneroAddress
 
 ## Free hosting
 
+The blueprint at the root of the repository deploys the fleet — bot, dashboard and
+Discord — and not this. A free workspace is allowed **750 instance hours a month**
+for all of its services together, and one always-on service already spends about
+744 of them; a second one puts the workspace over the limit and Render suspends
+the free services until the next month. The pool blueprint therefore lives at
+`deploy/render-pool.yaml`: apply it in a different workspace, or in this one if
+the bot is not hosted here.
+
 | Where | How | Notes |
 | --- | --- | --- |
-| Render | `render.yaml` (Docker) | single port, WebSocket only; a free instance sleeps after 15 minutes idle |
+| Render | `deploy/render-pool.yaml` (Docker) | single port, WebSocket only; a free instance sleeps after 15 minutes idle |
 | Fly.io | `fly.toml` + a 1 GB volume | real TCP on 3333; `monerod` does not fit in 256 MB |
 | Cloudflare Workers | `pool/worker/` | WebSocket ⇄ TCP bridge, no Durable Object needed |
 | Vercel | static page only | a function cannot hold a stratum connection |

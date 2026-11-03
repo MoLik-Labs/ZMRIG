@@ -197,6 +197,9 @@ function check(env = process.env) {
   const { problems, warnings } = configLoader.validate(config);
   const store = new Store(config.state).load();
   const devices = store.devices();
+  // A deploy log is the only place a typo in FLEET_ROSTER can be seen before it
+  // matters, so the check reads it exactly the way the server will.
+  const roster = rosterModule.load(env, { file: path.join(__dirname, '..', 'roster.json') });
 
   process.stdout.write('ZMRIG fleet\n\n');
   process.stdout.write(`telegram   ${config.telegram_token ? 'configured' : 'off'}\n`);
@@ -205,12 +208,24 @@ function check(env = process.env) {
   process.stdout.write(`port       ${config.port}\n`);
   process.stdout.write(`state      ${path.resolve(config.state)}\n`);
   process.stdout.write(`rigs       ${devices.filter((device) => device.owner).length} enrolled, ${devices.length} known\n`);
+  process.stdout.write(
+    `roster     ${roster.source ? `${roster.rigs.size} rig(s) from ${roster.source}` : 'none (FLEET_ROSTER and roster.json are both empty)'}\n`,
+  );
   process.stdout.write(`interval   ${config.interval}s\n`);
   process.stdout.write(`web        ${config.web_password ? 'enabled' : 'off (FLEET_WEB_PASSWORD unset)'}\n`);
   process.stdout.write(`total      ${format.hashrate(devices.reduce((sum, device) => sum + (Number(device.status && device.status.hashrate) || 0), 0))}\n`);
 
   for (const warning of warnings) process.stdout.write(`warning    ${warning}\n`);
   for (const problem of problems) process.stdout.write(`problem    ${problem}\n`);
+
+  // A roster field that is wrong costs one setting; a roster that cannot be read
+  // at all costs the fleet's memory, and is the one thing worth failing on.
+  for (const problem of roster.problems || []) {
+    const fatal = roster.rigs.size === 0 && roster.source;
+    process.stdout.write(`${fatal ? 'problem' : 'roster'}    ${problem}\n`);
+    if (fatal) problems.push(problem);
+  }
+
   return problems.length === 0;
 }
 

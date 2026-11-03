@@ -14,6 +14,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 
 const rosterModule = require('../src/roster');
+const { check } = require('../src/index');
 const reconcile = require('../src/reconcile');
 const { Store, presence } = require('../src/store');
 const ids = require('../src/ids');
@@ -322,4 +323,42 @@ test('the environment wins over the file, and neither is written', () => {
 
   // And the file is still exactly what it was: the roster is read, never updated.
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).rigs['ZMR-1A2B-3C4D-5E6F'].label, 'from file');
+});
+
+test('--check says where the roster came from, and fails only when it is unreadable', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zmrig-check-'));
+  const base = {
+    TELEGRAM_BOT_TOKEN: '123456789:AAH-not-a-real-token-but-shaped-like-one',
+    FLEET_ADMIN_IDS: '1',
+    FLEET_STATE: path.join(dir, 'state.json'),
+  };
+
+  function read(fn) {
+    const lines = [];
+    const write = process.stdout.write;
+    process.stdout.write = (chunk) => { lines.push(String(chunk)); return true; };
+    try {
+      const ok = fn();
+      return { ok, text: lines.join('') };
+    } finally {
+      process.stdout.write = write;
+    }
+  }
+
+  const good = read(() => check({
+    ...base,
+    FLEET_ROSTER: JSON.stringify({ rigs: { 'ZMR-1A2B-3C4D-5E6F': { label: 'basement' }, 'ZMR-AAAA-BBBB-CCCC': {} } }),
+  }));
+  assert.equal(good.ok, true);
+  assert.match(good.text, /roster {5}2 rig\(s\) from FLEET_ROSTER/);
+
+  const empty = read(() => check({ ...base, FLEET_ROSTER: '' , FLEET_ROSTER_FILE: '' }));
+  assert.equal(empty.ok, true);
+  assert.match(empty.text, /roster {5}none/);
+
+  // A field that is wrong costs one setting; a roster that cannot be parsed at
+  // all costs the fleet, and is the one thing a deploy should stop on.
+  const broken = read(() => check({ ...base, FLEET_ROSTER: '{"rigs": ' }));
+  assert.equal(broken.ok, false);
+  assert.match(broken.text, /problem {4}the roster is not valid JSON/);
 });
