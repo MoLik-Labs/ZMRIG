@@ -88,10 +88,48 @@ npm run check                   # prints the config, opens no socket
 npm start
 ```
 
-`fleet/render.yaml` is a Render blueprint. On the free plan the instance sleeps
-after 15 minutes without traffic, so point a free uptime monitor at `/healthz`
-every 5 minutes — a sleeping bot answers nothing, though the rigs keep mining and
-catch up when it wakes.
+The blueprint in the repository root deploys the bot, Discord, and the dashboard
+as one service. Three facts about Render's free plan are worth knowing before you
+deploy, because they decide the shape of the whole thing:
+
+| Fact | What it means here |
+| --- | --- |
+| **750 instance hours** per workspace per month | a 31-day month is 744 hours, so exactly one always-on service fits; two would exhaust the allowance and Render suspends free services until the next month |
+| sleeps after **15 minutes** without inbound traffic | the rigs' minute-by-minute check-ins keep it awake; `.github/workflows/keepalive.yml` pings `/healthz` twice an hour for a quiet fleet |
+| the filesystem is **ephemeral** | nothing about the fleet is stored there — see the roster below |
+
+### The roster: why a restart changes nothing
+
+`FLEET_ROSTER` — one JSON value in Render's *Environment* tab — names every rig
+and, optionally, what it should be running:
+
+```json
+{
+  "owner": "tg:123456789",
+  "rigs": {
+    "ZMR-1A2B-3C4D-5E6F": {
+      "label": "basement",
+      "wallet": "46SQL...",
+      "pool": "gulf.moneroocean.stream:10001",
+      "mode": "safe",
+      "maxtemp": 72,
+      "threads": 8
+    }
+  }
+}
+```
+
+It can also live in `fleet/roster.json`; the environment wins when both exist.
+Nothing in it is secret — a Device ID is public and a wallet is an address — and a
+rig listed there is enrolled before it has ever checked in.
+
+The roster is **desired state, not a message**. On every check-in the server
+compares what the roster says a rig should be with what the rig says it is, and
+queues the difference: at most once per rig per five minutes, never twice while a
+change is in flight, and immediately when it matters. A queued command is a
+message that may never arrive; a roster entry is a fact re-checked a minute from
+now. That is why a redeploy, a restart or a spin-down leaves the fleet exactly
+where it was.
 
 The token lives in an environment variable, never in a file in the repository.
 Your own id is the only one the bot answers until you add more to

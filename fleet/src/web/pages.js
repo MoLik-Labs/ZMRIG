@@ -121,8 +121,13 @@ function rigs({ store, config, now, csrf }) {
 
 // ------------------------------------------------------------------ one rig
 
-function rig({ record, config, now, csrf, flash, flashBad }) {
+function rig({ record, config, now, csrf, flash, flashBad, roster = null }) {
   const status = record.status || {};
+  // What the roster says about this rig: the fields it pins, in the order the
+  // reconcile module considers them, so the page can explain a value that keeps
+  // coming back after somebody changed it here.
+  const entry = roster && roster.rigs ? roster.rigs.get(record.id) : null;
+  const pinned = entry ? Object.keys(entry.desired || {}) : [];
   const state = stateOf(record, config, now);
   const id = record.id;
   const enc = encodeURIComponent(id);
@@ -171,9 +176,17 @@ function rig({ record, config, now, csrf, flash, flashBad }) {
         .join('')}</ul></div>`
     : '';
 
-  const actions = ['start', 'stop', 'restart', 'update', 'log', 'reboot']
+  const actions = ['start', 'stop', 'restart', 'update', 'reboot']
     .map((action) => `<form method="post" action="/rig/${enc}/action">${csrfField(csrf)}<input type="hidden" name="action" value="${action}"><button type="submit">${action}</button></form>`)
     .join('');
+
+  // `/log <rig> [n]` exists in the chat, so it exists here: same range, same
+  // default, and the answer arrives the same way - with the next check-in.
+  const logForm = `<form method="post" action="/rig/${enc}/action" class="inline">
+    ${csrfField(csrf)}<input type="hidden" name="action" value="log">
+    <input type="number" name="lines" min="5" max="80" value="${Number(config.log_lines) || 40}" aria-label="lines" class="narrow">
+    <button type="submit">log</button>
+  </form>`;
 
   const walletForm = `<div class="panel">
     <h3 style="margin-top:0">Wallet</h3>
@@ -229,14 +242,37 @@ function rig({ record, config, now, csrf, flash, flashBad }) {
     <form method="post" action="/rig/${enc}/remove">${csrfField(csrf)}<button class="danger" type="submit">Forget ${escape(record.label || id)}</button></form>
   </div>`;
 
+  const rosterPanel = entry
+    ? `<div class="panel"><h3 style="margin-top:0">Pinned by the roster${entry.owner && entry.owner !== record.owner ? ` <span class="muted small">· ${escape(entry.owner)}</span>` : ''}</h3>
+        <p class="muted small">${
+          pinned.length
+            ? `The roster sets <code>${pinned.map(escape).join('</code>, <code>')}</code>. Changing one of them here is applied on the next
+               check-in and then corrected again on the check-in after that, because the roster is re-read every minute. To make a
+               change stick, change it in <code>FLEET_ROSTER</code> or <code>fleet/roster.json</code>.`
+            : 'This rig is in the roster, which decides who owns it and keeps it enrolled across restarts. It pins no settings, so everything below is yours.'
+        }</p></div>`
+    : '';
+
+  const namePanel = `<div class="panel">
+    <h3 style="margin-top:0">Name</h3>
+    <p class="muted small">The name is kept here, not on the rig: it is how the page and the chats refer to it.</p>
+    <form method="post" action="/rig/${enc}/rename">
+      ${csrfField(csrf)}
+      <label for="label">rig name</label>
+      <input id="label" name="label" value="${escape(record.label || '')}" placeholder="${escape(id)}" autocomplete="off" maxlength="40">
+      <div class="actions"><button class="primary" type="submit">Rename</button></div>
+    </form>
+  </div>`;
+
   const body = `<p class="muted small"><a href="/rigs">Rigs</a> / ${escape(record.label || id)}</p>
     <h1>${escape(record.label || id)}</h1>
     <p class="muted"><code>${escape(id)}</code></p>
+    ${rosterPanel}
     ${facts}
-    <div class="actions">${actions}</div>
+    <div class="actions">${actions}${logForm}</div>
     ${queued}
     ${acks}
-    <div class="forms">${walletForm}${poolForm}</div>
+    <div class="forms">${walletForm}${poolForm}${namePanel}</div>
     ${miningForm}
     ${log}
     ${remove}`;

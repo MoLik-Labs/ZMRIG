@@ -86,8 +86,42 @@ npm run check                   # what the environment says, no socket opened
 ```
 
 On [Render](https://render.com): *New → Blueprint*, pick this repository, and
-choose `fleet/render.yaml`. Render asks for the secrets it needs — the two bot
-tokens, your admin ids, and `FLEET_WEB_PASSWORD` if you want the dashboard.
+choose the root `render.yaml`. Render asks once for the secrets it needs — the
+two bot tokens, your admin ids, `FLEET_WEB_PASSWORD` if you want the dashboard,
+and `FLEET_ROSTER` — and then you are done: every later deploy reads them again.
+
+### The roster, and why nothing is stored
+
+A free instance's filesystem is empty after every deploy, restart and spin-down,
+so an enrolment kept in a file is an enrolment lost at night. The fleet is
+therefore written down in the environment instead:
+
+```json
+{
+  "owner": "tg:123456789",
+  "rigs": {
+    "ZMR-1A2B-3C4D-5E6F": {
+      "label": "basement",
+      "wallet": "46SQL...",
+      "pool": "gulf.moneroocean.stream:10001",
+      "mode": "safe",
+      "maxtemp": 72
+    }
+  }
+}
+```
+
+Paste that into `FLEET_ROSTER`, or commit it as `fleet/roster.json` (the
+environment wins when both exist). On every check-in the server compares what the
+roster says a rig should be with what the rig says it is, and queues the
+difference. A restart changes nothing, because nothing was remembered: the same
+two inputs produce the same answer a second later. `roster.example.json` has
+every field.
+
+A rig named in the roster is enrolled before it has ever checked in. The roster
+knows its Device ID and not its key — the key never leaves the machine — so the
+first secret that hashes to that ID binds the record and every later request is
+held to it, exactly as if the rig had enrolled itself in the chat.
 
 ### The dashboard (optional)
 

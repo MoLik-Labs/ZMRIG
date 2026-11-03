@@ -118,6 +118,19 @@ AVX512_FLAGS=(-mavx512f -mavx512vl -mavx512dq -mavx512bw -mvaes)
 # implement -fsyntax-only (it answers FileNotFound for every input), and it
 # treats a trailing `-` as an output name, so both of the obvious one-liners
 # report "unsupported" no matter what the compiler can do.
+# The same argument applies to every other ISA-specific translation unit, and it
+# is the reason a `--portable` build used to be fragile rather than merely slow:
+# RandomX picks an implementation at runtime from CPUID, but the *object* still
+# has to be compiled with the instructions it uses. With no -march, gcc compiles
+# the AVX2 files with AVX2 off, which is not a warning to ignore - "-Wpsabi: AVX
+# vector return without AVX enabled changes the ABI" means the calling
+# convention of those functions is not the one the rest of the build assumes.
+# Clang refuses the same code outright, so the flag has to be per file, not per
+# build.
+ISA_SSE41=(-msse4.1)
+ISA_SSSE3=(-mssse3)
+ISA_AVX2=(-mavx2)
+
 probe_dir=$(mktemp -d 2>/dev/null || echo "${OBJ}/probe")
 mkdir -p "$probe_dir"
 printf 'int main(void){return 0;}\n' > "${probe_dir}/probe.cpp"
@@ -131,7 +144,8 @@ rm -rf "$probe_dir"
 # so a --static or --arch build in the same output directory silently reused the
 # native objects. Hash the real flags, and the mode, now that they exist.
 FLAGS_SIG=$(printf '%s\n' "${CXXFLAGS[@]}" "${CFLAGS[@]}" "${ARGON_CFLAGS[@]}" \
-            "${AVX512_FLAGS[@]}" "static=${STATIC}" "arch=${MARCH}" \
+            "${AVX512_FLAGS[@]}" "${ISA_SSE41[@]}" "${ISA_SSSE3[@]}" "${ISA_AVX2[@]}" \
+            "static=${STATIC}" "arch=${MARCH}" \
             | sha256sum | cut -d' ' -f1)
 
 if [ -d "$OBJ" ] && [ "$(cat "$OBJ/.flags" 2>/dev/null)" != "$FLAGS_SIG" ]; then
@@ -235,11 +249,20 @@ compile_one() {
     LAST_CMD=()
     case "$ext" in
         c)
+            # Every ISA-specific unit carries its own flags: see ISA_* above.
             case "$src" in
                 */argon2-avx512f.c)
                     LAST_CMD=("${CC_BIN[@]}" "${ARGON_CFLAGS[@]}" "${AVX512_FLAGS[@]}" -x c -c "$src" -o "$obj") ;;
+                */argon2-avx2.c)
+                    LAST_CMD=("${CC_BIN[@]}" "${ARGON_CFLAGS[@]}" "${ISA_AVX2[@]}" -x c -c "$src" -o "$obj") ;;
+                */argon2-ssse3.c)
+                    LAST_CMD=("${CC_BIN[@]}" "${ARGON_CFLAGS[@]}" "${ISA_SSSE3[@]}" -x c -c "$src" -o "$obj") ;;
                 */3rdparty/argon2/*)
                     LAST_CMD=("${CC_BIN[@]}" "${ARGON_CFLAGS[@]}" -x c -c "$src" -o "$obj") ;;
+                */blake2/avx2/blake2b_avx2.c)
+                    LAST_CMD=("${CC_BIN[@]}" "${CFLAGS[@]}" "${ISA_AVX2[@]}" -x c -c "$src" -o "$obj") ;;
+                */blake2b_sse41.c)
+                    LAST_CMD=("${CC_BIN[@]}" "${CFLAGS[@]}" "${ISA_SSE41[@]}" -x c -c "$src" -o "$obj") ;;
                 *)
                     LAST_CMD=("${CC_BIN[@]}" "${CFLAGS[@]}" -x c -c "$src" -o "$obj") ;;
             esac ;;
@@ -266,13 +289,20 @@ compile_bg() {
     local src="$1" obj="$2"
     local err="${OBJ}/$(basename -- "${obj%.o}").err"
     if ! compile_one "$src" "$obj" 2>"$err"; then
-        printf '%s\n' "$src" > "${OBJ}/.failed"
+        # Every failure is recorded, not just the last one to finish: when the
+        # toolchain itself is missing something (a header, a crt object) every
+        # file fails at once and reporting one of them sends the reader to a
+        # perfectly good source file.
+        printf '%s\n' "$src" >> "${OBJ}/.failed"
         {
             printf 'error: compiling %s failed\n' "${src#"${ROOT}/"}"
             printf '  command:'
             printf ' %q' "${LAST_CMD[@]}"
             printf '\n'
-            tail -n 25 "$err" 2>/dev/null || true
+            # The first lines, not the last: the tail of a failed compile is the
+            # note under the error ("note: see declaration of ..."), and the line
+            # that matters is at the top.
+            head -n 12 "$err" 2>/dev/null | sed 's/^/  | /' || true
         } >&2
     else
         rm -f "$err"
@@ -293,9 +323,15 @@ done
 wait || true
 
 if [ -f "${OBJ}/.failed" ]; then
-    failed_src=$(cat "${OBJ}/.failed")
+    failed_n=$(wc -l < "${OBJ}/.failed" | tr -d ' ')
+    failed_src=$(head -1 "${OBJ}/.failed")
     rm -f "${OBJ}/.failed"
-    echo "error: compilation failed: ${failed_src}" >&2
+    if [ "$failed_n" -gt 1 ]; then
+        echo "error: ${failed_n} files failed to compile; the first was ${failed_src}" >&2
+        echo "       (that many at once usually means the toolchain is incomplete, not the code)" >&2
+    else
+        echo "error: compilation failed: ${failed_src}" >&2
+    fi
     exit 1
 fi
 

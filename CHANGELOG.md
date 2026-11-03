@@ -1,3 +1,133 @@
+# 6.41.0 — a control plane that survives its own host
+
+Render's free plan gives 750 instance hours per workspace per month, one always-on
+service, and a filesystem that is empty after every deploy, restart and spin-down.
+The bot was written for a laptop: it kept the fleet in a JSON file, so every
+restart forgot who owned which rig. That is fixed by moving the fleet into the
+environment, where it never depended on a disk in the first place.
+
+## The roster
+
+`FLEET_ROSTER` is one JSON object naming every rig and, optionally, what it should
+be running:
+
+```json
+{"owner": "tg:123456789",
+ "rigs": {"ZMR-1A2B-3C4D-5E6F": {"label": "basement", "wallet": "46SQL...", "mode": "safe", "maxtemp": 72}}}
+```
+
+It can also live in `fleet/roster.json`; the environment wins when both exist.
+Nothing in it is secret — a Device ID is public and a wallet is an address — and a
+rig listed there is enrolled before it has ever checked in. The roster knows the
+ID and not the key, because the key never leaves the machine, so the first secret
+that hashes to that ID binds the record and every later request is held to it
+exactly as if the rig had enrolled itself in the chat.
+
+## Desired state, not messages
+
+On every check-in the server compares what the roster says a rig should be with
+what the rig says it is, and queues the difference. A queued command is a message
+that may never arrive; a roster entry is a fact that is re-checked a minute from
+now, and the minute after that. So a rig whose config was edited on the box, or
+whose mode change shed threads, is brought back without anybody noticing, and a
+restart of the service changes nothing because nothing was remembered.
+
+The correction is pushed at most once per rig per five minutes (a rig that refuses
+a command reports the old value for ever, and a robot shouting once a minute is
+not a control plane), never while a setup is already in flight, and immediately
+when the roster itself changes.
+
+## One service, and the arithmetic behind it
+
+A 31-day month is 744 hours, so exactly one always-on free service fits inside
+750. The root `render.yaml` therefore deploys the bot, the Discord bot and the
+dashboard as one process, and the pool blueprint moved to `deploy/render-pool.yaml`
+for whoever wants it on a different workspace. `FLEET_STATE` is now documented as
+what it is — a scratch cache — and `.github/workflows/keepalive.yml` asks
+`/healthz` twice an hour, which covers a fleet that is quiet, while a fleet that
+is checking in every minute keeps the service awake by itself.
+
+## The dashboard now has every command the chat has
+
+`/rename` and `/log <rig> [n]` were the two the browser could not do. A name is
+applied immediately rather than queued — the rig never learns its own name, so
+there is nothing to ask it — and the log form takes 5-80 lines like the chat,
+clamped rather than refused because it is a display setting.
+
+A rig the roster pins now says so, and lists the fields it pins. Without that,
+changing a value in the browser can look like it silently failed: it applies on
+one check-in and is corrected on the next, because the roster is re-read every
+minute. The page now explains the loop instead of leaving somebody to guess at it.
+
+## The USB stick, in the docs
+
+Someone mining continuously for a year will ask whether the stick survives it,
+so `docs/appliance/iso` now answers with what the image actually does: after boot
+nothing is written to the stick — the root filesystem is a read-only squashfs and
+the writable layer is a tmpfs — so a year of mining is a handful of reads a day.
+The section covers metal-bodied sticks, small capacity, clean power, few reboots,
+the two Ventoy habits that matter (`VTOY_DEFAULT_IMAGE`, and no persistence for
+this image), and the honest answer that an internal drive is more durable than any
+stick. It claims no lifetime in hours, because that depends on the controller and
+the room.
+
+Tests: fleet **73** (was 59) — three roster shapes, a broken roster reported
+rather than thrown, a correction queued once instead of once a minute, the same
+fleet surviving an emptied store, and the dashboard's rename, log length and
+roster badge.
+
+# 6.40.1 — a portable build that compiles the portable way
+
+The Render deploy failed with one line naming a source file:
+
+```
+error: compilation failed: /src/src/crypto/randomx/blake2/avx2/blake2b_avx2.c
+```
+
+Two things were wrong, and only one of them was in that file's neighbourhood.
+
+## The image had a compiler with no C library headers
+
+`deploy/Dockerfile` installed `g++` with `--no-install-recommends`. On Debian,
+`g++` *recommends* `libc6-dev` rather than depending on it, so the build stage
+had a compiler and no `string.h`. Every translation unit then failed at its first
+glibc include. The build reported **one** of them — whichever background compile
+finished last — which is why the message named a perfectly good source file and
+nothing else. It now installs `build-essential`, and a three-line probe compiles
+and runs before the engine is touched, so a broken toolchain fails in one line
+with the real error.
+
+That was also a reporting bug worth fixing on its own: `build.sh` now records
+every file that failed and prints the *first* lines of each compiler's stderr
+instead of the last 25 of one, because the tail of a failed compile is the note
+under the error and the line that matters is at the top.
+
+## A `--portable` build now builds portable
+
+RandomX picks its implementation at runtime from CPUID, so the AVX2, SSE4.1 and
+SSSE3 translation units are always compiled — but their instruction set was only
+ever enabled as a side effect of `-march=native`. A `--portable` build compiled
+AVX2 intrinsics with AVX2 off: gcc turns that into
+
+```
+warning: AVX vector return without AVX enabled changes the ABI [-Wpsabi]
+```
+
+which is not a warning to shrug at — it means the calling convention of those
+functions is not the one the rest of the build assumes. Clang refuses the same
+code outright. Each file now carries its own flags (`-mavx2`, `-msse4.1`,
+`-mssse3`), the flag set is part of the object-cache signature so a stale object
+cannot survive the change, and the same fix applies to the ISO images built with
+`--arch=x86-64-v2`, where AVX2 was never enabled either.
+
+Measured here: `./zmrig/build.sh --jobs 2 --portable` on Debian 12 / gcc 12
+builds clean with no `-Wpsabi` warning and the resulting binary passes
+`--self-test=light` (all six reference vectors). The Docker image itself is built
+in CI now, so the next person to break `deploy/Dockerfile` is told by a job
+called "Pool image" rather than by a failed deploy.
+
+Tests: `zmrig/build.sh` portable build + self-test, shellcheck, workflow parse.
+
 # 6.40.0 — the rig notices when it stops keeping its own number
 
 A measurement is a claim about the future, and a machine only sometimes keeps it.

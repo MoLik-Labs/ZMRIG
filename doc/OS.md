@@ -454,14 +454,14 @@ building anything:
 ```
 
 ```
-ZMRIG OS 6.40.0
+ZMRIG OS 6.41.0
 
   base               Alpine Linux 3.22.1 (x86_64, OpenRC, musl)
   kernel             linux-lts 6.12.61
   root filesystem    squashfs, zstd level 19, 1 MiB blocks
   bootloader         GRUB, BIOS and UEFI, built with the image
 
-  published: v6.40.0
+  published: v6.41.0
              built on Alpine 3.22.1
              os-beta (rolling beta)
 

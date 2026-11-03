@@ -78,11 +78,11 @@ function cleanAcks(acks) {
   }));
 }
 
-function createServer({ config, store, log = () => {}, now = () => Date.now(), onEvent = () => {}, releases = null }) {
+function createServer({ config, store, log = () => {}, now = () => Date.now(), onEvent = () => {}, onCheckIn = () => {}, releases = null, roster = null }) {
   const lastHello = new Map();
   // Null when no password is configured: the dashboard is opt-in, and a bot-only
   // host has no HTML surface at all.
-  const web = createWeb({ config, store, log, releases, now });
+  const web = createWeb({ config, store, log, releases, now, roster });
 
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url, 'http://localhost');
@@ -120,6 +120,18 @@ function createServer({ config, store, log = () => {}, now = () => Date.now(), o
     }
 
     const existing = store.get(claimedId);
+
+    // A rig the roster named before it ever checked in. The roster knows the
+    // Device ID and not the key - it cannot, the key never leaves the machine -
+    // so the first secret that hashes to that ID binds the record, and every
+    // later request is held to it exactly as if the rig had enrolled itself.
+    // Landing on the ID at all is 48 bits of proof; nobody types their way in.
+    if (existing && !existing.secret_hash && existing.roster) {
+      existing.secret_hash = ids.sha256(secret);
+      existing.code = ids.enrolCode(secret);
+      store.touch();
+    }
+
     if (existing && !ids.verifySecret(secret, existing)) {
       return json(response, 403, { ok: false, error: 'device key rejected' });
     }
@@ -153,6 +165,16 @@ function createServer({ config, store, log = () => {}, now = () => Date.now(), o
 
     const events = alerts.onHello(record, config, stamp, before);
     events.forEach((event) => onEvent(event, record));
+
+    // Last thing before the queue is emptied: compare what the roster says this
+    // rig should be with what it just said it is, and queue the difference. A
+    // restart of this process changes nothing, because nothing was remembered.
+    // A failure here must never cost a check-in its answer, so it is contained.
+    try {
+      onCheckIn(record, stamp);
+    } catch (error) {
+      log(`check-in hook: ${error.message}`);
+    }
 
     const enrolled = Boolean(record.owner);
     const commands = enrolled ? store.take(record.id) : [];

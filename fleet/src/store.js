@@ -137,6 +137,48 @@ class Store {
     return record;
   }
 
+  /** Create or refresh the record for a rig named in the roster. This is the
+   *  only place a record exists without a secret: the roster knows the ID, not
+   *  the key, so `secret_hash` stays null until the machine itself checks in -
+   *  which it can only do with the key it never sends anywhere. */
+  define(id, entry = {}, stamp = this.now()) {
+    const key = String(id || '').toUpperCase();
+    let record = this.state.devices[key];
+    if (!record) {
+      record = {
+        id: key,
+        label: '',
+        owner: null,
+        secret_hash: null,
+        code: null,
+        created_at: stamp,
+        claimed_at: null,
+        last_seen: null,
+        first_seen: null,
+        status: {},
+        config: {},
+        config_version: 0,
+        queue: [],
+        acks: [],
+        log: '',
+        want_log: false,
+        alerts: {},
+        enrol_address: null,
+      };
+      this.state.devices[key] = record;
+    }
+
+    record.roster = true;
+    if (entry.label) record.label = entry.label;
+    if (entry.owner && record.owner !== entry.owner) {
+      record.owner = entry.owner;
+      record.claimed_at = record.claimed_at || stamp;
+    }
+    if (entry.desired) record.desired = entry.desired;
+    this.touch();
+    return record;
+  }
+
   enrol(id, owner, label) {
     const record = this.get(id);
     if (!record) return { ok: false, error: 'unknown' };

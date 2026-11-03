@@ -65,7 +65,7 @@ function fakeGitHub() {
   };
 }
 
-async function fleet({ password = PASSWORD, fetchImpl } = {}) {
+async function fleet({ password = PASSWORD, fetchImpl, roster = null } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zmrig-web-'));
   const store = new Store(path.join(dir, 'state.json')).load();
   const releases = new Releases({ fetchImpl: fetchImpl || fakeGitHub(), log: () => {} });
@@ -74,6 +74,7 @@ async function fleet({ password = PASSWORD, fetchImpl } = {}) {
     store,
     log: () => {},
     releases,
+    roster,
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -266,6 +267,120 @@ test('a rig page shows its state and every control', async () => {
 
     const missing = await app.request('/rig/ZMR-0000-0000-0000');
     assert.equal(missing.status, 404);
+  } finally {
+    await app.close();
+  }
+});
+
+test('the rig page has a control for every command the chat has', async () => {
+  const app = await fleet();
+  try {
+    const record = app.store.claim(crypto.randomBytes(32).toString('hex'));
+    record.owner = 'tg:1';
+    await app.signIn();
+    const html = await (await app.request(`/rig/${record.id}`)).text();
+
+    // /log <rig> [n]: the chat takes 5-80 lines, and so does the form.
+    assert.match(html, /name="lines" min="5" max="80"/);
+    // /rename <rig> name: applied here rather than queued, because the rig never
+    // learns the name.
+    assert.match(html, new RegExp(`action="/rig/${record.id}/rename"`));
+    assert.match(html, /name="label"/);
+  } finally {
+    await app.close();
+  }
+});
+
+test('a name is renamed in place, and a bad one is refused', async () => {
+  const app = await fleet();
+  try {
+    const record = app.store.claim(crypto.randomBytes(32).toString('hex'));
+    record.owner = 'tg:1';
+    const csrf = tokenFrom(await (await app.signIn()).text()) || tokenFrom(await (await app.request('/')).text());
+
+    const post = (label, token = csrf) =>
+      app.request(`/rig/${record.id}/rename`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ label, csrf: token }).toString(),
+      });
+
+    const good = await post('attic rig');
+    assert.equal(good.status, 303);
+    assert.equal(app.store.get(record.id).label, 'attic rig');
+    assert.equal(app.store.state.audit.at(-1).action, 'rename');
+    // Nothing was queued: the rig has no opinion about its own name.
+    assert.equal(app.store.get(record.id).queue.length, 0);
+
+    const bad = await post('<script>x</script>');
+    assert.equal(bad.status, 303);
+    assert.match(decodeURIComponent(bad.headers.get('location')), /1-40 letters/);
+    assert.equal(app.store.get(record.id).label, 'attic rig');
+
+    const forged = await post('hijacked', 'forged');
+    assert.equal(forged.status, 403);
+    assert.equal(app.store.get(record.id).label, 'attic rig');
+  } finally {
+    await app.close();
+  }
+});
+
+test('a log request carries the number of lines that was asked for', async () => {
+  const app = await fleet();
+  try {
+    const record = app.store.claim(crypto.randomBytes(32).toString('hex'));
+    record.owner = 'tg:1';
+    const csrf = tokenFrom(await (await app.signIn()).text()) || tokenFrom(await (await app.request('/')).text());
+
+    const ask = (lines) =>
+      app.request(`/rig/${record.id}/action`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ action: 'log', lines, csrf }).toString(),
+      });
+
+    await ask('12');
+    assert.deepEqual(app.store.get(record.id).queue.at(-1).args, { lines: 12 });
+
+    // Out of range is clamped, not refused: it is a display setting, and the bot
+    // clamps the same way.
+    await ask('500');
+    assert.deepEqual(app.store.get(record.id).queue.at(-1).args, { lines: 80 });
+    await ask('');
+    assert.deepEqual(app.store.get(record.id).queue.at(-1).args, { lines: 40 });
+  } finally {
+    await app.close();
+  }
+});
+
+test('a rig the roster pins says so, and a rig it does not mention does not', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zmrig-web-'));
+  const store = new Store(path.join(dir, 'state.json')).load();
+  const pinned = store.claim(crypto.randomBytes(32).toString('hex'));
+  const loose = store.claim(crypto.randomBytes(32).toString('hex'));
+  const roster = {
+    rigs: new Map([
+      [pinned.id, { id: pinned.id, owner: 'tg:1', label: null, desired: { mode: 'safe', maxtemp: 72, wallet: WALLET } }],
+    ]),
+  };
+
+  const app = await fleet({ roster });
+  // The helper made its own store; move these rigs into it so the pages see them.
+  for (const record of [pinned, loose]) {
+    record.owner = 'tg:1';
+    app.store.state.devices[record.id] = { ...record, queue: [], acks: [] };
+  }
+  try {
+    await app.signIn();
+    const pinnedPage = await (await app.request(`/rig/${pinned.id}`)).text();
+    assert.match(pinnedPage, /Pinned by the roster/);
+    for (const field of ['mode', 'maxtemp', 'wallet']) {
+      assert.match(pinnedPage, new RegExp(`<code>${field}</code>`));
+    }
+    assert.match(pinnedPage, /corrected again on the check-in after that/);
+
+    const loosePage = await (await app.request(`/rig/${loose.id}`)).text();
+    assert.equal(loosePage.includes('Pinned by the roster'), false);
   } finally {
     await app.close();
   }

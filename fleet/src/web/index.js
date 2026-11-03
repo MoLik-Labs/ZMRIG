@@ -77,7 +77,7 @@ function readForm(request, limit = MAX_FORM) {
 /** Every field the setup form may carry, in the order they are applied. */
 const SETUP_FIELDS = ['wallet', 'pool', 'coin', 'mode', 'threads', 'worker', 'maxtemp'];
 
-function createWeb({ config, store, releases = null, log = () => {}, now = () => Date.now() }) {
+function createWeb({ config, store, releases = null, log = () => {}, now = () => Date.now(), roster = null }) {
   if (!config.web_enabled || !config.web_password) return null;
 
   const sessions = new Sessions({ password: config.web_password, now });
@@ -322,7 +322,7 @@ function createWeb({ config, store, releases = null, log = () => {}, now = () =>
       return;
     }
 
-    const match = /^\/rig\/([^/]+)\/(action|setup|remove)$/.exec(path);
+    const match = /^\/rig\/([^/]+)\/(action|setup|remove|rename)$/.exec(path);
     if (!match) {
       html(request, response, 404, page({ title: 'Not found', body: '<h1>Not found</h1>', csrf: session.csrf }));
       return;
@@ -341,10 +341,29 @@ function createWeb({ config, store, releases = null, log = () => {}, now = () =>
         redirect(response, `/rig/${encodeURIComponent(record.id)}?err=${encodeURIComponent(`unknown action: ${action}`)}`);
         return;
       }
-      const problem = queue(record, { cmd: action, args: action === 'log' ? { lines: config.log_lines || 40 } : undefined }, 'web', action);
+      // The bot lets you ask for 5-80 lines; so does the form. A number out of
+      // range is clamped rather than refused, because it is a display setting.
+      const asked = Number.parseInt(form.lines, 10);
+      const lines = Math.min(Math.max(Number.isFinite(asked) ? asked : config.log_lines || 40, 5), 80);
+      const problem = queue(record, { cmd: action, args: action === 'log' ? { lines } : undefined }, 'web', action);
       const flashName = problem ? 'err' : 'ok';
       const message = problem || `${action} queued; it applies on the next check-in.`;
       redirect(response, `/rig/${encodeURIComponent(record.id)}?${flashName}=${encodeURIComponent(message)}`);
+      return;
+    }
+
+    // A name lives on this side of the wire - the rig never learns it - so unlike
+    // every other change it is applied immediately instead of queued.
+    if (match[2] === 'rename') {
+      const label = String(form.label || '').trim().slice(0, 40);
+      if (!/^[\w .:-]{1,40}$/.test(label)) {
+        redirect(response, `/rig/${encodeURIComponent(record.id)}?err=${encodeURIComponent('a name is 1-40 letters, digits, space, dot, colon or dash')}`);
+        return;
+      }
+      record.label = label;
+      store.touch();
+      store.audit({ actor: 'web', action: 'rename', device: record.id });
+      redirect(response, `/rig/${encodeURIComponent(record.id)}?ok=${encodeURIComponent(`renamed to ${label}`)}`);
       return;
     }
 
@@ -497,6 +516,9 @@ function createWeb({ config, store, releases = null, log = () => {}, now = () =>
       csrf: session.csrf,
       flash: flash.err || flash.ok,
       flashBad: Boolean(flash.err),
+      // The dashboard shows what the roster pins so nobody spends an evening
+      // fighting a value that is re-derived from the environment every minute.
+      roster,
     };
     const plainPage = Boolean(flash.ok || flash.err);
 

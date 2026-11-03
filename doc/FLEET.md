@@ -81,23 +81,32 @@ page at `/` (or the dashboard, if you set a password — §3), and accepts rigs 
 
 ### Render
 
-`fleet/render.yaml` is a blueprint: *New → Blueprint* in Render, pick the
-repository, choose that file, and it asks for the secrets it needs — they are
-marked `sync: false`, so they are typed into Render once and never read from the
+The blueprint in the repository root deploys this service: *New → Blueprint* in
+Render, pick the repository, apply. It asks for the secrets once — they are
+marked `sync: false`, so they are typed into Render and never read from the
 repository.
 
-Two things the free plan does that matter:
+Three things about the free plan shape the design, and none of them is a
+workaround for a bug in this code:
 
-* **It sleeps after 15 minutes without traffic.** A sleeping bot answers
-  nothing. Add a free uptime monitor (cron-job.org, UptimeRobot, a GitHub Action
-  on a schedule) hitting `https://<service>/healthz` every 5 minutes. Rigs keep
-  mining while it sleeps — they check in with nobody listening, and catch up when
-  it wakes.
-* **The disk is empty after every deploy.** `FLEET_STATE` is one JSON file; on a
-  free instance it is recreated on each deploy, so every rig has to be enrolled
-  again. Attach a disk and point `FLEET_STATE` at it once the fleet is real.
+* **750 instance hours per workspace per calendar month**, shared by every free
+  service. A 31-day month is 744 hours, so exactly one always-on service fits.
+  Two services that both stay awake run the workspace out of hours, and Render
+  then suspends the free services until the next month. This is why the bot, the
+  dashboard and the Discord bot are one process, and why the pool is not part of
+  this blueprint.
+* **It sleeps after 15 minutes without inbound traffic.** A sleeping bot answers
+  nothing. While a fleet is checking in every sixty seconds that traffic keeps it
+  awake by itself; `.github/workflows/keepalive.yml` covers the quiet case by
+  asking `/healthz` twice an hour (set the repository variable
+  `FLEET_HEALTH_URL`). Rigs keep mining while it sleeps — they check in with
+  nobody listening and catch up when it wakes.
+* **The filesystem is empty after every deploy, restart and spin-down.** So the
+  fleet is not stored there. `FLEET_STATE` is a scratch cache; what survives is
+  `FLEET_ROSTER`, in the environment, which says who the rigs are and what they
+  should be running. Every check-in is reconciled against it — see below.
 
-Any other host works the same way: Node 20+, one port, two environment variables.
+Any other host works the same way: Node 20+, one port, the environment.
 
 ### Environment
 
@@ -109,7 +118,9 @@ Any other host works the same way: Node 20+, one port, two environment variables
 | `DISCORD_ADMIN_IDS` | - | Discord user ids |
 | `FLEET_NOTIFY` | every admin | where alerts go |
 | `PORT` | `8080` | HTTP port |
-| `FLEET_STATE` | `./data/fleet.json` | the fleet's memory |
+| `FLEET_STATE` | `./data/fleet.json` | scratch cache; on a free host it is recreated on every deploy |
+| `FLEET_ROSTER` | — | the fleet, as JSON: who the rigs are and what they should run (see below) |
+| `FLEET_ROSTER_FILE` | `fleet/roster.json` | where to read that JSON instead, when the variable is empty |
 | `FLEET_PUBLIC_URL` | - | printed in the status page, optional |
 | `FLEET_INTERVAL` | `60` | seconds between check-ins |
 | `FLEET_OFFLINE_AFTER` | `300` | silence before "offline" (never below 3 intervals) |
@@ -122,6 +133,53 @@ Any other host works the same way: Node 20+, one port, two environment variables
 
 With no admin id the process refuses to start: a bot nobody owns would accept
 commands from an Internet stranger.
+
+### The roster: the fleet that survives a restart
+
+`FLEET_ROSTER` is one JSON object naming every rig and, optionally, what it
+should be running:
+
+```json
+{
+  "owner": "tg:123456789",
+  "rigs": {
+    "ZMR-1A2B-3C4D-5E6F": {
+      "label": "basement",
+      "wallet": "46SQL...",
+      "pool": "gulf.moneroocean.stream:10001",
+      "coin": "xmr",
+      "mode": "safe",
+      "maxtemp": 72,
+      "threads": 8,
+      "worker": "rig-basement"
+    }
+  }
+}
+```
+
+The same JSON can live in `fleet/roster.json` if you would rather keep it in the
+repository; the environment wins when both exist, so one entry can be overridden
+by a deploy hook without editing a file. `fleet/roster.example.json` has every
+field, and nothing in it is secret: a Device ID is public and a wallet is an
+address.
+
+Two consequences worth understanding:
+
+* **A rig in the roster is enrolled before it has ever checked in.** The roster
+  knows the Device ID and not the key — it cannot, the key never leaves the
+  machine — so the first secret that hashes to that ID binds the record, and
+  every later request is held to it exactly as if the rig had enrolled itself in
+  the chat.
+* **The roster is desired state, not a message.** A queued command is a message
+  that may never arrive; a roster entry is a fact that is re-checked on the next
+  check-in. If a rig drifts — somebody edits the config on the box, a mode change
+  sheds threads, a wallet is replaced by hand — the difference is queued again,
+  at most once per rig per five minutes, and never twice while a change is
+  already in flight. Restarting the service changes nothing, because nothing was
+  remembered.
+
+Empty `FLEET_ROSTER` is a supported state: the bot then works exactly as before,
+with enrolments living in `FLEET_STATE` until the next restart.
 
 The hashrate rule is two rules, because a fleet fails in two time scales. One
 compares each check-in with the one before it (a minute apart) and catches a rig
@@ -284,7 +342,7 @@ One request a minute from the rig:
 ```json
 POST /v1/hello
 Authorization: Bearer <64 hex characters: the device key>
-{"device":"ZMR-1A2B-3C4D-5E6F","version":"6.40.0",
+{"device":"ZMR-1A2B-3C4D-5E6F","version":"6.41.0",
  "status":{"state":"mining","hashrate":1201.4,"temp":64,"uptime":86400,
            "mode":"max","wallet":"4...","pool":"gulf.moneroocean.stream:10001",
            "coin":"xmr","threads":"8","slot":"a","installed":true},
