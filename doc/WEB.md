@@ -1,60 +1,104 @@
-# Hosting the site and the downloads yourself
+# Hosting the site, the downloads and the fleet yourself
 
-`serve/` is the web host: one Node process, no dependencies, no build step of
-its own. It serves the documentation that Docusaurus produces, a download page
-built from the GitHub releases API, that same data as JSON, and three links that
-always point at the newest image.
+`host/` is the process this project deploys: one Node process, one port, no
+dependencies, no build step. It answers three different clients at once.
 
-You do not need it to use ZMRIG — GitHub Pages serves the same documentation and
-GitHub serves the images. It exists for three reasons: a link that does not
-change when a version does (`/iso/v3`), a download page that lists every asset
-with its checksum without a redeploy, and a place to put the site on your own
-domain when GitHub Pages is blocked or too slow where your users are.
+| who | what they ask for | answered by |
+| --- | --- | --- |
+| people | `GET /`, `/vi/`, `/download`, `/iso/v3`, `/api/releases.json` | the committed documentation build in `web/` |
+| rigs | `POST /v1/hello`, once a minute each | the device protocol from `fleet/` |
+| the bots | nothing — they poll Telegram and Discord outwards | `fleet/src/telegram.js`, `fleet/src/discord.js` |
+
+You do not need any of it. GitHub Pages serves the same documentation and GitHub
+serves the images. It exists for four reasons: links that do not change when a
+version does (`/iso/v3`), a download page that lists every asset with its
+checksum without a redeploy, a place to put all of it on your own domain when
+GitHub is blocked or slow, and a control plane for a fleet of rigs that needs
+somewhere to run.
+
+## Why one process and not three
+
+A free Render workspace is allowed **750 instance hours per calendar month**,
+shared by every free service in it, with no rollover. A 31-day month is 744
+hours, so exactly one always-on service fits — a second one puts the workspace
+over the limit and Render suspends the free services until the next month. That
+is not a bill, it is an outage, and it is why the deployment unit is one process.
+
+Everything is in it because everything is small: the site is a directory of files
+read into memory, the device protocol is a `POST` handler, and the bots are two
+long-poll loops. None of them needs a service of its own, and separating them
+would cost the fleet its only free month.
+
+The pieces stay separate in the repository, so each can be run and tested on its
+own:
+
+```bash
+node host/server.js              # all three, one port   <- what Render runs
+cd serve && npm start            # the site and the downloads only
+cd fleet && npm start            # the bots, the rigs and the dashboard
+```
 
 ## Run it
 
 ```bash
-cd site && npm install && npm run build && cd ..   # the documentation
-cd serve && npm start                          # http://localhost:8080
+node host/server.js             # http://localhost:8080
 ```
 
-`npm start` reads the built site from `site/build`. Two environment variables are
-worth knowing before you deploy, and both have sensible defaults:
+The documentation it serves is `web/`, the committed build of `site/`. It is
+regenerated deliberately, not by a deploy:
 
 ```bash
-PORT=8080                 # Render sets this
-SITE_ROOT=site/build
+npm run publish:site            # builds site/ and replaces web/
+```
+
+Configuration is the environment, and every variable has a default:
+
+```bash
+PORT=8080                        # Render sets this
+SITE_ROOT=web                    # where the pages come from
+TELEGRAM_BOT_TOKEN=...           # optional: the Telegram bot
+DISCORD_BOT_TOKEN=...            # optional: the Discord bot
+FLEET_ADMIN_IDS=tg:123456789     # who may command it
+FLEET_ROSTER={"rigs":[...]}      # who the rigs are; see fleet/roster.example.json
+FLEET_PUBLIC_URL=https://zmrig.example.com   # what the pages print as links
 GITHUB_REPO=MoLik-Labs/ZMRIG
-RELEASES_TTL=600000       # ten minutes
-PUBLIC_URL=https://zmrig.example.com   # what /download prints as copyable links
+RELEASES_TTL=600000              # ten minutes
 ```
 
-Every one of them has a default, so an empty environment is a working
-configuration; [`serve/.env.example`](../serve/.env.example) is the same list
-with the details, and
-
-```bash
-cd serve && cp .env.example .env
-set -a; . ./.env; set +a; npm start
-```
-
-is the whole local setup.
+[`serve/.env.example`](../serve/.env.example) and
+[`fleet/config.example.env`](../fleet/config.example.env) are the same lists with
+the details. With no token and no roster it still runs: it serves the
+documentation, accepts check-ins, and says in the log that no bot is connected.
+Only a broken `PORT` stops it.
 
 ## Deploy on Render
 
-`render.yaml` in the repository root is a blueprint with two services: the pool
-and this host. *New → Blueprint*, pick the repository, and Render builds the
-documentation with `SITE_BASE_URL=/` (the host serves from its own root, not from
-`/ZMRIG/`), precompresses every page and asset, and starts the server.
+`render.yaml` in the repository root is the blueprint: one service, `node
+host/server.js`, health check `/healthz`. The
+[deploy button](https://render.com/deploy?repo=https://github.com/MoLik-Labs/ZMRIG)
+reads that file; *New → Blueprint* and picking the repository does the same
+thing. Then fill in the variables marked `sync: false` once.
 
-Nothing in it is a secret. The GitHub API is read anonymously, and the feed is
-cached for ten minutes: at most 60 calls an hour, comfortably inside the
-unauthenticated rate limit even with a lot of visitors.
+There is no build step. `web/` is committed, so there is no `npm install`, no
+Docusaurus build, and no build minutes spent on a deploy — and a documentation
+dependency that publishes a broken minor version cannot break the deployment
+that runs your fleet.
 
-Free instances sleep after fifteen minutes without traffic. A sleeping site wakes
-on the next request in about a second, which is acceptable for a download page;
-if you want it always warm, point any free uptime monitor at `/healthz` every
-five minutes.
+The pool is **not** in that blueprint: it is needed only while somebody is
+actually mining, and `deploy/render-pool.yaml` exists for whoever wants to run it
+instead. Applying both to the same workspace is what exhausts the month. A
+second workspace, or a paid plan, is the honest answer if you need both.
+
+Nothing in the blueprint is a secret except the four values Render asks for once.
+The GitHub API is read anonymously and the feed is cached for ten minutes — at
+most 60 calls an hour, well inside the unauthenticated limit at any traffic this
+site sees.
+
+A free instance sleeps after fifteen minutes without traffic and wakes on the
+next request in about a second. With a fleet reporting every minute it never
+sleeps; with an empty fleet, point any free uptime monitor at `/healthz` every
+five minutes (`.github/workflows/keepalive.yml` does this from the repository,
+which is the option that needs no third party).
 
 ## What it answers
 
@@ -65,8 +109,9 @@ five minutes.
 | `/download` | stable and beta, sizes, checksums, `dd` and `sha256sum` lines |
 | `/api/releases.json` | the same data for a script |
 | `/iso/v3` `.../v2` `.../beta` | 302 to the newest asset on that channel |
-| `/healthz` | file count, bytes, RSS, uptime — small and uncached |
+| `/healthz` | one answer covering all three jobs |
 | `/docs` | `301` to `/docs/intro`, because that is what a hand-typed URL means |
+| `POST /v1/hello` | the device protocol; `401` without a device key, `405` on `GET` |
 
 `/iso/*` reads the release feed, which is cached, so a redirect costs one Map
 lookup. Point a script at it and it never has to know a version:
@@ -88,17 +133,49 @@ The hash comes with the document, so the helper prints it without downloading
 160 MB first. If the host itself has never reached GitHub, it says so and the
 helper repeats that reason instead of claiming nothing has been published.
 
+`/healthz` answers for all three jobs, so a deploy that lost one of them is
+visible from the outside instead of from a user:
+
+```json
+{"ok":true,
+ "bots":{"telegram":true,"discord":false},
+ "fleet":{"rigs":3,"known":4},
+ "site":{"root":"/opt/render/project/src/web","files":244},
+ "uptime_s":3600,"rss_mb":64}
+```
+
+`rigs` counts check-ins that an admin has claimed; `known` includes a machine
+that has enrolled but not been named yet. A `site.files` of zero means the
+process is serving a directory that is not the documentation.
+
+There is no dashboard on this host. The front door is the documentation, and two
+HTML surfaces on one origin is one too many to keep safe; `cd fleet && npm start`
+brings the dashboard back, with `FLEET_WEB_PASSWORD` and CSRF on every form. The
+bots themselves are unaffected either way.
+
 ## Why it is fast
 
-The whole point is that a request for a page is a memory read. At boot the server
-reads every file of the built site into memory once — 179 files, 238 routes once
-the extensionless spellings are counted, 6.31 MB, 1.63 MB after compression — and
-keeps a pre-built header set for each. After that:
+A page request is a memory read. At boot the process reads every file of the
+built site once — 244 routes, 6.84 MB, in 17 ms — and keeps a pre-built header
+set for
+each. After that:
 
 * **No filesystem syscall per request** — no `stat`, no `open`, no `readdir`.
-* **Brotli and gzip are generated once**, at boot if no `.br`/`.gz` sidecar
-  exists, or at deploy time by `npm run build` in `serve/`. A request picks one
-  and sets `Content-Encoding` and `Vary`.
+* **Compression happens on demand**, not at boot. This is the one place where
+  the obvious optimisation is wrong: compressing the whole site with Brotli up
+  front is a few seconds on a laptop and minutes on the 0.1 CPU of a free Render
+  instance, during which the health check fails and the deploy is rolled back. So
+  each file is compressed the first time somebody asks for it, and kept. A
+  browser that accepts Brotli never causes a gzip copy to exist at all.
+  `.br`/`.gz` sidecars written by `npm run build` in `serve/` are still preferred
+  when they are there, which makes a deploy that ships them do no work.
+* **The quality follows the size**: 11 up to 32 KB, 9 up to 256 KB, 6 above it.
+  Brotli's cost grows far faster than its gain, and on an old CPU quality 11 on a
+  bundle is a visitor waiting for two percent.
+* **Warm-up**, the pages most likely to be opened first, compressed just
+  after the socket opens, one per tick,
+  between requests. A cold start answers immediately and the copy is ready by the
+  time somebody clicks a link.
 * **`ETag` on everything**, and a conditional request is answered before a byte
   of the body is touched: `304 Not Modified` with no body.
 * **Fingerprinted assets are `immutable`** with a one-year lifetime, because
@@ -113,28 +190,22 @@ keeps a pre-built header set for each. After that:
 * **The release feed is fetched once per ten minutes**, not once per visit, and
   the rendered download page is cached against the feed's timestamp.
 
-Measured on the development machine (2 vCPU), 300 requests each, HTTP keep-alive,
-warm cache:
+Measured on the development machine (2 vCPU, 3939 MB, HTTP keep-alive), 60
+requests per route after the first:
 
-| path | p50 | p95 |
-| --- | ---: | ---: |
-| `/` | 0.25 ms | 0.81 ms |
-| `/docs/intro` | 0.19 ms | 0.34 ms |
-| a fingerprinted JS asset | 0.35 ms | 0.63 ms |
-| eight at a time, `/docs/intro` | 0.89 ms | 4.92 ms |
+| path | boot | first request | p50 | p95 |
+| --- | ---: | ---: | ---: | ---: |
+| the whole process, listening | 17 ms | — | — | — |
+| `/` | | 31.0 ms | 0.34 ms | 1.12 ms |
+| `/docs/intro` | | 33.5 ms | 0.31 ms | 0.45 ms |
+| `/download` | | 62.7 ms | 0.29 ms | 1.02 ms |
+| `/vi/` | | 22.1 ms | 0.26 ms | 0.49 ms |
+| eight at a time, `/` | | | 3.49 ms | |
 
-Brotli takes the home page from 16 KB to 3.9 KB. These numbers are from this
-machine; a Render instance has different CPU and a real network in front of it,
-and nothing here has been measured there.
-
-`/healthz` reports the actual figures for the process that is running:
-
-```json
-{"ok":true,"files":238,"bytes":6614860,"compressed_bytes":1711249,"uptime_s":3600,"rss_mb":38}
-```
-
-The first three numbers are the table this process loaded; `rss_mb` is the whole
-Node process and depends on the instance.
+The first request for a page pays for its compression (22–63 ms here, ten times
+that on a free instance's tenth of a CPU); every request after it is 0.3 ms. Brotli takes the home page from 16 KB to 3.9 KB. These numbers are from
+this machine; a Render instance has different CPU and a real network in front of
+it, and nothing here has been measured there.
 
 The two pages this process renders itself — `/download` and the release feed —
 carry `Content-Security-Policy: default-src 'none'` with only inline styles
@@ -148,19 +219,36 @@ preference, and `identity;q=0` gets a compressed body rather than an empty `406`
 
 The feed keeps the last good answer and says so on the page, with what to fix
 (`name lookup failed`, `timed out`, `TLS certificate rejected`) rather than
-Node's `fetch failed`. If GitHub has never
-been reachable since the process started, `/download` says that too and the links
-it has still work; `/iso/*` answers `404` rather than redirecting into nothing.
-Nothing 500s because a third party is down.
+Node's `fetch failed`. If GitHub has never been reachable since the process
+started, `/download` says that too and the links it has still work; `/iso/*`
+answers `404` rather than redirecting into nothing. Nothing 500s because a third
+party is down, and nothing about the fleet depends on GitHub at all.
 
 ## Tests
 
 ```bash
-cd serve && npm test        # 45 checks
+node --test host/tests/*.test.js    # 7 checks: one port, three jobs
+cd serve && npm test                # 46 checks: the site itself
+cd fleet && npm test                # 84 checks: bots, protocol, store
 ```
 
-The suite covers the file table, negotiation, the 304 path, traversal attempts,
-HTML escaping of anything that comes from GitHub, a `javascript:` URL in a
-release asset, the three redirects, a feed that fails and explains why, a stale
-precompressed sidecar, `q=0` in `Accept-Encoding`, the policy on the pages this
-process renders, and the real process booting and shutting down on a socket.
+`host/tests` is the one that matters for this deployment shape: a rig and a
+browser hitting the same port must be answered by different halves, `/healthz`
+must report all three jobs, the dashboard must not be published, and a missing
+site must not stop the rigs. The rest is covered by the two suites below it —
+the file table, negotiation, the `304` path, traversal attempts, HTML escaping of
+anything that comes from GitHub, a `javascript:` URL in a release asset, the
+three redirects, a feed that fails and explains why, a stale precompressed
+sidecar, `q=0` in `Accept-Encoding`, and the real process booting and stopping on
+a socket.
+
+## Run it without Render at all
+
+```bash
+node host/server.js                                  # systemd, a container, a spare box
+```
+
+A single `node host/server.js` under any supervisor is the whole deployment. It
+writes nothing to disk except the fleet's scratch cache (`FLEET_STATE`, default
+`/tmp/fleet.json`), which is rebuilt by the next check-in, so a restart, a
+redeploy and a fresh container are all the same event.

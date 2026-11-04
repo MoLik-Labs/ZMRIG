@@ -88,6 +88,10 @@ ngay thay vì chờ tối đa một phút.
   chỉ tốn vài trăm byte.
 * Cùng tiến trình Node với bot. Không phải host thêm, không phải trả thêm, và
   tắt dashboard không làm bot dừng.
+* Cách triển khai duy nhất không mở nó là `node host/server.js` — service đơn mà
+  Render chạy: ở đó cửa chính là tài liệu, và hai bề mặt HTML trên cùng một origin
+  là một bề mặt quá nhiều để giữ an toàn. Cần trang đó thì chạy
+  `cd fleet && npm start`.
 
 ## Bảo mật
 

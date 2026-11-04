@@ -1,3 +1,92 @@
+# 6.46.0 — one service, three jobs, on the one instance a free month allows
+
+A free Render workspace gets 750 instance hours per calendar month, shared by
+every free service, with no rollover. A 31-day month is 744 hours. So one
+always-on service fits and a second one does not: the workspace goes over the
+limit and Render suspends the free services until the next month. Two blueprints
+in the repository described two deployments, and the person applying both found
+out four weeks later.
+
+`host/server.js` is now the deployment: one process, one port, one health check,
+answering all three clients.
+
+| who | asks for | answered by |
+| --- | --- | --- |
+| people | `/`, `/vi/`, `/download`, `/iso/v3`, `/api/releases.json` | the committed build in `web/` |
+| rigs | `POST /v1/hello`, once a minute each | the device protocol |
+| the bots | nothing — they poll Telegram and Discord outwards | two long-poll loops |
+
+The site is `web/`, the committed output of `site/`, so a deploy installs nothing
+and spends no build minutes; the repository has no runtime dependencies at all.
+The dashboard is deliberately not mounted: the public front door is the
+documentation, and `cd fleet && npm start` is what serves the dashboard.
+
+`/healthz` answers for all three jobs, so a deploy that lost one of them is
+visible from the outside rather than from a user:
+
+```json
+{"ok":true,"bots":{"telegram":true,"discord":false},
+ "fleet":{"rigs":3,"known":4},
+ "site":{"root":"/opt/render/project/src/web","files":244},
+ "uptime_s":3600,"rss_mb":64}
+```
+
+A control plane that refuses to start without a bot token is right when it does
+nothing else, and wrong here: with no token and no roster the host serves the
+documentation and accepts check-ins, and says in the log that no bot is
+connected. Only a broken `PORT` stops it.
+
+## Compression moved from boot to the first request
+
+The site host used to compress every file at boot with Brotli at quality 11.
+That is a few milliseconds on a 2 vCPU development machine and minutes on the 0.1 CPU a free
+Render instance gets — minutes during which the health check fails and the deploy
+is rolled back. The same boot now takes **17 ms** for 244 routes and 6.84 MB.
+
+Each file is compressed the first time somebody asks for it, and kept. The
+quality follows the size (11 up to 32 KB, 9 up to 256 KB, 6 above it), because
+Brotli's cost grows far faster than its gain. A browser that accepts Brotli never
+causes a gzip copy to exist. `.br`/`.gz` sidecars written at deploy time are still
+preferred, so a build that ships them does no work at all, and a sidecar older
+than its file is still ignored. The pages most likely to be opened first are
+compressed just after the socket opens, one per tick, so a cold start answers
+immediately and the warm copy is there by the time somebody clicks.
+
+Measured here, 2 vCPU, keep-alive, 60 requests per route:
+
+| path | first request | p50 | p95 |
+| --- | ---: | ---: | ---: |
+| `/` | 31.0 ms | 0.34 ms | 1.12 ms |
+| `/docs/intro` | 33.5 ms | 0.31 ms | 0.45 ms |
+| `/download` | 62.7 ms | 0.29 ms | 1.02 ms |
+| `/vi/` | 22.1 ms | 0.26 ms | 0.49 ms |
+
+## The blueprints say one thing each
+
+* `render.yaml` (root) — the one service: bots, rigs and documentation.
+* `fleet/render.yaml` — the control plane alone, with the dashboard, for a
+  standalone run or a paid plan.
+* `deploy/render-pool.yaml` — the pool alone. The duplicate site service is gone
+  from it: the root blueprint already serves those bytes.
+
+Nothing here is stored on the host. The filesystem is ephemeral, `FLEET_STATE` is
+a scratch cache, and `FLEET_ROSTER` in the environment is what a restart comes
+back to.
+
+## Also in this release
+
+* `host/tests` — 7 checks over a real socket: a rig and a browser on the same port
+  are answered by different halves, the health check reports all three jobs, the
+  dashboard is not published, and a missing site does not stop the rigs. The new
+  CI job also boots the real process and asks it.
+* `serve` — 45 → 46 checks, with the lazy tables and the quality policy covered.
+* Documentation, both languages: `doc/WEB.md`, `doc/FLEET.md`,
+  `site/docs/appliance/web.md`, `site/i18n/vi/.../web.md`, and the fleet pages
+  that described the deployment.
+
+Tests: `host` 7, `serve` 46, `fleet` 84, `pool` 34, `proxy` 60, docs links 103,
+published pages 22, identity 25 — all passing.
+
 # 6.45.0 — the numbers the rig boots with and the numbers it is tuned with are one file
 
 Three programs had to agree on how much memory to reserve and which CPUs to keep

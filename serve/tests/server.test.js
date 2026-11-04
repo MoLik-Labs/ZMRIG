@@ -74,7 +74,7 @@ test('the process boots, serves and shuts down on SIGTERM', async () => {
     assert.match(await download.text(), /could not reach GitHub/);
 
     const logs = server.output();
-    assert.match(logs, /files \d+ pages/);
+    assert.match(logs, /files \d+ routes/);
     assert.match(logs, /release feed: stable none/);
   } finally {
     const exited = new Promise((resolve) => server.child.once('exit', (code, signal) => resolve({ code, signal })));

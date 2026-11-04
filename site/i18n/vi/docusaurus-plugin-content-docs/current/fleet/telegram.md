@@ -86,7 +86,10 @@ npm run check                   # in cấu hình, không mở socket
 npm start
 ```
 
-Blueprint ở gốc repo deploy bot, Discord và dashboard thành **một** service. Ba
+Blueprint ở gốc repo deploy **một** service chạy bot, Discord, các lần rig báo
+danh **và** trang tài liệu — `node host/server.js`, một cổng, một health check.
+Dashboard trên trình duyệt là bề mặt duy nhất nó không mở: cửa chính của host
+công khai là tài liệu, và `cd fleet && npm start` mới là thứ cho bạn dashboard. Ba
 sự thật về gói free của Render quyết định hình dạng của cả hệ thống:
 
 | Sự thật | Ý nghĩa ở đây |

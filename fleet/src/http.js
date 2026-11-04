@@ -78,13 +78,36 @@ function cleanAcks(acks) {
   }));
 }
 
-function createServer({ config, store, log = () => {}, now = () => Date.now(), onEvent = () => {}, onCheckIn = () => {}, releases = null, roster = null }) {
+/**
+ * The device-facing request handler, on its own.
+ *
+ * `createServer` below is this handler plus an `http.Server`; the unified host
+ * (host/server.js on Render) is this handler plus the documentation site in one
+ * socket. Splitting them is what lets one process and one instance hour do both
+ * jobs instead of paying for two services that each answer on their own port.
+ *
+ * `fallthrough` is called for anything the fleet does not own (only `/v1/*`,
+ * `/healthz` and, when a password is set, the dashboard). Without it the
+ * handler answers 404, which is the standalone behaviour.
+ */
+function createHandler({
+  config,
+  store,
+  log = () => {},
+  now = () => Date.now(),
+  onEvent = () => {},
+  onCheckIn = () => {},
+  releases = null,
+  roster = null,
+  dashboard = true,
+  fallthrough = null,
+}) {
   const lastHello = new Map();
   // Null when no password is configured: the dashboard is opt-in, and a bot-only
   // host has no HTML surface at all.
-  const web = createWeb({ config, store, log, releases, now, roster });
+  const web = dashboard ? createWeb({ config, store, log, releases, now, roster }) : null;
 
-  const server = http.createServer(async (request, response) => {
+  const handler = async function handle(request, response) {
     const url = new URL(request.url, 'http://localhost');
 
     if (url.pathname === '/healthz') return json(response, 200, { ok: true, up: true });
@@ -94,6 +117,10 @@ function createServer({ config, store, log = () => {}, now = () => Date.now(), o
     if (url.pathname !== '/v1/hello') {
       if (web) {
         await web.handle(request, response);
+        return;
+      }
+      if (fallthrough) {
+        await fallthrough(request, response);
         return;
       }
       if (url.pathname === '/' && request.method === 'GET' && !web) return page(response, store, config, now());
@@ -190,13 +217,25 @@ function createServer({ config, store, log = () => {}, now = () => Date.now(), o
       commands: commands.map((command) => ({ id: command.id, cmd: command.cmd, ...(command.args || {}) })),
       server_time: stamp,
     });
-  });
+  };
+
+  // The dashboard object (or null) rides on the function, so a caller that wants
+  // to mount it elsewhere can, and `createServer` can keep reporting it.
+  handler.web = web;
+
+  return handler;
+}
+
+/** The standalone façade: one handler, one port. */
+function createServer(options) {
+  const handler = createHandler(options);
+  const server = http.createServer(handler);
 
   server.on('clientError', (error, socket) => {
     if (socket.writable) socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
   });
 
-  return { server, lastHello, web };
+  return { server, web: handler.web };
 }
 
 function escape(text) {
@@ -248,4 +287,4 @@ td,th{text-align:left;padding:.35rem .8rem .35rem 0;border-bottom:1px solid rgba
   response.end(body);
 }
 
-module.exports = { createServer, cleanStatus, cleanAcks, bearer };
+module.exports = { createServer, createHandler, cleanStatus, cleanAcks, bearer };
