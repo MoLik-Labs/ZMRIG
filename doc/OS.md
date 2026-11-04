@@ -517,7 +517,7 @@ config file cannot execute anything as root.
 | `AUTO_AUTOTUNE` | `1` | measure the machine and keep watching it |
 | `MEASURED_HS` | — | the rate the measurement recorded; the baseline drift is judged against |
 | `TUNED_AT` | — | when that measurement was taken (epoch seconds) |
-| `DONATE` | `1` | the developer fee, 0–10 |
+| `DONATE` | `3` | the developer fee, 0–10; printed by `zmrig-os doctor`, and `zmrig-os setup --donate N` writes it |
 | `MSR` | `auto` | `on`/`off`; `auto` uses it only on bare metal as root |
 | `API_PORT` | `0` | `zmrig`'s HTTP API for external monitoring (off by default) |
 | `API_HOST` | `127.0.0.1` | bind address for that API — `0.0.0.0` only with a token |
@@ -659,14 +659,14 @@ building anything:
 ```
 
 ```
-ZMRIG OS 6.46.0
+ZMRIG OS 6.47.0
 
   base               Alpine Linux 3.22.1 (x86_64, OpenRC, musl)
   kernel             linux-lts 6.12.61
   root filesystem    squashfs, zstd level 19, 1 MiB blocks
   bootloader         GRUB, BIOS and UEFI, built with the image
 
-  published: v6.46.0
+  published: v6.47.0
              built on Alpine 3.22.1
              os-beta (rolling beta)
 
@@ -691,7 +691,7 @@ then that branch is never reached again.
 - **Updates are verified**: sha256 from the manifest, checked before the binary
   is moved into place; a mismatch leaves the old binary untouched and the update
   fails loudly.
-- **The fee is visible**: 1 % of Monero time, printed in `--check`, in the
+- **The fee is visible**: 3 % of Monero time, printed in `--check`, in the
   banner, and in `zmrig-os status`; `zmrig-os setup --donate 0` disables it.
 
 ## Building it

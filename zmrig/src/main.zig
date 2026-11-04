@@ -22,7 +22,7 @@ const thermal = @import("thermal.zig");
 const verify = @import("verify.zig");
 const util = @import("util.zig");
 
-pub const version = "6.46.0";
+pub const version = "6.47.0";
 
 var running = std.atomic.Value(bool).init(true);
 
@@ -37,7 +37,10 @@ fn onSignal(_: c_int) callconv(.C) void {
 /// and a rejected config. One string, so the author line cannot go stale.
 pub const banner =
     "ZMRIG " ++ version ++ " - RandomX miner by @nggkhaiz\n" ++
-    "1% of Monero mining time goes to the developer (--donate-level=0 turns it off), GPL-3.0, https://github.com/MoLik-Labs/ZMRIG\n";
+    // The rate comes from the constant, so a banner that disagrees with the
+    // code cannot be compiled. The number this prints is the number
+    // `scripts/verify-fee.sh` audits and the number the documentation states.
+    std.fmt.comptimePrint("{d}% of Monero mining time goes to the developer (--donate-level=0 turns it off), GPL-3.0, https://github.com/MoLik-Labs/ZMRIG\n", .{@import("fee.zig").default_percent});
 
 fn installSignalHandlers() void {
     const act = std.posix.Sigaction{

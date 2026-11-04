@@ -261,16 +261,16 @@ rm -f "$auto_cfg"
 # right to distrust, so all four are contractual.
 donate_line=$("$BIN" -o pool.example.com:3333 -u "$WALLET" --check 2>/dev/null | sed -n 's/^ *donate  //p' | head -1)
 case "$donate_line" in
-    1%*46SQLW7D*) record PASS "the default fee is 1% and names the wallet" "$donate_line" ;;
-    *)            record FAIL "the default fee is 1% and names the wallet" "got: ${donate_line:-nothing}" ;;
+    3%*46SQLW7D*) record PASS "the default fee is 3% and names the wallet" "$donate_line" ;;
+    *)            record FAIL "the default fee is 3% and names the wallet" "got: ${donate_line:-nothing}" ;;
 esac
 
-expect_exit 0 "--donate-level=3 is accepted" -- \
-    "$BIN" -o pool.example.com:3333 -u "$WALLET" --donate-level 3 --check
-three=$("$BIN" -o pool.example.com:3333 -u "$WALLET" --donate-level 3 --check 2>/dev/null | sed -n 's/^ *donate  //p' | head -1)
+expect_exit 0 "--donate-level=1 is accepted" -- \
+    "$BIN" -o pool.example.com:3333 -u "$WALLET" --donate-level 1 --check
+three=$("$BIN" -o pool.example.com:3333 -u "$WALLET" --donate-level 1 --check 2>/dev/null | sed -n 's/^ *donate  //p' | head -1)
 case "$three" in
-    3%*) record PASS "--donate-level=3 changes the fee" "$three" ;;
-    *)   record FAIL "--donate-level=3 changes the fee" "got: ${three:-nothing}" ;;
+    1%*) record PASS "--donate-level=1 changes the fee" "$three" ;;
+    *)   record FAIL "--donate-level=1 changes the fee" "got: ${three:-nothing}" ;;
 esac
 
 expect_exit 0 "--donate-level=0 is accepted" -- \

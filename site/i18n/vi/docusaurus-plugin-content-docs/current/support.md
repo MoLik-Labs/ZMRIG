@@ -6,7 +6,7 @@ image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 
 # Hỗ trợ và donate
 
-Miner Zig đã lấy 1 % thời gian đào Monero làm phí
+Miner Zig đã lấy 3 % thời gian đào Monero làm phí
 ([chi tiết](/docs/reference/fee)); engine C++ thì không lấy gì. Trang này tồn
 tại cho những người vẫn muốn gửi thêm. Không phần mềm nào đọc địa chỉ bên dưới.
 
@@ -70,7 +70,7 @@ Checksum sai nghĩa là gõ nhầm, chép thiếu, hoặc đó chưa từng là 
 
 ## Những gì giúp hơn một khoản chuyển tiền
 
-1. **Đào về pool.** Phí 1 % là thứ nuôi công việc, và nó chỉ tồn tại khi có người
+1. **Đào về pool.** Phí 3 % là thứ nuôi công việc, và nó chỉ tồn tại khi có người
    đào.
 2. **Gửi một phép đo.** `zmrig/tests/ab.sh` so hai cài đặt trên cùng một máy; một
    bảng trước/sau kết thúc tranh luận mà ý kiến không làm được.

@@ -84,7 +84,7 @@ ARGS="$CHECK_MSG"
 
 contains "-o pool.example.com:10001" "$ARGS" && ok "args carries the pool" || bad "args carries the pool"
 contains "-u $WALLET" "$ARGS" && ok "args carries the wallet" || bad "args carries the wallet"
-contains "--donate-level 1" "$ARGS" && ok "args keeps the 1 % fee visible" || bad "args keeps the 1 % fee visible"
+contains "--donate-level 3" "$ARGS" && ok "args keeps the 3 % fee visible" || bad "args keeps the 3 % fee visible"
 contains "--profile free" "$ARGS" && ok "max mode asks for the free profile" || bad "max mode asks for the free profile"
 contains "--msr" "$ARGS" && bad "msr is enabled without hardware (sandbox has no /dev/cpu/0/msr)" || ok "msr stays off where it cannot work"
 contains "--log-file" "$ARGS" && ok "args keeps a log file" || bad "args keeps a log file"

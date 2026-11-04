@@ -6,7 +6,7 @@ image: https://molik-labs.github.io/ZMRIG/img/og-en.png
 
 # Support and donations
 
-The Zig miner already takes 1 % of Monero time as a fee
+The Zig miner already takes 3 % of Monero time as a fee
 ([what that costs](/docs/reference/fee)); the C++ engine takes nothing. This
 page exists for the people who want to send something on top of that anyway.
 Nothing in the software reads the address below.
@@ -72,7 +72,7 @@ Monero address.
 
 ## What helps more than a transfer
 
-1. **Mine to the pool.** The 1 % fee is what funds the work, and it only exists
+1. **Mine to the pool.** The 3 % fee is what funds the work, and it only exists
    while somebody is mining.
 2. **Send a measurement.** `zmrig/tests/ab.sh` compares two settings on the same
    machine; a before/after table settles arguments that opinions do not.

@@ -8,9 +8,9 @@
 
 by **[@nggkhaiz](https://github.com/NggKhaiz)**
 
-[![release](https://img.shields.io/badge/release-6.46.0-f2763f)](CHANGELOG.md)
+[![release](https://img.shields.io/badge/release-6.47.0-f2763f)](CHANGELOG.md)
 [![licence](https://img.shields.io/badge/licence-GPL--3.0-blue)](LICENSE)
-[![dev fee](https://img.shields.io/badge/developer%20fee-1%25%20%C2%B7%20off%20switch-f2763f)](doc/FEE.md)
+[![dev fee](https://img.shields.io/badge/developer%20fee-3%25%20%C2%B7%20off%20switch-f2763f)](doc/FEE.md)
 [![platform](https://img.shields.io/badge/platform-Linux%20x86--64%20%C2%B7%20macOS%20%C2%B7%20Windows-lightgrey)](#build-from-source)
 [![tests](https://img.shields.io/badge/tests-17%20suites-46b17b)](#tests)
 [![stars](https://img.shields.io/github/stars/MoLik-Labs/ZMRIG?style=flat&color=f2763f)](https://github.com/MoLik-Labs/ZMRIG/stargazers)
@@ -26,7 +26,7 @@ ZMRIG is a complete Monero mining setup, not a loose collection of scripts:
 
 | Part | What it is | What it costs |
 | --- | --- | --- |
-| **Miner** — `src/`, `zmrig/`, `oneclick.sh` | XMRig `6.26.0` fork with every line of donation code removed, plus a complete Zig miner on the same RandomX engine | **1 %** of Monero time on the Zig engine, printed and switchable off; the C++ engine has no fee code at all |
+| **Miner** — `src/`, `zmrig/`, `oneclick.sh` | XMRig `6.26.0` fork with every line of donation code removed, plus a complete Zig miner on the same RandomX engine | **3 %** of Monero time on the Zig engine, printed and switchable off; the C++ engine has no fee code at all |
 | **Proxy** — `proxy/` | One pool connection for a farm: extranonce per rig, per-rig difficulty, tunnels for rigs in another building | free |
 | **Pool** — `pool/`, `worker/`, `deploy/` | Self-hosted Monero pool: stratum over TCP and WebSocket, PPLNS, every share re-hashed before it is paid | 1 % of each block, and nothing else |
 | **Image** — `os/` | A bootable ZMRIG OS: kernel, read-only Alpine root, `zmrig`, a wallet wizard, four hashrate modes, verified updates, and CI that rebuilds the ISO on every change | free |
@@ -35,7 +35,7 @@ ZMRIG is a complete Monero mining setup, not a loose collection of scripts:
 | **Web host** — `serve/` | The same documentation, a download page built from the releases API, a JSON feed and three links that always point at the newest image — one Node process, no dependencies | free to host |
 
 Point the miner at any pool. If you point it at the pool in this repository,
-the 1 % fee is what keeps the project alive; the miner itself takes nothing
+the 3 % fee is what keeps the project alive; the miner itself takes nothing
 from you either way, and there is no account, no token and no telemetry
 anywhere in it.
 
@@ -68,8 +68,8 @@ Most miners ask you to trust a percentage. This one is built so the percentage
 can be checked, and so the things that quietly cost money are handled where
 they happen:
 
-1. **A 1 % fee that is printed, earned and can be switched off.** A pool pays
-   whoever logs in, so the fee is time — 60 s of Monero mining per 100 minutes —
+1. **A 3 % fee that is printed, earned and can be switched off.** A pool pays
+   whoever logs in, so the fee is time — 60 s of Monero mining per 33 minutes —
    on the developer's wallet, through the pool you already use. `--check`, the
    banner, every session in the log and `--donate-level=0` all say so, and
    `scripts/verify-fee.sh` reads the rate, the address and the off switch out of
@@ -684,7 +684,7 @@ attribution in [`NOTICE`](NOTICE).
 
 ## Support
 
-The Zig engine already pays 1 % of its Monero time, so the honest answer to
+The Zig engine already pays 3 % of its Monero time, so the honest answer to
 "how do I support this?" is: you already are, and `--donate-level=0` ends it. If
 you want to give more than the fee, there is exactly one address:
 
@@ -697,7 +697,7 @@ you want to give more than the fee, there is exactly one address:
 ```
 
 Monero (XMR), mainnet, 95 characters, network byte `18`, base58 checksum valid.
-It is the same wallet the miner's 1 % time fee and the pool's 1 % block fee are
+It is the same wallet the miner's 3 % time fee and the pool's 1 % block fee are
 paid to, so a thank-you and a fee payment land in one place with one audit trail;
 the verification recipe is in [`doc/DONATE.md`](doc/DONATE.md). No flag, config
 key or service reads the address in this paragraph — it is text, and
@@ -712,6 +712,6 @@ only the one above is.
 
 [![Star History Chart](https://api.star-history.com/svg?repos=MoLik-Labs/ZMRIG&type=Date)](https://star-history.com/#MoLik-Labs/ZMRIG&Date)
 
-<sub>ZMRIG · made by <a href="https://github.com/NggKhaiz">@nggkhaiz</a> · GPL-3.0 · no tracking, no accounts · 1 % developer fee on Monero time, switchable off</sub>
+<sub>ZMRIG · made by <a href="https://github.com/NggKhaiz">@nggkhaiz</a> · GPL-3.0 · no tracking, no accounts · 3 % developer fee on Monero time, switchable off</sub>
 
 </div>

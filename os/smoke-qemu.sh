@@ -2,7 +2,7 @@
 #
 # smoke-qemu.sh - boot the ISO in a throwaway VM and check that it comes up.
 #
-#   ./os/smoke-qemu.sh os/out/zmrig-os-6.46.0-x86-64-v3.iso
+#   ./os/smoke-qemu.sh os/out/zmrig-os-6.47.0-x86-64-v3.iso
 #   BOOT_TIMEOUT=900 ./os/smoke-qemu.sh image.iso     # slower emulation
 #
 # QEMU is given the image as a CD and the kernel is booted explicitly, so the

@@ -2,12 +2,13 @@
 //! wallet.
 //!
 //! Why time and not a cut of every share: the pool pays whoever logs in. A
-//! miner cannot take 1 % out of a share it already solved, so the only way to
-//! pay a fee without a second program in the middle is to mine for the other
-//! wallet for 1 % of the clock. XMRig, SRBMiner and every other miner with a
-//! fee do the same thing; the difference here is that it is stated in the
-//! banner, in `--check`, in the log when a session opens and in `--help`, and
-//! `--donate-level=0` turns it off.
+//! miner cannot take a share out of a share it already solved, so the only way
+//! to pay a fee without a second program in the middle is to mine for the
+//! other wallet for a share of the clock. XMRig, SRBMiner and every other miner
+//! with a fee do the same thing; the difference here is that the rate is a
+//! constant in this file, printed in the banner, in `--check`, in the log when a
+//! session opens and in `--help`, audited against the documentation by
+//! `scripts/verify-fee.sh`, and `--donate-level=0` turns it off.
 //!
 //! Monero only. The wallet below is a Monero address on the Monero network: a
 //! fee session on ArQmA, Wownero, Graft, Safex, Yada or Scala would pay a pool
@@ -22,13 +23,19 @@ const std = @import("std");
 /// Every fee session mines to this address.
 pub const wallet = "46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ";
 
-pub const default_percent: u32 = 1;
+/// The rate a fresh install runs at. Three percent of Monero time is what pays
+/// for the CI that builds every image, the free instance the fleet and the site
+/// run on, and the work nobody mines with. It is a constant so the
+/// documentation can be checked against it: the audit script reads this line
+/// and `--check` prints it before the first hash.
+pub const default_percent: u32 = 3;
 /// `--donate-level=11` is a typo, not a generous user.
 pub const max_percent: u32 = 10;
 
-/// A fee session opens once this much time is owed. At the default 1 % that is
-/// 60 s of Monero mining after 100 minutes: XMRig's cadence, and long enough
-/// that a reconnect does not show up in the hashrate line.
+/// A fee session opens once this much time is owed. At the default 3 % that is
+/// 60 s of Monero mining after 33 minutes: often enough that the debt never
+/// grows into an hour-long session, rare enough that a reconnect does not show
+/// up in the hashrate line.
 pub const start_ms: i64 = 60_000;
 /// Debt stops growing here, so a pool that refused the developer wallet for a
 /// week does not turn into a two-hour fee session the day it starts accepting
@@ -179,7 +186,7 @@ test "one percent of an hour is 36 seconds of debt" {
     try std.testing.expect(!clock.due(0));
 }
 
-test "the default fee opens a session after 100 minutes" {
+test "the default fee opens a session after 33 minutes" {
     var clock = Clock.init(1);
 
     var elapsed: i64 = 0;
