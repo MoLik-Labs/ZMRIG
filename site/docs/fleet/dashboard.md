@@ -23,7 +23,7 @@ no invites, nothing to leak on somebody else's server.
 
 | path | |
 | --- | --- |
-| `/` | fleet total: hashrate, rigs mining, offline count, hottest, and what needs attention |
+| `/` | fleet total: hashrate, rigs mining, offline count, hottest, what needs attention, and one row per wallet |
 | `/rigs` | one row per machine: state, hashrate, temperature, last seen |
 | `/rig/<id>` | everything about one rig, plus its controls |
 | `/enrol` | the three-step enrolment, with your URL already filled in |
@@ -36,6 +36,20 @@ form, rename, and remove. Everything is *queued* — the rig applies it on its n
 check-in, 60 seconds by default, and reports the result back to the page and to
 the chat. Nothing is pushed down a live connection, so a click in a browser
 cannot wedge a miner mid-share.
+
+## One wallet, one number
+
+The overview adds hashrate up **per wallet**, not per machine. Every rig mining
+into the same address is one number at the pool, one balance, one answer to "how
+am I doing" — so it is one row here, with its share of what the fleet is
+producing right now. The rigs are only how that number gets made.
+
+A rig that has gone quiet stops contributing to the total: it has probably not
+stopped mining, but its last reading is not the present, and a dashboard that
+adds an hour-old number to a fresh one is lying by omission. It is still counted
+as a rig of the farm. A rig that has not reported a wallet yet gets its own row,
+last in the table — a machine mining into the wrong address is exactly the
+mistake that view exists to make visible.
 
 Two rules that surprise people:
 

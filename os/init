@@ -14,7 +14,14 @@
 #   zmrig.os.wallet=4...                   wallet, skips the wizard
 #   zmrig.os.pool=host:port                pool override
 #   zmrig.os.worker=name                   worker name
+#   zmrig.os.affinity=auto|off|0xMASK      which cores the miner may use
+#   zmrig.os.algo=rx/0                     the algorithm, for sizing the huge page
+#                                          pool before the miner runs
 #   zmrig.os.hugepages=N                   0 disables the reservation
+#   zmrig.os.isolate=N                     keep N logical CPUs for mining (whole
+#                                          cores); 'zmrig-os isolate' writes it
+#   zmrig.os.verify=0                      skip the squashfs checksum, when one
+#                                          sits next to it as <image>.sha256
 #   zmrig.os.fleet=https://host            control plane: enrol and configure
 #                                          this rig from a Telegram/Discord bot
 #   zmrig.os.data=/dev/sdX1                partition that keeps the config
@@ -30,6 +37,16 @@
 set -eu
 export PATH=/bin:/sbin:/usr/bin:/usr/sbin
 export HOME=/
+
+# The memory and CPU plan, shared with `zmrig-os` so the boot and the tool can
+# never disagree about how many pages this machine needs. Copied next to this
+# script by os/make-initramfs.sh; the fallbacks below keep a broken copy from
+# stopping a boot that would otherwise work.
+if [ -r /plan.sh ]; then
+    . /plan.sh
+fi
+command -v plan_pages >/dev/null 2>&1 || plan_pages() { printf '%s' 0; }
+command -v plan_need_mb >/dev/null 2>&1 || plan_need_mb() { printf '%s' 0; }
 
 LOGDEV=/dev/console
 log() { printf 'ZMRIG-OS: %s\n' "$*" > "$LOGDEV" 2>/dev/null || true; }
@@ -64,6 +81,10 @@ NOSTART=$(getarg zmrig.os.nostart)
 MAXTEMP=$(getarg zmrig.os.maxtemp)
 FLEET=$(getarg zmrig.os.fleet)
 INSTALL=$(getarg zmrig.os.install)
+AFFINITY=$(getarg zmrig.os.affinity)
+ALGO=$(getarg zmrig.os.algo)
+ISOLATE=$(getarg zmrig.os.isolate)
+VERIFY=$(getarg zmrig.os.verify)
 
 # ------------------------------------------------------------ early mounts
 mount -t proc     proc /proc     2>/dev/null || true
@@ -80,8 +101,14 @@ mkdir -p /run/zmrig
 # ------------------------------------------------------------ modules
 # The initramfs carries the modules needed to reach the media. Everything else
 # lives in the squashfs and is available once the real root is mounted.
-for mod in loop squashfs overlay isofs sr_mod sd_mod usb-storage ahci libahci \
-           nvme virtio_blk virtio_pci virtio_scsi xhci-pci ehci-pci uhci-hcd; do
+# Same list as os/make-initramfs.sh ships: load them by name, because modprobe
+# on an alias only works for devices that are already enumerated, and a NIC or
+# an eMMC controller may be waiting for its driver before it appears.
+for mod in loop squashfs overlay isofs sr_mod sd_mod usb-storage uas ahci libahci \
+           ata_piix nvme virtio_blk virtio_pci virtio_scsi virtio_net \
+           mmc_core mmc_block sdhci sdhci_pci sdhci_acpi \
+           xhci-pci ehci-pci uhci-hcd \
+           e1000 e1000e igb r8169 igc atlantic tg3 usbnet cdc_ether r8152 ax88179_178a; do
     modprobe -q "$mod" 2>/dev/null || true
 done
 
@@ -199,40 +226,122 @@ if [ -f /media/zmrig/installed ]; then
     log "boot ${boot_count} on slot ${SLOT}"
 fi
 
+# ------------------------------------------------------------ what we booted
+# A stick that spent a year in a drawer, a copy made by an "unzip and burn" tool
+# and a half-finished download all fail the same way: the squashfs mounts and
+# the system misbehaves in a way nobody traces back to the medium. When the build
+# leaves a checksum next to the image - the ISO and the installer both do - it is
+# checked here, before anything reads from it, and a bad slot falls through to
+# the other one instead of being booted.
+verify_image() { # path -> 0 valid, 1 not
+    local img="$1" file="$1.sha256" want got
+    [ "${VERIFY:-}" = "0" ] && return 0
+    [ -r "$file" ] || { [ "${VERIFY:-}" = "strict" ] && return 1; return 0; }
+
+    want=$(cut -d' ' -f1 "$file" 2>/dev/null)
+    case "$want" in
+        ''|*[!0-9a-fA-F]*) log "checksum: ${file} is not a sha256, not verifying"; return 0 ;;
+    esac
+    [ "${#want}" = 64 ] || { log "checksum: ${file} is not a sha256, not verifying"; return 0; }
+
+    log "checksum: verifying $(basename "$img")"
+    got=$(sha256sum "$img" 2>/dev/null | cut -d' ' -f1)
+    if [ "${#got}" = 64 ] && [ "$(printf '%s' "$got" | tr 'A-F' 'a-f')" = "$(printf '%s' "$want" | tr 'A-F' 'a-f')" ]; then
+        log "checksum: ok"
+        return 0
+    fi
+
+    log "checksum: MISMATCH on $(basename "$img"): the medium is damaged or was modified"
+    return 1
+}
+
+if ! verify_image "$ROOTFS_IMG"; then
+    case "$ROOTFS_IMG" in
+        */"rootfs-${SLOT}.squashfs")
+            switch_to=$([ "$SLOT" = "a" ] && echo b || echo a)
+            alt="/media/zmrig/rootfs-${switch_to}.squashfs"
+            if [ -f "$alt" ] && verify_image "$alt"; then
+                log "booting slot ${switch_to} instead, and pointing the next boot at it"
+                printf '0 %s\n' "$switch_to" > /media/zmrig/state/boots 2>/dev/null || true
+                write_grubenv "$switch_to" 2>/dev/null || true
+                ROOTFS_IMG="$alt"
+                SLOT="$switch_to"
+            else
+                fatal "this image does not match its checksum and no other slot is good: re-flash the stick"
+            fi
+            ;;
+        *) fatal "this image does not match its checksum: re-flash the stick (zmrig.os.verify=0 skips the check)" ;;
+    esac
+fi
+
 # ------------------------------------------------------------ memory pages
 # Reserved before anything else runs: the kernel hands out 2 MiB pages while the
 # free memory is still one contiguous block, which is the cheapest moment to ask
 # and the moment that actually succeeds on a rig that has been up for a week.
+#
+# How many pages, and how much memory behind them, is one calculation shared
+# with the control tool (os/plan.sh) and sized by the algorithm actually being
+# mined: Monero needs 2.3 GB of RandomX memory and Scala needs 192 MB, so a
+# fixed 2400 MB reservation leaves a 1 GB box with pages it cannot use and a
+# warning it cannot clear.
+#
+# THP is set here as well as on the kernel command line, because the GRUB entry
+# is not the only way a rig boots - a Ventoy menu, a chainloaded grub.cfg and a
+# hand-edited entry all reach this init without `transparent_hugepage=`.
+tune_thp() {
+    local policy="$1" file=/sys/kernel/mm/transparent_hugepage/enabled
+    [ -w "$file" ] || return 0
+    case "$(cat "$file" 2>/dev/null)" in
+        *"[$policy]"*) return 0 ;;
+    esac
+    printf '%s' "$policy" > "$file" 2>/dev/null || true
+    log "transparent huge pages: ${policy}"
+}
+
 reserve_pages() {
-    local mem_mb need_mb pages existing want
+    local mem_mb page_kb need_mb want existing
 
     [ "$(cat /proc/sys/vm/nr_hugepages 2>/dev/null || echo 0)" != "0" ] && return 0
-    mem_mb=$(awk '/^MemTotal:/ { printf "%d", $2 / 1024 }' /proc/meminfo)
-    need_mb=2400
-    [ "$MODE" = "light" ] && need_mb=400
 
-    if [ "$mem_mb" -lt $(( need_mb + 512 )) ]; then
-        log "memory: ${mem_mb} MB, not reserving pages for ${need_mb} MB (light mode keeps the rig usable)"
+    mem_mb=$(awk '/^MemTotal:/ { printf "%d", $2 / 1024 }' /proc/meminfo)
+    page_kb=$(awk '/^Hugepagesize:/ { print $2 }' /proc/meminfo 2>/dev/null || echo 0)
+
+    need_mb=$(plan_need_mb "$ALGO_BOOT" "$MODE" "$CORES" "$THREADS_BOOT")
+    want=$(plan_pages "$ALGO_BOOT" "$MODE" "$CORES" "$mem_mb" "$page_kb" "$THREADS_BOOT" "$HUGEPAGES")
+
+    if [ "${want:-0}" -le 0 ]; then
+        log "huge pages: not reserving (algorithm ${ALGO_BOOT}, mode ${MODE}, ${mem_mb} MB)"
         return 0
     fi
 
-    if [ -n "$HUGEPAGES" ]; then
-        want="$HUGEPAGES"
-    else
-        # chunk = cache + dataset + one scratchpad per thread + a little slack
-        want=$(( (need_mb + 64) / 2 ))
+    if [ "$mem_mb" -lt $(( need_mb + 512 )) ]; then
+        log "memory: ${mem_mb} MB is short of the ${need_mb} MB ${ALGO_BOOT} wants; reserving what fits and letting THP back the rest"
     fi
-
-    [ "$want" = "0" ] && { log "huge pages: reservation disabled by cmdline"; return 0; }
 
     printf '%s' "$want" > /proc/sys/vm/nr_hugepages 2>/dev/null || true
     existing=$(awk '/^HugePages_Total:/ { print $2 }' /proc/meminfo)
-    log "huge pages: ${existing:-0} x 2 MB reserved before userspace started"
+    log "huge pages: ${existing:-0} of ${want} x $(( page_kb / 1024 )) MB reserved for ${ALGO_BOOT} (${need_mb} MB), before userspace started"
 
     if [ "${existing:-0}" -lt "$want" ]; then
         log "warning: wanted $want pages, kernel reserved ${existing:-0}: memory is fragmented or too small"
     fi
 }
+
+# What the rig is configured to mine, read from the config that came with the
+# image. The kernel command line wins when it names an algorithm.
+ALGO_BOOT="$ALGO"
+THREADS_BOOT=""
+CORES=$(nproc 2>/dev/null || echo 1)
+if [ -r /media/zmrig/os.conf ]; then
+    [ -n "$ALGO_BOOT" ] || ALGO_BOOT=$(sed -n 's/^ALGO="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' /media/zmrig/os.conf 2>/dev/null | tail -1)
+    THREADS_BOOT=$(sed -n 's/^THREADS="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' /media/zmrig/os.conf 2>/dev/null | tail -1)
+fi
+[ -n "$ALGO_BOOT" ] || ALGO_BOOT=auto
+
+case "$MODE" in
+    eco|safe) tune_thp madvise ;;
+    *)        tune_thp always ;;
+esac
 
 [ "$MODE" = "light" ] || reserve_pages
 
@@ -275,15 +384,19 @@ if [ -n "$DATA" ]; then
     fi
 fi
 
-if [ -n "$WALLET$POOL$WORKER$MODE$MAXTEMP$FLEET$INSTALL" ]; then
+if [ -n "$WALLET$POOL$WORKER$MODE$MAXTEMP$FLEET$INSTALL$AFFINITY$ALGO$ISOLATE$HUGEPAGES" ]; then
     {
         [ -n "$WALLET" ] && printf 'WALLET="%s"\n' "$WALLET"
         [ -n "$POOL" ] && printf 'POOL="%s"\n' "$POOL"
         [ -n "$WORKER" ] && printf 'WORKER="%s"\n' "$WORKER"
         [ -n "$MODE" ] && printf 'MODE="%s"\n' "$MODE"
         [ -n "$MAXTEMP" ] && printf 'SAFE_TEMP="%s"\n' "$MAXTEMP"
+        [ -n "$ALGO" ] && printf 'ALGO="%s"\n' "$ALGO"
+        [ -n "$HUGEPAGES" ] && printf 'HUGEPAGES="%s"\n' "$HUGEPAGES"
+        [ -n "$ISOLATE" ] && printf 'ISOLATE="%s"\n' "$ISOLATE"
         [ -n "$FLEET" ] && printf 'FLEET="%s"\n' "$FLEET"
         [ -n "$INSTALL" ] && printf 'INSTALL="%s"\n' "$INSTALL"
+        [ -n "$AFFINITY" ] && printf 'AFFINITY="%s"\n' "$AFFINITY"
     } > /newroot/etc/zmrig/kernel.conf
     log "config: overrides from the kernel command line"
 fi

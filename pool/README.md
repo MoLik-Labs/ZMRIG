@@ -132,6 +132,31 @@ address in `wallet` mode).
 
 `GET /api/audit?limit=20` returns the same records, newest first.
 
+### Forty rigs, one wallet
+
+A miner logs in as `wallet.rig` or `wallet/rig`, and the wallet is the account:
+the rig is a label on it, never a second bucket. Every machine pointed at the same
+address shares one PPLNS weight and one balance, and a block pays that address
+once. Two buckets for one wallet would be paid twice out of the same window, and
+neither would reach the payout minimum on its own.
+
+```bash
+curl -s localhost:8080/api/worker/4... | jq '{pending, hashrate, rigCount, rigs}'
+```
+
+```json
+{"pending":"125000000000","hashrate":4821.5,"rigCount":3,
+ "rigs":[{"name":"rack-1","shares":41,"hashrate":3120.2,"lastSeen":1762300000},
+         {"name":"rack-2","shares":18,"hashrate":1201.3,"lastSeen":1762300000},
+         {"name":"rack-3","shares":0,"hashrate":0,"lastSeen":1762200000}]}
+```
+
+The wallet's rate is the sum of its rigs, and each rig's rate comes from the same
+share records the payout does, so the two numbers cannot disagree. A rig that
+went quiet is still listed with a zero rate: that is the machine to look at. The
+per-wallet rig map is capped (64 names by default, least recently seen evicted
+first), because a rig name is free text from a public connection.
+
 ## Payouts
 
 `ledger` mode (default) computes what everyone is owed and sends nothing — the
@@ -222,7 +247,7 @@ pool's HTTP API is ordinary JSON, so a static page on Vercel can render it.
 | `GET /api/stats` | Pool counters, ledger totals, published config. |
 | `GET /api/config` | Fee, operator address, PPLNS window, payout minimum. |
 | `GET /api/audit?limit=20` | Block records: reward, fee, per-miner split, dust. |
-| `GET /api/worker/:address` | Balance, shares and last-seen for one address. |
+| `GET /api/worker/:address` | Balance, hashrate and every rig behind one wallet (`wallet.rig` also works). |
 | `GET /metrics` | Prometheus text format. |
 | `WS /stratum` | Stratum over WebSocket (`login`, `submit`, `keepalived`, `getjob`). |
 

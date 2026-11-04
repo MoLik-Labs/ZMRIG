@@ -9,6 +9,7 @@
 
 const ids = require('./ids');
 const format = require('./format');
+const farms = require('./farms');
 const { presence } = require('./store');
 
 const COINS = {
@@ -238,11 +239,19 @@ function fleetText(view, config, now = Date.now()) {
     hottest = Math.max(hottest, Number(device.status && device.status.temp) || 0);
   }
 
+  // More than one wallet means more than one farm, and the number that matters
+  // is per wallet: that is what the pool pays and what an exchange sees.
+  const groups = farms.group(devices, config, now);
+  const byWallet = groups.length > 1
+    ? ['', '**By wallet**', ...farms.lines(groups)]
+    : [];
+
   return [
     '**Fleet**',
     `rigs       ${devices.length} (${mining} mining, ${offline} offline)`,
     `hashrate   ${format.hashrate(total)}`,
     `hottest    ${format.temperature(hottest)}`,
+    ...byWallet,
     '',
     devicesText(view, config, now).split('\n\n').slice(1).join('\n\n'),
   ].join('\n');

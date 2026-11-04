@@ -243,6 +243,32 @@ test('the overview counts rigs, hashrate and heat', async () => {
   }
 });
 
+test('the overview adds hashrate up per wallet, not per machine', async () => {
+  const app = await fleet();
+  try {
+    const mine = (wallet, hashrate, label) => {
+      const record = app.store.claim(crypto.randomBytes(32).toString('hex'));
+      record.owner = 'tg:1';
+      record.label = label;
+      record.status = { state: 'mining', hashrate, temp: 60, wallet };
+      record.last_seen = Date.now() - 10_000;
+    };
+    mine(WALLET, 750, 'shed-1');
+    mine(WALLET, 750, 'shed-2');
+    mine('888tNkZrPN6JsEgekjMnABU4TBzc2Dt29EPAvkRxbANsAnjyPbb3iQ1YBRk1UXcdRsiKc9dhwMVgN5S9cQUiyoogDavup3H', 500, 'garage');
+
+    await app.signIn();
+    const body = await (await app.request('/')).text();
+
+    assert.match(body, /By wallet/);
+    assert.match(body, /75%/, 'two rigs on one address are three quarters of the fleet');
+    assert.match(body, /25%/, 'the borrowed machine is the rest');
+    assert.match(body, /2 mining, 2 online/, 'the farm counts its rigs together');
+  } finally {
+    await app.close();
+  }
+});
+
 test('a rig page shows its state and every control', async () => {
   const app = await fleet();
   try {

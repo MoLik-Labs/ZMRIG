@@ -60,6 +60,56 @@ that arms the governor.
 The wizard does not appear when a wallet is already known. `zmrig.os.nostart=1`
 boots the machine without mining, which is what a repair stick wants.
 
+## One command, no questions
+
+The wizard asks one question at a time, which is right at a keyboard. Over ssh,
+or from a script that provisions ten machines, the same thing takes one line:
+
+```bash
+zmrig-os quickstart --wallet 4... --pool gulf.moneroocean.stream:10001 --mode balanced
+```
+
+It validates the address and the pool, writes the config, tunes the machine for
+the algorithm it was given, prints the Device ID and starts the miner — and says
+whether the miner actually started, which is the part a provisioning script
+tends to skip. `--coin` picks the algorithm the memory reservation is sized for,
+`--fleet` enrols the rig with a bot, `--no-start` stops before mining.
+
+A wrong argument is refused before anything is written: a pool without a port, an
+address that is not an address, a mode that does not exist.
+
+## Keeping the kernel off the mining cores
+
+A mining thread that gets scheduled onto the CPU taking the pool's interrupts
+loses more than the interrupt costs: its 2 MiB scratchpad cools out of the cache
+while another core warms its own.
+
+```bash
+zmrig-os isolate 4     # four logical CPUs for mining
+zmrig-os isolate       # what is isolated now
+zmrig-os isolate off   # give them back
+```
+
+CPUs are taken as whole SMT pairs, from the top, and cpu0 is never taken — that
+is where interrupts and most kernel threads land. On a 4-core/8-thread machine
+`isolate 3` gives you 2 CPUs, not 3: the third would be the twin of a CPU that
+stays with the kernel, and half an isolated core is not isolated. The command
+prints the exact set it took instead of pretending it took what was asked.
+
+Both halves are written, because either one alone buys nothing:
+
+* the boot parameters `isolcpus=`, `nohz_full=` and `rcu_nocbs=` — merged into
+  the GRUB environment block on an installed disk, printed for you to type on a
+  read-only stick;
+* `--cpu-affinity` for the miner, plus the IRQ masks moved to the remaining CPUs
+  every time the supervisor starts.
+
+`ISOLATE=4` in `/etc/zmrig/os.conf`, or `zmrig.os.isolate=4` on the kernel
+command line, makes it survive a reboot; `ISOLATE=0` hands the machine back to
+`AFFINITY=auto`, which pins the miner to every physical core. The thread count
+follows the mask: a `balanced` rig on a machine where the miner may only use three
+cores pins three threads, not seven.
+
 ## Modes
 
 The miner's aggressiveness is a single word, changeable while it runs:
@@ -153,6 +203,56 @@ The machine installs, reboots into its own disk and starts mining. With Ventoy
 that is: pick the ISO, press `e`, add the parameter. A fleet is the same
 parameter on every machine with the disk name that model uses.
 
+### Cores, interrupts and NUMA
+
+`nproc` counts hyperthreads, and RandomX does not run on hyperthreads: a sibling
+pair shares one core's L2, so two threads on a pair are two threads fighting over
+the same 512 KiB. The image reads the kernel's topology instead and sizes the
+miner to physical cores, pins it there with `--cpu-affinity`, steers interrupts
+and unbound workqueues to CPU 0 once there are four cores to steer between, and
+turns NUMA balancing off in the modes where the machine exists to mine. Light mode
+leaves the kernel alone.
+
+```
+$ zmrig-os topology
+cores      8 physical, 16 threads
+mining on  0 1 2 3 4 5 6 7
+affinity   0xff (--cpu-affinity)
+threads    7 (THREADS=auto, mode balanced)
+```
+
+Before this, `--mode balanced` on that machine asked for 15 mining threads — one
+per hyperthread — which is hotter and slower than 8. `AFFINITY=off` in `os.conf`
+(or `zmrig.os.affinity=off` on the command line) takes the pinning out for
+somebody with a reason to want it gone.
+
+### What hardware this runs on
+
+RandomX's fast mode wants AVX2, AES-NI and 2 GB of memory for the dataset. A
+machine missing any of the three still hashes — several times slower — which is
+worth being told rather than left to infer from a rate that does not match the
+README.
+
+```
+$ zmrig-os hardware
+cpu        Intel(R) Xeon(R) Processor @ 2.60GHz (1 cores, 2 threads)
+flags      avx2 aes sha_ni
+memory     3939 MB total
+pages      2 MB (no 1 GB pages)
+verdict    full: fast mode: AVX2 and AES, and room for the 2 GB dataset
+```
+
+| verdict | means | what to do |
+| --- | --- | --- |
+| `full` | AVX2, AES, room for the dataset | nothing — `max` is the miner at its own rate |
+| `light` | AVX2 and AES, under 2.4 GB | `--mode light`: it mines, the dataset does not fit in one array |
+| `slow` | no AVX2, or no AES | it works and it is much slower; on a pre-2015 CPU boot the **x86-64-v2** image |
+| `small` | under 1.2 GB | it cannot mine RandomX — the scratchpad alone is 256 MB per thread |
+
+The command exits non-zero on `slow` and `small`, so a script that provisions a
+hundred machines stops on the one that will never be fast instead of adding it to
+the pile. `doctor` prints the same verdict as a single line on every boot.
+
 ### The stick, and how to make it last
 
 A stick mining 24/7 for a year is 8,760 hours inside a device built to carry a
@@ -165,10 +265,17 @@ is where the logs, the wallet file and an updated miner live. It is also why a
 reboot forgets an unpersisted config, and why a log that grows cannot fill the
 stick. NAND wears from writes; during normal running there are none.
 
-What does touch the stick: each boot reads the kernel, the initramfs and the
-158 MB squashfs; `zmrig-os install` writes once; an image update writes one slot
-at a time. So the stick's real workload is a handful of reads a day, not a year
-of writes. That turns the question from endurance into heat, power and cheap
+What does touch the stick, and how much:
+
+| | writes | when |
+| --- | --- | --- |
+| `zmrig-os install --disk` | the whole image, once | the day you install |
+| a miner update | ~19 MB into the data partition | `AUTO_UPDATE=1` (the default) and a newer binary exists |
+| an image update | one slot, ~158 MB | `AUTO_IMAGE=1` (off by default) |
+| `zmrig-os persist` | the config, a few kB | when you run it |
+
+Everything else is a read. So the stick's real workload is a handful of reads a
+day, not a year of writes. That turns the question from endurance into heat, power and cheap
 controllers:
 
 | Keep | Why |
@@ -375,6 +482,22 @@ API_TOKEN="a long random string"
 With those three lines, `http://rig:18080/2/summary` answers anyone holding the
 token, which is what a fleet dashboard, Home Assistant or a `curl` in a cron job
 needs. Leaving `API_HOST` at `127.0.0.1` keeps it on the machine.
+
+The other machine-readable surface is the image's own health check:
+
+```bash
+zmrig-os doctor --json
+```
+
+One object, one entry per check, and a non-zero exit when something failed:
+
+```json
+{"fail":1,"warn":3,"checks":[{"status":"ok","check":"wallet","detail":"46SQLW7D...ysb5tJ"}, ...]}
+```
+
+That is the line to put in a cron job or a monitoring agent, because it needs no
+parsing of prose and no `grep` to decide whether a fan stopped or a wallet was
+still empty.
 
 ## One bot for the whole shelf
 

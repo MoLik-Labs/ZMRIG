@@ -23,7 +23,7 @@ lời mời — không có gì để lộ trên server của người khác.
 
 | đường dẫn | |
 | --- | --- |
-| `/` | tổng của fleet: hashrate, số rig đang đào, số offline, máy nóng nhất, và những gì cần để ý |
+| `/` | tổng của fleet: hashrate, số rig đang đào, số offline, máy nóng nhất, những gì cần để ý, và mỗi ví một dòng |
 | `/rigs` | mỗi máy một dòng: trạng thái, hashrate, nhiệt độ, lần cuối |
 | `/rig/<id>` | mọi thứ về một rig, kèm phần điều khiển |
 | `/enrol` | ba bước nhập rig, URL của bạn đã điền sẵn |
@@ -43,6 +43,19 @@ Hai điều dễ bất ngờ:
   đổi ví thì phải gõ ví khác.
 * Rig nhập từ trình duyệt thuộc về admin chính trong chat, nên `/devices` trong
   Telegram liệt kê nó cùng mọi máy khác.
+
+## Một ví, một con số
+
+Trang tổng cộng hashrate theo **ví**, không theo máy. Mọi rig đào vào cùng một địa
+chỉ là một con số ở pool, một số dư, một câu trả lời cho "mình đang chạy thế nào" —
+nên ở đây nó là một dòng, kèm phần trăm trong tổng fleet đang tạo ra ngay lúc này.
+Các rig chỉ là cách để tạo ra con số đó.
+
+Một rig đã im lặng thì thôi không cộng vào tổng nữa: nó chưa chắc đã ngừng đào,
+nhưng con số cuối cùng của nó không phải hiện tại, và một dashboard cộng số của
+một tiếng trước vào số vừa báo là nói dối bằng cách bỏ sót. Nó vẫn được tính là
+một rig của farm. Rig chưa báo ví sẽ thành một dòng riêng, nằm cuối bảng — máy
+đang đào vào sai địa chỉ đúng là lỗi mà bảng này tồn tại để nhìn thấy.
 
 ## Nhập rig từ trang
 

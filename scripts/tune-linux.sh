@@ -15,7 +15,14 @@
 #                                               # governor (max hashrate per watt)
 #   sudo ./scripts/tune-linux.sh --algo panthera # reserve for Scala instead of
 #                                               # Monero (192 MB, not 2336 MB)
+#   sudo ./scripts/tune-linux.sh --mode eco      # size the pool for the threads
+#                                               # eco actually runs, not for all
+#   sudo ./scripts/tune-linux.sh --pages 1200    # obey an exact page count
 #   ./scripts/tune-linux.sh --status            # read-only report (no root needed)
+#
+# The memory arithmetic is not repeated here: it comes from os/plan.sh, the same
+# library the initramfs and `zmrig-os` use, so a rig cannot be tuned for one
+# number and boot with another.
 #
 # Revert:
 #   echo 0 | sudo tee /proc/sys/vm/nr_hugepages
@@ -28,9 +35,17 @@ THP_MODE="always"       # always | madvise | off
 SWAPPINESS="10"
 SET_GOVERNOR="performance"
 PROFILE="auto"
+NUMA_BALANCE="keep"     # off | on | keep
+IRQ_MODE="keep"         # steer | keep
 # Overridable so the profile/gonernor logic can be tested against a fake tree
 # instead of real sysfs (a governor test must not change the test machine).
 CPU_ROOT="${CPU_ROOT:-/sys/devices/system/cpu}"
+# Narrower overrides for the interrupt and NUMA steps below: the rest of the
+# script still writes absolute paths, so these exist only so the new logic can be
+# exercised against a fake tree instead of the machine running the test.
+SYS_ROOT="${SYS_ROOT:-/sys}"
+PROC_SYS="${PROC_SYS:-/proc/sys}"
+PROC_IRQ="${PROC_IRQ:-/proc/irq}"
 POWER_SUPPLY_ROOT="${POWER_SUPPLY_ROOT:-/sys/class/power_supply}"
 DRY_RUN=0
 STATUS_ONLY=0
@@ -41,8 +56,11 @@ QUIET=0
 # Panthera/Scala needs 64 MB behind 128 MB. Reserving Monero's 2.3 GB for a coin
 # that fits in 192 MB is how a 1 GB VPS ends up refusing to start.
 ALGO="${ALGO:-rx/0}"
-DATASET_MB=2080          # RandomX dataset (set per algorithm after parsing)
-CACHE_MB=256             # RandomX cache
+MODE="${MODE:-max}"      # max | balanced | eco | light: decides the thread count
+THREADS_WANT=""          # an explicit thread count beats the mode
+PAGES_WANT=""            # an explicit page count beats the arithmetic
+DATASET_MB=0             # filled in from os/plan.sh after parsing
+CACHE_MB=0
 
 
 color() {
@@ -54,7 +72,9 @@ ok()    { printf ' %s %s\n' "$(color '1;32' 'OK')" "$*"; }
 step()  { [ "$QUIET" = 1 ] && return 0; printf '\n%s\n' "$(color '1;36' "$*")"; }
 
 usage() {
-    sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'
+    # The header is the comment block at the top; printing "until the first line
+    # that is not a comment" cannot drift when a line is added to it.
+    awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
     exit 0
 }
 
@@ -71,8 +91,18 @@ while [ $# -gt 0 ]; do
         --no-governor)    SET_GOVERNOR="" ;;
         --profile)        PROFILE="${2:-auto}"; shift ;;
         --profile=*)      PROFILE="${1#*=}" ;;
+        --numa)           NUMA_BALANCE="${2:-off}"; shift ;;
+        --numa=*)         NUMA_BALANCE="${1#*=}" ;;
+        --irq)            IRQ_MODE="${2:-steer}"; shift ;;
+        --irq=*)          IRQ_MODE="${1#*=}" ;;
         --algo)           ALGO="${2:-rx/0}"; shift ;;
         --algo=*)         ALGO="${1#*=}" ;;
+        --mode)           MODE="${2:-max}"; shift ;;
+        --mode=*)         MODE="${1#*=}" ;;
+        --threads)        THREADS_WANT="${2:-}"; shift ;;
+        --threads=*)      THREADS_WANT="${1#*=}" ;;
+        --pages)          PAGES_WANT="${2:-}"; shift ;;
+        --pages=*)        PAGES_WANT="${1#*=}" ;;
         -q|--quiet)       QUIET=1 ;;
         -h|--help)        usage ;;
         *)                warn "unknown option: $1"; usage ;;
@@ -80,28 +110,43 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# Sized here, after parsing: `--algo` decides how much memory this host has to
-# reserve, and it is the argument that was just read.
-case "${ALGO,,}" in
-    panthera|rx/xla|xla|scala) DATASET_MB=64;  CACHE_MB=128 ;;
-    rx/0|rx|randomx|xmr|monero) DATASET_MB=2080; CACHE_MB=256 ;;
-    rx/2|rx/wow|rx/arq|rx/graft|rx/sfx|rx/yada|wow|arq|graft|sfx|yada)
-        # Same consensus sizes as Monero; only the configuration differs.
-        DATASET_MB=2080; CACHE_MB=256 ;;
-    *)
-        # An algorithm this script does not know about: reserve for the largest
-        # configuration in the tree. Too much is harmless, too little is not.
-        DATASET_MB=2080; CACHE_MB=256 ;;
-esac
+# The memory arithmetic lives in os/plan.sh, because three programs need the same
+# answer: the initramfs reserves pages before userspace exists, `zmrig-os tune`
+# re-applies them at boot, and this script is what that command calls. Two copies
+# of "how many pages does this algorithm need" is one copy too many.
+PLAN_SH="${PLAN_SH:-}"
+if [ -z "$PLAN_SH" ]; then
+    for cand in "$(dirname -- "$0")/plan.sh" "$(dirname -- "$0")/../os/plan.sh"; do
+        if [ -r "$cand" ]; then PLAN_SH="$cand"; break; fi
+    done
+fi
+if [ -z "$PLAN_SH" ]; then
+    echo "error: os/plan.sh not found next to this script or in ../os/" >&2
+    echo "       run it from a checkout of the repository, or set PLAN_SH=/path/to/plan.sh" >&2
+    exit 1
+fi
+# shellcheck source=/dev/null
+. "$PLAN_SH"
 
 read_meminfo() { awk -v k="$1" '$1 == k":" { print $2 }' /proc/meminfo; }
 
 mem_total_mb=$(( $(read_meminfo MemTotal) / 1024 ))
 cores=$(nproc)
 
-# RandomX needs the dataset, the cache and one 2MB scratchpad per mining thread.
-scratch_mb=$(( cores * 2 ))
-required_mb=$(( DATASET_MB + CACHE_MB + scratch_mb + 128 ))   # + slack for the VM
+# The mode decides how many threads the miner will actually run, and the thread
+# count decides the scratchpads: a `balanced` rig on 8 CPUs runs 7, not 8.
+threads=$(plan_threads "$MODE" "$cores" "$THREADS_WANT")
+DATASET_MB=$(plan_dataset_mb "$ALGO")
+CACHE_MB=$(plan_cache_mb "$ALGO")
+required_mb=$(plan_need_mb "$ALGO" "$MODE" "$cores" "$THREADS_WANT")
+# Pages, capped at RAM minus 512 MB: a partial pool is still worth having, while
+# asking for more pages than exist leaves nothing reserved.
+PAGES=$(plan_pages "$ALGO" "$MODE" "$cores" "$mem_total_mb" 2048 "$THREADS_WANT" "$PAGES_WANT")
+
+# The dataset and the cache are what the 1 GB pool has to hold: three of them
+# would be absurd for a 192 MB Scala rig and not enough if the hash was huge.
+GIGA_PAGES=$(( (required_mb + 1023) / 1024 ))
+[ "$GIGA_PAGES" -lt 1 ] && GIGA_PAGES=1
 
 show_status() {
     step "Current state"
@@ -144,7 +189,9 @@ show_status() {
         warn "MSR access: module not loaded -> run this script as root to enable the MSR mod"
     fi
 
-    info "RandomX memory budget for this host: ~${required_mb} MB"
+    info "RandomX memory budget for this host: ~${required_mb} MB (${ALGO} ${MODE}, ${threads} thread(s))"
+    info "dataset ${DATASET_MB} MB + cache ${CACHE_MB} MB for ${ALGO}"
+    info "plan: ${PAGES} x 2MB pages, or ${GIGA_PAGES} x 1GB page(s); ${mem_total_mb} MB RAM"
 }
 
 if [ "$STATUS_ONLY" -eq 1 ]; then
@@ -213,8 +260,12 @@ verify_huge_pages() {
 
 case "$HUGE_MODE" in
     2M)
-        pages=$(( (required_mb + 1) / 2 ))
-        info "reserving ${pages} x 2MB pages ($((pages * 2))MB > ${required_mb}MB needed)"
+        pages=$PAGES
+        if [ -n "$PAGES_WANT" ]; then
+            info "reserving ${pages} x 2MB pages (${PAGES_WANT} asked for; the miner needs ${required_mb}MB)"
+        else
+            info "reserving ${pages} x 2MB pages ($((pages * 2))MB >= ${required_mb}MB needed for ${ALGO} ${MODE}, ${threads} thread(s))"
+        fi
         write_value /proc/sys/vm/nr_hugepages "$pages"
         verify_huge_pages "$pages"
         ;;
@@ -222,25 +273,25 @@ case "$HUGE_MODE" in
         if [ "$(read_meminfo Hugepagesize)" != "2048" ] && [ "$DRY_RUN" -eq 0 ]; then
             info "kernel default huge page size is not 2MB, continuing anyway"
         fi
-        info "reserving 3 x 1GB pages (dataset + cache); needs ${DATASET_MB}MB+ free contiguous RAM"
-        write_value_quiet /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages 3
+        info "reserving ${GIGA_PAGES} x 1GB page(s) (dataset + cache); needs ${required_mb}MB+ free contiguous RAM"
+        write_value_quiet /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages "$GIGA_PAGES"
 
         # Same trap as the 2MB pool: the kernel accepts the write and keeps 0
         # when it cannot find a contiguous gigabyte. Read back and fall back to
         # the 2MB pool instead of leaving the miner without huge pages at all.
         if [ "$DRY_RUN" -eq 0 ]; then
             got_1g=$(cat /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages 2>/dev/null || echo 0)
-            if [ "${got_1g:-0}" -ge 3 ]; then
+            if [ "${got_1g:-0}" -ge "$GIGA_PAGES" ]; then
                 ok "verified: ${got_1g} x 1GB pages reserved"
             elif [ "${got_1g:-0}" -gt 0 ]; then
-                warn "only ${got_1g} of 3 1GB pages could be reserved; falling back to 2MB pages"
-                pages=$(( (required_mb + 1) / 2 ))
+                warn "only ${got_1g} of ${GIGA_PAGES} 1GB pages could be reserved; falling back to 2MB pages"
+                pages=$PAGES
                 write_value /proc/sys/vm/nr_hugepages "$pages"
                 verify_huge_pages "$pages"
             else
                 warn "the kernel reserved no 1GB pages (no contiguous 1GB block or 1GB pages unsupported)"
                 info "falling back to 2MB pages, which give the same RandomX speed"
-                pages=$(( (required_mb + 1) / 2 ))
+                pages=$PAGES
                 write_value /proc/sys/vm/nr_hugepages "$pages"
                 verify_huge_pages "$pages"
             fi
@@ -270,6 +321,69 @@ write_value /proc/sys/vm/swappiness "$SWAPPINESS"
 if [ -w /proc/sys/vm/compact_memory ]; then
     info "compacting memory so the 2MB reservations can be fulfilled"
     run sh -c 'echo 1 > /proc/sys/vm/compact_memory' || true
+fi
+
+step "3b. NUMA balancing"
+# The kernel migrates pages between NUMA nodes while a process runs. A miner's
+# 2.3 GiB dataset is walked uniformly at random, so a migration is a stalled hash
+# that buys nothing: the threads are memory-bound and they never move node. On a
+# single-node machine the setting exists and does nothing, which is the cost.
+case "$NUMA_BALANCE" in
+    off|on)
+        if [ -w "${PROC_SYS}/kernel/numa_balancing" ]; then
+            if [ "$NUMA_BALANCE" = "off" ]; then
+                write_value "${PROC_SYS}/kernel/numa_balancing" 0
+            else
+                write_value "${PROC_SYS}/kernel/numa_balancing" 1
+            fi
+        else
+            info "numa_balancing is not exposed by this kernel"
+        fi
+        ;;
+    keep)
+        info "numa_balancing left as it was"
+        ;;
+    *)
+        warn "unknown --numa value '$NUMA_BALANCE' (off, on or keep)"
+        ;;
+esac
+
+step "3c. Interrupts and unbound work"
+# An interrupt that lands on a core running a RandomX thread costs that thread
+# its working set. Steering device interrupts to the first core keeps the mining
+# cores quiet, and the first core is the one that would have been doing this
+# anyway. On a two-core machine there is nowhere to steer to, so it is skipped.
+if [ "$IRQ_MODE" = "steer" ]; then
+    if [ "${cores:-1}" -lt 4 ]; then
+        info "${cores} core(s): too few to steer interrupts away from the miner"
+    else
+        steered=0
+        for f in "${PROC_IRQ}"/[0-9]*/smp_affinity_list; do
+            [ -w "$f" ] || continue
+            [ "$(cat "$f" 2>/dev/null)" = "0" ] && continue
+            if [ "$DRY_RUN" -eq 1 ]; then
+                printf '   would write 0 to %s\n' "$f"
+            else
+                printf '0' > "$f" 2>/dev/null || continue
+            fi
+            steered=$((steered + 1))
+        done
+        info "interrupts on CPU 0: ${steered} handler(s) moved"
+
+        # Unbound workqueues are the other half: they run kernel work on whatever
+        # CPU looks idle, which is the CPU the miner is using.
+        for f in "${SYS_ROOT}/devices/virtual/workqueue/cpumask" "${SYS_ROOT}"/devices/virtual/workqueue/*/cpumask; do
+            [ -w "$f" ] || continue
+            if [ "$DRY_RUN" -eq 1 ]; then
+                printf '   would write 1 to %s\n' "$f"
+            else
+                printf '1' > "$f" 2>/dev/null || continue
+            fi
+        done
+        info "unbound workqueues on CPU 0"
+    fi
+else
+    info "interrupt affinity left as it was"
 fi
 
 step "4. CPU governor"

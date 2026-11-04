@@ -37,7 +37,7 @@ zmrig-os id
 | --- | --- |
 | `/enroll <id> <code> [tên]` | gắn rig vào bạn |
 | `/devices` | mọi rig: trạng thái, hashrate, nhiệt độ, lần cuối |
-| `/status` | một màn hình: số rig, tổng hashrate, máy nóng nhất, số offline |
+| `/status` | một màn hình: số rig, tổng hashrate, máy nóng nhất, số offline, rồi mỗi ví một dòng khi có nhiều hơn một |
 | `/device <rig>` | một rig, kèm nút bấm |
 | `/wallet <rig> 4…` | đặt ví, kiểm tra trước khi xếp hàng |
 | `/pool <rig> host:port` | đặt pool |
@@ -103,11 +103,11 @@ từng rig và (tuỳ chọn) nó phải chạy cái gì:
 ```json
 {
   "owner": "tg:123456789",
+  "wallet": "46SQL...",
+  "pool": "gulf.moneroocean.stream:10001",
   "rigs": {
     "ZMR-1A2B-3C4D-5E6F": {
       "label": "basement",
-      "wallet": "46SQL...",
-      "pool": "gulf.moneroocean.stream:10001",
       "mode": "safe",
       "maxtemp": 72,
       "threads": 8
@@ -115,6 +115,10 @@ từng rig và (tuỳ chọn) nó phải chạy cái gì:
   }
 }
 ```
+
+`wallet` và `pool` ở trên cùng là của cả farm: sáu máy trong một nhà kho đào vào
+một địa chỉ, viết sáu lần là sáu cơ hội gõ sai một chỗ và chia số dư làm hai. Rig
+nào tự đặt ví riêng thì giữ ví đó.
 
 Cũng có thể đặt trong `fleet/roster.json`; biến môi trường thắng khi cả hai tồn
 tại. Không có gì trong đó là bí mật — Device ID là công khai, ví là địa chỉ — và

@@ -77,7 +77,7 @@ jobs:
           shellcheck -s sh -S error \
             os/overlay/usr/local/bin/zmrig-os \
             os/overlay/usr/local/lib/zmrig/firstboot.sh \
-            os/init os/chroot-setup.sh os/make-initramfs.sh os/upstream.sh
+            os/init os/plan.sh os/chroot-setup.sh os/make-initramfs.sh os/upstream.sh
 
       # Nothing shipped still talks to the person who wrote it: no `set -x` in a
       # boot script, no debug port, no stray TODO in the appliance.
@@ -89,6 +89,11 @@ jobs:
 
       - name: Control tool
         run: bash os/tests/control.sh
+
+      # The memory and CPU plan, on fake topologies: how many pages an
+      # algorithm needs, and which CPUs "isolate N" actually takes.
+      - name: Memory and CPU plan
+        run: bash os/tests/plan.sh
 
       # The rig half of the control plane, against the real server from fleet/.
       # It needs node, which the runner has, and nothing else.
@@ -409,6 +414,38 @@ jobs:
 
           exit "$bad"
 
+      # One version per channel, not an archive.
+      #
+      # The rolling tag replaces its assets in place, so a rig reads the manifest
+      # and never a stale ISO - but a person opening the release page should not
+      # have to work out which of four images is the current one. Every asset
+      # that belongs to a different version is removed *after* the new build has
+      # been uploaded and verified, never before: a failed build must not leave
+      # an empty release behind.
+      - name: Remove assets from older versions
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -u
+          TAG="${{ steps.tag.outputs.tag }}"
+          current="zmrig-os-${VERSION}-x86-64-"
+
+          gh release view "$TAG" --json assets -q '.assets[].name' > /tmp/assets.txt
+          while read -r name; do
+            [ -n "$name" ] || continue
+            case "$name" in
+              "$current"*) ;;                      # this build: keep
+              zmrig-os-stable-*.json|zmrig-os-beta-*.json) ;;  # channel manifests: keep
+              zmrig-os-*-x86-64-v*.iso|zmrig-os-*-x86-64-v*.iso.sha256)
+                echo "removing $name (not ${VERSION})"
+                gh release delete-asset "$TAG" "$name" --yes >/dev/null
+                ;;
+            esac
+          done < /tmp/assets.txt
+
+          echo "assets now:"
+          gh release view "$TAG" --json assets -q '.assets[].name'
+
       # The release notes are written twice on purpose: before the upload they
       # say what the image is, and after it they say where it is. A note with a
       # link in it that 404s is worse than no note at all, which is why this runs
@@ -419,7 +456,8 @@ jobs:
           NOTES=$(mktemp)
 
           {
-            printf 'Bootable ZMRIG OS image, built from `%s`.\n\n' "${GITHUB_SHA:0:8}"
+            printf '**ZMRIG OS %s** — bootable live image, one file per instruction level, built from `%s`.\n\n' \
+              "${{ steps.tag.outputs.version }}" "${GITHUB_SHA:0:8}"
             cat <<'EOF'
           Write it to a stick and boot it:
 
@@ -427,13 +465,25 @@ jobs:
           dd if=zmrig-os-*.iso of=/dev/sdX bs=4M status=progress conv=fsync
           ```
 
-          The wizard asks for your wallet on the console on the first boot, or
-          pass `zmrig.os.wallet=4...` on the kernel command line. Nothing is
-          installed to any disk, and nothing on the stick is modified.
+          Check the download before writing it — every image has its checksum next
+          to it:
 
-          x86-64-v3 needs AVX2 (any x86 CPU since about 2015); x86-64-v2 runs on
-          everything since Nehalem. The `.json` next to each image is the
-          manifest `zmrig-os update` reads.
+          ```
+          sha256sum -c zmrig-os-*.iso.sha256
+          ```
+
+          The wizard asks for your wallet on the console on the first boot, or pass
+          `zmrig.os.wallet=4...` on the kernel command line. Nothing is installed to
+          any disk, and nothing on the stick is modified.
+
+          | | |
+          | --- | --- |
+          | `x86-64-v3` | needs AVX2 and AES-NI — any x86 CPU since about 2015 |
+          | `x86-64-v2` | runs on everything since Nehalem |
+          | `zmrig-os-beta-*.json` | the manifest `zmrig-os update` reads |
+
+          Only the images of this version are attached: the rolling tag replaces
+          them in place, so a link never points at a build that has been replaced.
           EOF
             echo
             echo '## Downloads'
@@ -457,6 +507,9 @@ jobs:
               done
               echo
             fi
+            echo 'Operator manual: <https://molik-labs.github.io/ZMRIG/docs/appliance/iso>'
+            echo 'What changed: [CHANGELOG](https://github.com/'"${GITHUB_REPOSITORY}"'/blob/'"${GITHUB_REF_NAME:-BETA}"'/CHANGELOG.md)'
+            echo
             echo 'Or serve them from your own host — `serve/` redirects `/iso/v3`,'
             echo '`/iso/v2` and `/iso/beta` to the newest asset on each channel.'
           } > "$NOTES"

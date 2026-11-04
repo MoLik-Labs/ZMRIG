@@ -198,6 +198,7 @@ if [ "$SELF_CHECK" = "1" ]; then
         "${HERE}/deps.sh" \
         "${HERE}/overlay/usr/local/bin/zmrig-os" \
         "${HERE}/overlay/usr/local/lib/zmrig/firstboot.sh" \
+        "${HERE}/plan.sh" \
         "${HERE}/overlay/etc/init.d/zmrig" \
         "${HERE}/overlay/etc/init.d/zmrig-firstboot" \
         "${HERE}/overlay/etc/sysctl.d/99-zmrig.conf" \
@@ -213,6 +214,7 @@ if [ "$SELF_CHECK" = "1" ]; then
     done
 
     for f in "${HERE}/init" "${HERE}/chroot-setup.sh" "${HERE}/make-initramfs.sh" \
+             "${HERE}/plan.sh" \
              "${HERE}/overlay/usr/local/bin/zmrig-os" \
              "${HERE}/overlay/usr/local/lib/zmrig/firstboot.sh"; do
         syntax "$f"
@@ -424,10 +426,12 @@ step "installing the appliance files"
 cp -a "${HERE}/overlay/." "${ROOTFS}/"
 cp "${BTREE}/zmrig" "${ROOTFS}/usr/local/bin/zmrig"
 cp "${ROOT}/scripts/tune-linux.sh" "${ROOTFS}/usr/local/lib/zmrig/tune-linux.sh"
+cp "${HERE}/plan.sh" "${ROOTFS}/usr/local/lib/zmrig/plan.sh"
 chmod 755 "${ROOTFS}/usr/local/bin/zmrig" \
           "${ROOTFS}/usr/local/bin/zmrig-os" \
           "${ROOTFS}/usr/local/lib/zmrig/tune-linux.sh" \
           "${ROOTFS}/usr/local/lib/zmrig/firstboot.sh"
+chmod 644 "${ROOTFS}/usr/local/lib/zmrig/plan.sh"
 
 mkdir -p "${ROOTFS}/etc/zmrig"
 cp "${HERE}/overlay/etc/zmrig/os.conf.example" "${ROOTFS}/etc/zmrig/os.conf.example"
@@ -631,28 +635,34 @@ set default=0
 # rebooting into a menu. zmrig.os.wallet=4... also works here.
 set zmrig_params="quiet loglevel=3 nowatchdog console=tty0 console=ttyS0,115200"
 
+# Empty by default, and the place to put the parameters that must be settled
+# before the first process starts: 'zmrig-os isolate' writes them here on an
+# installed rig. isolcpus / nohz_full / rcu_nocbs cannot be applied at runtime,
+# which is why a rig that wants them reboots once.
+set zmrig_extra=""
+
 menuentry "ZMRIG OS ${VERSION} - max hashrate" {
-    linux /boot/vmlinuz \$zmrig_params zmrig.os.mode=max transparent_hugepage=always
+    linux /boot/vmlinuz \$zmrig_params \$zmrig_extra zmrig.os.mode=max transparent_hugepage=always
     initrd /boot/initramfs.${INITRAMFS_EXT}
 }
 
 menuentry "ZMRIG OS ${VERSION} - balanced (one core free)" {
-    linux /boot/vmlinuz \$zmrig_params zmrig.os.mode=balanced transparent_hugepage=always
+    linux /boot/vmlinuz \$zmrig_params \$zmrig_extra zmrig.os.mode=balanced transparent_hugepage=always
     initrd /boot/initramfs.${INITRAMFS_EXT}
 }
 
 menuentry "ZMRIG OS ${VERSION} - eco (half the cores, max per watt)" {
-    linux /boot/vmlinuz \$zmrig_params zmrig.os.mode=eco transparent_hugepage=madvise
+    linux /boot/vmlinuz \$zmrig_params \$zmrig_extra zmrig.os.mode=eco transparent_hugepage=madvise
     initrd /boot/initramfs.${INITRAMFS_EXT}
 }
 
 menuentry "ZMRIG OS ${VERSION} - light (512 MB RAM, no dataset)" {
-    linux /boot/vmlinuz \$zmrig_params zmrig.os.mode=light zmrig.os.hugepages=0 transparent_hugepage=always
+    linux /boot/vmlinuz \$zmrig_params \$zmrig_extra zmrig.os.mode=light zmrig.os.hugepages=0 transparent_hugepage=always
     initrd /boot/initramfs.${INITRAMFS_EXT}
 }
 
 menuentry "ZMRIG OS ${VERSION} - safe (never above 72 C, one core free)" {
-    linux /boot/vmlinuz \$zmrig_params zmrig.os.mode=safe zmrig.os.maxtemp=72 transparent_hugepage=madvise
+    linux /boot/vmlinuz \$zmrig_params \$zmrig_extra zmrig.os.mode=safe zmrig.os.maxtemp=72 transparent_hugepage=madvise
     initrd /boot/initramfs.${INITRAMFS_EXT}
 }
 
@@ -661,12 +671,12 @@ menuentry "ZMRIG OS ${VERSION} - safe (never above 72 C, one core free)" {
 # mines, with no browser and no other users, that trade is worth offering - and
 # it is offered as a menu entry, never as the default.
 menuentry "ZMRIG OS ${VERSION} - max hashrate (CPU mitigations off)" {
-    linux /boot/vmlinuz \$zmrig_params zmrig.os.mode=max transparent_hugepage=always mitigations=off
+    linux /boot/vmlinuz \$zmrig_params \$zmrig_extra zmrig.os.mode=max transparent_hugepage=always mitigations=off
     initrd /boot/initramfs.${INITRAMFS_EXT}
 }
 
 menuentry "ZMRIG OS ${VERSION} - troubleshooting (no huge pages, no MSR)" {
-    linux /boot/vmlinuz \$zmrig_params zmrig.os.mode=max zmrig.os.hugepages=0 transparent_hugepage=madvise nomodeset
+    linux /boot/vmlinuz \$zmrig_params \$zmrig_extra zmrig.os.mode=max zmrig.os.hugepages=0 transparent_hugepage=madvise nomodeset
     initrd /boot/initramfs.${INITRAMFS_EXT}
 }
 
@@ -752,6 +762,13 @@ EOF
 
 mkdir -p "${ISODIR}/.disk"
 printf 'ZMRIG OS %s %s\n' "$VERSION" "$ARCH_LEVEL" > "${ISODIR}/.disk/info"
+
+# The checksum of the root filesystem, next to it on the medium. The initramfs
+# reads it before it mounts anything: a stick that rotted in a drawer then
+# refuses to boot instead of half-booting, and an installed rig whose slot no
+# longer matches the one that was written falls back to the other slot.
+(cd "${ISODIR}/zmrig" && sha256sum rootfs.squashfs | cut -d' ' -f1 > rootfs.squashfs.sha256)
+say "rootfs checksum $(cut -c1-16 "${ISODIR}/zmrig/rootfs.squashfs.sha256")..."
 
 rm -f "$ISO_PATH"
 timeout 600 grub-mkrescue -o "$ISO_PATH" "$ISODIR" \
