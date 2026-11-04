@@ -17,7 +17,7 @@ mọi pool khác.
 | --- | --- |
 | Phí pool | **1.0 %** mỗi block, trừ trước khi chia, làm tròn **xuống** |
 | Phí ẩn | không có |
-| Phí developer của miner | 1 % thời gian đào Monero ở engine Zig (`--donate-level=0` để tắt); engine C++ không lấy gì |
+| Phí developer của miner | 3 % thời gian đào Monero ở engine Zig (`--donate-level=0` để tắt); engine C++ không lấy gì |
 | Ngưỡng trả | 0.01 XMR, cộng phí mạng |
 
 Phí hiện ngay trong reply `login` mà miner in ra, trong `/api/config` và trên

@@ -82,7 +82,7 @@ Nothing in the tree can change these, and the API call needs *Administration*
 permission (this session's token gets `403`). Paste them in **Settings → General**:
 
 * **Description**
-  `Monero (RandomX) miner with a 1% developer fee you can see and switch off, a Zig frontend, one-click install, and a self-hosted pool.`
+  `Monero (RandomX) miner with a 3% developer fee you can see and switch off, a Zig frontend, one-click install, and a self-hosted pool.`
   The current description is upstream's algorithm list and does not match what
   this repository is.
 * **Topics**
@@ -438,7 +438,7 @@ sudo ./oneclick.sh plan --wallet YOUR_ADDRESS --coin wow --pool pool.example.org
 ```
 
 ```text
-engine         zmrig  (RandomX family, 1% dev fee)
+engine         zmrig  (RandomX family, 3% dev fee)
 pool           pool.example.org:3333
 algo           rx/wow
 coin           Wownero
@@ -446,7 +446,7 @@ coin           Wownero
 
 Then install by replacing `plan` with `install` and adding `--yes`. The engine
 follows the algorithm: `rx/*` and `panthera` are the Zig engine's territory
-(1 % of Monero time, `--donate-level=0` to remove it), and `--engine xmrig` is
+(3 % of Monero time, `--donate-level=0` to remove it), and `--engine xmrig` is
 for debugging rather than for speed.
 
 Verify it the same way as Monero:

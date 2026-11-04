@@ -425,7 +425,7 @@ pub const usage =
     \\                           (light skips the 2 GiB dataset check)
     \\      --background         detach from the terminal and keep mining
     \\      --nicehash           mask the nonce for a NiceHash/rental pool
-    \\      --donate-level=N     percent of Monero time for the developer (0-10, default 1)
+    \\      --donate-level=N     percent of Monero time for the developer (0-10, default 3)
     \\      --no-donate          same as --donate-level=0
     \\      --check              validate the configuration and exit
     \\      --dry-run            alias of --check (XMRig spelling)

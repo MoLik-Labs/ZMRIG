@@ -45,7 +45,7 @@
 
 set -eu
 
-VERSION="6.46.0"
+VERSION="6.47.0"
 MANIFEST_URL="https://github.com/MoLik-Labs/ZMRIG/releases/latest/download"
 # The rolling beta is a pre-release, and `releases/latest` never points at one:
 # `CHANNEL="beta"` has to name the tag instead of following the newest stable.
@@ -75,7 +75,11 @@ DRYRUN="${ZMRIG_OS_DRYRUN:-0}"
 # appliance boots with no disk, so these are the values the wizard edits.
 POOL_DEFAULT="gulf.moneroocean.stream:10001"
 MODE_DEFAULT="max"
-DONATE_DEFAULT="1"
+# The developer fee the image ships with: three percent of Monero time, stated
+# in `zmrig-os doctor`, in the miner's own `--check` line and in doc/FEE.md. An
+# operator with a hundred machines can lower it or remove it, and one who wants
+# to pay more can raise it to 10 - both are one key in os.conf.
+DONATE_DEFAULT="3"
 # Safe mode holds this unless told otherwise. 72 C is where a laptop CPU keeps
 # its turbo bins and where a desktop CPU is still well inside spec; the pause
 # limit is target + 15, the hard cap target + 8.

@@ -1208,7 +1208,7 @@ ${cpu_threads_json}
         "loader": null,
         "nvml": true
     },
-    "donate-level": 1,
+    "donate-level": 3,
     "log-file": null,
     "pools": [
         {
@@ -1776,7 +1776,7 @@ self_check() {
         local donate_line
         donate_line=$("$BINARY" -o pool.example.com:3333 -u TEST --check 2>/dev/null | sed -n 's/^ *donate  //p' | head -1)
         case "$donate_line" in
-            1%*46SQLW7D*) ok "developer fee: ${donate_line}" ;;
+            3%*46SQLW7D*) ok "developer fee: ${donate_line}" ;;
             off*)         warn "the installed config disables the developer fee (${CONFIG_FILE})" ;;
             *)            warn "developer fee line is not the documented one: ${donate_line:-missing}" ;;
         esac
@@ -1825,7 +1825,7 @@ self_check() {
 summary_card() {
     # What the installed binary says about its own fee, so the card cannot drift
     # from the code: `off` means the operator passed --donate-level=0.
-    local fee_line="1% of Monero time (--donate-level=0 turns it off)"
+    local fee_line="3% of Monero time (--donate-level=0 turns it off)"
     if [ -x "$BINARY" ]; then
         case "$("$BINARY" -o pool.example.com:3333 -u TEST --check 2>/dev/null | sed -n 's/^ *donate  //p' | head -1)" in
             off*) fee_line="off (--donate-level=0)" ;;

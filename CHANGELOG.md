@@ -1,3 +1,67 @@
+# 6.47.0 — a fee that is stated, and the pages that prove it
+
+The developer fee is 3 % of Monero mining time. This is a user-visible change
+from 1 %, and it is stated in the same places the old number was, because the
+mechanism that makes the fee honest is not the size of it: the rate is one
+constant in `zmrig/src/fee.zig`, the banner is printed from that constant at
+compile time, `--check` prints it next to the destination address, the log prints
+it at startup, the API reports it, and `scripts/verify-fee.sh` fails the build if
+any of them disagree.
+
+## Why 3 %
+
+Because that is what the work costs, and because a number that is stated can be
+argued with. The fee pays for the parts that do not mine: CI builds and publishes
+every image, the fleet and the site need a host and somebody to watch it, and the
+benchmarks behind `doc/PERFORMANCE.md` take a machine and a day each. A rig at
+1 kH/s pays about a dollar a month at 3 %.
+
+Nothing about it is hidden, and it is still a setting:
+
+```bash
+zmrig ... --donate-level=0      # off
+zmrig ... --donate-level=1      # the old default
+zmrig-os setup --donate 5       # on an appliance, written to os.conf
+```
+
+The banner can no longer drift from the code: it is
+`std.fmt.comptimePrint` over `fee.default_percent`, so a rate change that forgets
+the banner is a compile error rather than a sentence nobody re-reads.
+
+## The audit now checks the prose too
+
+`scripts/verify-fee.sh` had seven checks; it has nine:
+
+* the pages state the same rate as the constant — `doc/FEE.md`, both site
+  languages and the README are read, and a page that never mentions the number
+  fails the build;
+* the appliance default (`DONATE` in `zmrig-os`) equals the binary's.
+
+That is the difference between a policy and a claim: before this, a fee change
+could update the constant, the binary and the log and quietly leave the
+documentation behind.
+
+## `doc/FEE.md` states what it costs
+
+A table of what 0, 1, 3, 5 and 10 percent are worth per month on a single rig,
+with the arithmetic shown, so the cost is read rather than discovered from a
+payout that came up short. The cadence is restated for the new rate: 60 s of
+Monero mining every 33 minutes, which is what the debt clock produces at 3 %.
+
+## Also in this release
+
+* `DONATE="3"` in `os/overlay/etc/zmrig/os.conf.example`, with the comment that
+  says it is a setting and not a rule, and `doc/OS.md` matching it.
+* The installer writes `"donate-level": 3` explicitly, so the value is visible in
+  `config.json` rather than implied.
+* Both site languages, the README badge, the summary table and every page that
+  quoted the old rate.
+
+Tests: the fee audit (9 checks, source and binary), `zmrig/tests/cli.sh`
+(default rate and a changed rate), `os/tests/control.sh` (the appliance args keep
+the rate on the command line), `tests/oneclick/config.sh` (the installer writes
+it).
+
 # 6.46.0 — one service, three jobs, on the one instance a free month allows
 
 A free Render workspace gets 750 instance hours per calendar month, shared by

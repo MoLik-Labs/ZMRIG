@@ -34,7 +34,7 @@ the Zig engine's coverage is checked rather than claimed.
   It cannot mine the non-RandomX algorithms those pools also pay for, so a
   pool that values breadth more than depth is better served by `xmrig`. The
   installer's `auto` setting chooses `xmrig` for a switching pool for this
-  reason; `zmrig` stays the default either way (1 % of Monero time, switchable off).
+  reason; `zmrig` stays the default either way (3 % of Monero time, switchable off).
 - **Any other algorithm (cn/heavy, ghostrider, KawPow):** `xmrig`. `zmrig`
   refuses at argument-parse time rather than starting and failing to connect.
 - **A network that only allows 443, or a proxy:** `zmrig`. See

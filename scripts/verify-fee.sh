@@ -27,7 +27,7 @@ BINARY="${ROOT}/zmrig/out/zmrig"
 SOURCE_ONLY=0
 FAILED=0
 
-EXPECTED_PERCENT=1
+EXPECTED_PERCENT=3
 EXPECTED_WALLET="46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ"
 
 color() { if [ -t 1 ]; then printf '\033[%sm%s\033[0m' "$1" "$2"; else printf '%s' "$2"; fi; }
@@ -54,6 +54,32 @@ if [ "${percent:-x}" = "${EXPECTED_PERCENT}" ]; then
     pass "default_percent = ${percent} (as documented)"
 else
     fail "default_percent = ${percent:-?} (documented: ${EXPECTED_PERCENT})"
+fi
+
+# 1b. The prose says the same number as the code. A fee change that updates the
+#     constant and forgets the page is exactly how a published rate and a shipped
+#     rate drift apart, so it is a build failure rather than a review note.
+prose_mismatch=0
+for page in \
+    "${ROOT}/doc/FEE.md" \
+    "${ROOT}/site/docs/reference/fee.md" \
+    "${ROOT}/site/i18n/vi/docusaurus-plugin-content-docs/current/reference/fee.md" \
+    "${ROOT}/README.md"; do
+    [ -f "$page" ] || continue
+    if ! grep -qE "(\*\*)?${EXPECTED_PERCENT}( ?|,)(%|%)" "$page"; then
+        fail "$(basename "$page") never states ${EXPECTED_PERCENT} %"
+        prose_mismatch=1
+    fi
+done
+[ "$prose_mismatch" = "0" ] && pass "the pages state the same rate as the constant"
+
+# 1c. The appliance ships the same default, so an image and a binary from the
+#     same commit cannot disagree about what a fresh rig pays.
+tool_percent=$(grep -E '^DONATE_DEFAULT=' "${ROOT}/os/overlay/usr/local/bin/zmrig-os" | sed 's/.*="//; s/".*//')
+if [ "${tool_percent:-x}" = "${EXPECTED_PERCENT}" ]; then
+    pass "os.conf default DONATE = ${tool_percent} (same as the binary)"
+else
+    fail "os.conf default DONATE = ${tool_percent:-?} (binary: ${EXPECTED_PERCENT})"
 fi
 
 # 2. One wallet, in one file.
@@ -110,8 +136,8 @@ else
     printf '%s\n' "$check_out" | grep -i donate | head -2
 fi
 
-if printf '%s' "$check_out" | grep -qE "^ *donate +.*60 s every 100 min"; then
-    pass "--check prints the cadence (60 s every 100 min at 1%)"
+if printf '%s' "$check_out" | grep -qE "^ *donate +.*60 s every 33 min"; then
+    pass "--check prints the cadence (60 s every 33 min at 3%)"
 else
     fail "--check does not print the cadence"
 fi

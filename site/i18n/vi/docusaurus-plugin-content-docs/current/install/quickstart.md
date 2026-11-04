@@ -27,7 +27,7 @@ binary mới hơn mã nguồn.
 
 | Quyết định | Cách installer chọn |
 | --- | --- |
-| Engine | `zmrig` (1 % thời gian Monero, `--donate-level=0` để bỏ). Nó khai báo cả họ RandomX, nên pool đổi thuật toán vẫn chuyển được rig sang coin đang trả tốt nhất. `--algo` ngoài RandomX, hoặc `--engine=xmrig`, sẽ chọn engine C++, engine này không lấy phí. |
+| Engine | `zmrig` (3 % thời gian Monero, `--donate-level=0` để bỏ). Nó khai báo cả họ RandomX, nên pool đổi thuật toán vẫn chuyển được rig sang coin đang trả tốt nhất. `--algo` ngoài RandomX, hoặc `--engine=xmrig`, sẽ chọn engine C++, engine này không lấy phí. |
 | Profile | `free` (hashrate tối đa) ở mọi nơi, trừ laptop đang dùng pin → `watt` (hash trên mỗi watt tối đa). |
 | Thread | Đo sau khi build: mỗi phương án chạy 8 s trên dataset thật, phương án thắng được ghi vào config. |
 | Huge pages | Tính từ dataset. Nếu kernel cấp ít hơn, nó lùi về transparent huge pages và nói rõ. |
@@ -41,7 +41,7 @@ Xem đúng danh sách đó mà không đụng vào máy:
 
 ```text
 ==> plan
-    engine         zmrig  (RandomX family, 1% dev fee)
+    engine         zmrig  (RandomX family, 3% dev fee)
     pool           gulf.moneroocean.stream:10001
     algo           auto  (RandomX family: rx/0, rx/wow, rx/arq, …)
     profile        free  (auto: no battery, electricity is treated as free)

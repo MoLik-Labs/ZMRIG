@@ -27,7 +27,7 @@ sudo ./scripts/tune-linux.sh
 # 3. measure before/after on the same host
 ./scripts/bench.sh --seconds 300 --hashes 200000
 
-# 4. audit the developer fee (1% of Monero time, switchable off)
+# 4. audit the developer fee (3% of Monero time, switchable off)
 ./scripts/verify-fee.sh --binary zmrig/out/zmrig
 ```
 
@@ -483,6 +483,39 @@ SIGTERM cleanly so the profile is flushed), then rebuilds with
 CPU-only builds (`--all-backends` not passed) disable OpenCL/CUDA/NVML/ADL.
 This removes runtime dependencies and shaves startup time; CPU hashrate is
 identical.
+
+### The Zig binary (`zmrig/build.sh`)
+
+The hash engine is compiled from the same C sources, so the flags above apply;
+the supervisor is Zig at `-O ReleaseFast -mcpu=native`. `build.sh` has an
+`EXTRA_FLAGS` hook for experiments, and one was run:
+
+```bash
+EXTRA_FLAGS="-flto -ffunction-sections -fdata-sections" ./zmrig/build.sh
+```
+
+It does not link. `-flto` puts LLVM bitcode in the archive, and the final
+`zig build-exe` link in this script is not an LTO-aware link step, so the C
+symbols are never materialised (`error: ld.lld: undefined symbol: xmo_msr_probe`,
+referenced from `main.printConfigSummary`). Making it work means building the
+archive as bitcode with `llvm-ar` and teaching the link step about `-flto`; that
+is a build-system change, not a flag, and it buys little: the RandomX hot loop is
+JIT-compiled at runtime, so a C-level optimisation cannot reach it. Startup,
+option parsing and the stratum client are all it would touch.
+
+`-fstrip` and `--gc-sections` change the size of the binary, not the hashrate.
+
+There is one more reason not to publish a number from this machine. The same
+binary, benchmarked three times in the same 2 vCPU sandbox with nothing else
+running, reported **88.86 H/s**, **64.02 H/s** and **113.5 H/s** — a factor of
+1.8 between the slowest and the fastest run. Whatever the hypervisor was doing
+in between, it was larger than every optimisation in this document put together.
+Any comparison made on a machine like this is a coin toss dressed as a
+measurement.
+
+Measure on the target rig: quiet machine, three runs, and write the spread down
+before believing a 1 % win. The numbers in the rest of this file were taken that
+way, on hardware, with the spread stated.
 
 **Static binaries**: `--static` produces a fully static build for old
 distributions. It disables `dlopen` of GPU drivers, which is fine for CPU-only.

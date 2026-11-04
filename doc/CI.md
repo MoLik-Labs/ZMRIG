@@ -27,7 +27,7 @@ What they cover:
 | Check | What it proves |
 |---|---|
 | `tests/oneclick/branch-switch.sh` | the installer's branch switching works in a `--depth 1` single-branch clone, and an unknown branch is a hard error instead of a silent no-op |
-| `verify-fee.sh` | the Zig engine's fee is the documented 1 % of Monero time: one address, `--check` prints rate/address/cadence, `--donate-level=0` and `--no-donate` print `off`, `--donate-level=11` is rejected, no upstream donation endpoint in the binary |
+| `verify-fee.sh` | the Zig engine's fee is the documented 3 % of Monero time: one address, `--check` prints rate/address/cadence, `--donate-level=0` and `--no-donate` print `off`, `--donate-level=11` is rejected, no upstream donation endpoint in the binary |
 | `verify-fee-free.sh` | the C++ engine still has no donation strategy, no developer wallet, and prints `DONATE 0%` even with `--donate-level=9` |
 | `miner-integration` | the built binary talks stratum, accepts a job and submits a share for all 34 CPU algorithms (`tests/common/miner_harness.js` runs a fake pool) |
 

@@ -137,7 +137,7 @@ One thread per physical core, no governor forcing, mining paused on battery, and
 hashes per watt in the report code. The full reasoning, including what could not
 be measured here, is in [doc/PERFORMANCE.md](PERFORMANCE.md) §2c.
 
-Both profiles take the same 1 % developer fee on Monero time, both are
+Both profiles take the same 3 % developer fee on Monero time, both are
 auditable with `sudo ./oneclick.sh verify`, and `--donate-level=0` removes it.
 
 ### Health
