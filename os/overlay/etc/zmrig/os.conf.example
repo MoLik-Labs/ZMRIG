@@ -26,6 +26,14 @@ AUTO_UPDATE="1"
 # three failed boots on a slot roll the machine back to the other one.
 AUTO_IMAGE="0"
 CHANNEL="stable"
+# Huge pages: empty means "size the pool from ALGO" (2.3 GB for Monero, 192 MB
+# for Scala), 0 turns the reservation off. The initramfs reads this before it
+# reserves, so a light-mode box does not ask for pages it cannot use.
+HUGEPAGES=""
+# Logical CPUs kept for mining, as whole SMT cores (0 = shared with the OS).
+# `zmrig-os isolate 4` writes this and the matching kernel parameters; the kernel
+# side (isolcpus, nohz_full, rcu_nocbs) takes effect on the next boot.
+ISOLATE="0"
 EXTRA_ARGS=""
 # The control plane (Telegram and/or Discord bot). Empty means no fleet: nothing
 # on the rig contacts anything until a server is named here or on the kernel

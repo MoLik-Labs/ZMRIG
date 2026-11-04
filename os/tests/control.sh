@@ -295,6 +295,20 @@ contains "--thp" "$(cat "$ROOTDIR/var/log/zmrig-os.log" 2>/dev/null; printf '%s'
     ok "the tuner is given a profile, not left to its defaults" ||
     bad "the tuner is given a profile"
 
+# The tuner sizes its reservation, so it has to know which algorithm, which mode
+# and - when the operator set a count - how many pages. A rig tuned for Monero
+# and started on Scala is tuned for 2.3 GB it will never map.
+printf 'ALGO="rx/0"\nMODE="eco"\nHUGEPAGES="600"\nWALLET="%s"\n' "$WALLET" > "$ROOTDIR/etc/zmrig/os.conf"
+out=$("$TOOL" tune 2>&1)
+contains "--algo rx/0" "$out" && ok "the tuner is told the algorithm" || bad "the tuner is told the algorithm (got: $out)"
+contains "--mode eco" "$out" && ok "the tuner is told the mode" || bad "the tuner is told the mode (got: $out)"
+contains "--pages 600" "$out" && ok "an explicit page count reaches the tuner" ||
+    bad "an explicit page count reaches the tuner (got: $out)"
+printf 'ALGO="rx/0"\nMODE="max"\nHUGEPAGES="0"\nWALLET="%s"\n' "$WALLET" > "$ROOTDIR/etc/zmrig/os.conf"
+out=$("$TOOL" tune 2>&1)
+contains "--hugepages off" "$out" && ok "HUGEPAGES=0 turns the pool off" ||
+    bad "HUGEPAGES=0 turns the pool off (got: $out)"
+
 # The threshold nobody should have to find by reading the source.
 if ZMRIG_OS_NO_MAIN=1 ZMRIG_OS_ROOT="$ROOTDIR" sh -c '. "$1"; autotune_due auto "" 1' _ "$TOOL"; then
     ok "an unmeasured machine with the heuristic in charge is due"

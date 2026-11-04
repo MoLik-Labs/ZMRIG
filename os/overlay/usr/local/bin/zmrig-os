@@ -11,8 +11,13 @@
 #   zmrig-os sync                # check in, apply what the bot queued
 #   zmrig-os setup               # the wizard: wallet, pool, mode, start
 #   zmrig-os setup --wallet 4... --pool host:port --mode max --start
+#   zmrig-os quickstart --wallet 4... [--pool host:port] [--coin xmr] [--mode max]
+#                                # setup + tune + fleet + start, in one command
 #   zmrig-os mode balanced       # max | balanced | eco | light | safe
 #   zmrig-os mode safe 70        # ... and keep the hottest CPU sensor at 70 C
+#   zmrig-os isolate 4           # keep 4 CPUs for mining (whole cores), pin the
+#                                # miner to them and move IRQs off them
+#   zmrig-os doctor --json       # every check, machine readable
 #   zmrig-os install --disk /dev/nvme0n1   # write this image onto a disk
 #   zmrig-os install             # explain the two forms (live, installed)
 #   zmrig-os auto --check        # is there a newer miner or image?
@@ -28,7 +33,8 @@
 #   ZMRIG_OS_ROOT=/tmp/x         # pretend the image root is /tmp/x
 #   ZMRIG_OS_BIN=/path/zmrig     # binary to run (default <root>/usr/local/bin/zmrig)
 #   ZMRIG_OS_DRYRUN=1            # print privileged changes instead of making them
-#   ZMRIG_OS_SYS/…_PROC=DIR      # where /sys and /proc are read from (tests)
+#   ZMRIG_OS_SYS=/tmp/sys        # where /sys is read from, for topology (tests)
+#   ZMRIG_OS_PROC=/tmp/proc      # where /proc is read from (tests)
 #   ZMRIG_OS_NO_MAIN=1           # source the file and call functions (tests)
 #
 # POSIX sh on purpose: the image has busybox ash, and the same script has to run
@@ -39,7 +45,7 @@
 
 set -eu
 
-VERSION="6.44.0"
+VERSION="6.45.0"
 MANIFEST_URL="https://github.com/MoLik-Labs/ZMRIG/releases/latest/download"
 # The rolling beta is a pre-release, and `releases/latest` never points at one:
 # `CHANNEL="beta"` has to name the tag instead of following the newest stable.
@@ -258,6 +264,19 @@ load_conf() {
     # auto | off | an explicit XMRig mask. Auto is "pin to the physical cores",
     # which is what almost every machine wants and what none of them used to get.
     AFFINITY=$(conf_default AFFINITY "auto")
+    # How many logical CPUs stay with the miner, as whole SMT groups. 0 is the
+    # default: sharing the machine with the OS costs a few percent, and a rig
+    # nobody can ssh into is worse than a rig that is 3 % slower. When it is set
+    # it wins over AFFINITY: the isolated set is the mask.
+    ISOLATE=$(conf_default ISOLATE "0")
+    # 0 turns the reservation off entirely; empty means "decide from the
+    # algorithm". The boot sets it, the config can override it.
+    HUGEPAGES=$(conf_default HUGEPAGES "")
+    ISOLATED_CPUS=""
+    case "$ISOLATE" in
+        ''|0|*[!0-9]*) ;;
+        *) ISOLATED_CPUS=$(plan_iso_cpus "$SYS" "$ISOLATE" "$(thread_count)") ;;
+    esac
 
     if [ -f "$kc" ]; then
         local v
@@ -270,6 +289,9 @@ load_conf() {
         # of the block, and an absent key would make load_conf return 1 under
         # `set -e` - which read as "the tool cannot read its own config".
         v=$(_kc "$kc" SAFE_TEMP); [ -z "$v" ] || SAFE_TEMP="$v"
+        v=$(_kc "$kc" ALGO);      [ -z "$v" ] || ALGO="$v"
+        v=$(_kc "$kc" ISOLATE);   [ -z "$v" ] || ISOLATE="$v"
+        v=$(_kc "$kc" HUGEPAGES); [ -z "$v" ] || HUGEPAGES="$v"
         v=$(_kc "$kc" FLEET);     [ -z "$v" ] || FLEET_URL="$v"
         v=$(_kc "$kc" INSTALL);   [ -z "$v" ] || INSTALL="$v"
     fi
@@ -309,6 +331,8 @@ MEASURED_HS="${MEASURED_HS:-}"
 AFFINITY="${AFFINITY:-auto}"
 TUNED_AT="${TUNED_AT:-}"
 CHANNEL="${CHANNEL}"
+ISOLATE="${ISOLATE:-0}"
+HUGEPAGES="${HUGEPAGES:-}"
 EXTRA_ARGS="${EXTRA_ARGS}"
 FLEET_URL="${FLEET_URL}"
 FLEET_INTERVAL="${FLEET_INTERVAL:-$FLEET_INTERVAL_DEFAULT}"
@@ -362,17 +386,36 @@ other_slot() { case "$1" in a) printf 'b' ;; *) printf 'a' ;; esac; }
 # GRUB reads it with `load_env`, so the guest can change which slot boots next
 # without grub-editenv, without rewriting grub.cfg, and without a writable
 # filesystem GRUB itself has to understand.
+# Keys are merged, not replaced: the slot and the kernel parameters this rig
+# needs live in the same block, and rewriting the block to change one of them
+# used to forget the other - which is how a rig boots the wrong slot after
+# somebody isolates a few CPUs.
 write_grubenv() { # key value
     local env="${BOOT_DIR}/grub/grubenv" line
     [ -d "${BOOT_DIR}/grub" ] || return 1
     line="$1=$2"
-    awk -v line="$line" 'BEGIN {
-        head = "# GRUB Environment Block\n" line "\n"
-        n = 1024 - length(head) - 1
-        pad = ""
-        for (i = 0; i < n; i++) pad = pad "#"
-        printf "%s%s\n", head, pad
-    }' > "${env}.new" 2>/dev/null || return 1
+
+    # Existing keys, minus the one being written. A file that does not exist yet
+    # is not an error: a fresh install writes the block after this.
+    if [ -r "$env" ]; then
+        sed 's/^#.*$//' "$env" 2>/dev/null | awk -v key="$1" 'index($0, "=") > 0 && substr($0, 1, index($0, "=") - 1) != key' > "${env}.body" 2>/dev/null ||
+            : > "${env}.body"
+    else
+        : > "${env}.body"
+    fi
+
+    {
+        printf '%s\n' "$line"
+        cat "${env}.body"
+    } | awk 'BEGIN { head = "# GRUB Environment Block\n" } { body = body $0 "\n" }
+        END {
+            room = 1024 - length(head) - length(body) - 1
+            if (room < 0) exit 1
+            pad = ""
+            for (i = 0; i < room; i++) pad = pad "#"
+            printf "%s%s%s\n", head, body, pad
+        }' > "${env}.new" 2>/dev/null || { rm -f "${env}.new" "${env}.body"; return 1; }
+    rm -f "${env}.body"
     mv "${env}.new" "$env" 2>/dev/null || return 1
 }
 
@@ -485,18 +528,85 @@ msr_usable() {
     return 0
 }
 
+# ------------------------------------------------------------------ CPU set
+#
+# iso_list is the isolated set as the kernel writes it ("4-7"), which is also
+# what smp_affinity_list and isolcpus= both accept.
+iso_list() {
+    [ -n "${ISOLATED_CPUS:-}" ] || return 0
+    # shellcheck disable=SC2086
+    plan_join_list $ISOLATED_CPUS
+}
+
+housekeeping_list() {
+    local total
+    total=$(thread_count)
+    # shellcheck disable=SC2086
+    plan_join_list $(plan_housekeeping "$total" ${ISOLATED_CPUS:-})
+}
+
+# Move every IRQ that can be moved off the isolated CPUs.
+#
+# A network interrupt landing on a core the miner is using is a context switch
+# in the middle of a hash, and the kernel will keep doing it: IRQ affinity is
+# inherited from whatever the driver chose at probe time. Only the movable
+# interrupts are touched - the per-CPU ones (timer, local APIC) refuse the
+# write, and a driver that pins its own queues keeps them.
+steer_irqs() {
+    local house file moved=0
+    house=$(housekeeping_list)
+    [ -n "$house" ] || return 0
+    for file in /proc/irq/*/smp_affinity_list; do
+        [ -w "$file" ] || continue
+        printf '%s\n' "$house" > "$file" 2>/dev/null && moved=$((moved + 1))
+    done
+    log_os "IRQs: ${moved} moved, now allowed on CPU ${house} (mining on $(iso_list))"
+}
+
+# The kernel side of isolation cannot be changed after boot: isolcpus, nohz_full
+# and rcu_nocbs are parsed before the scheduler exists. An installed rig carries
+# a GRUB environment block the initramfs already writes to, so the parameters go
+# there and take effect on the next boot - one mechanism, no grub.cfg editing.
+write_iso_boot_params() {
+    local cpus extra
+    cpus=$(iso_list)
+    if [ -z "$cpus" ]; then
+        write_grubenv zmrig_extra "" 2>/dev/null || return 1
+        say "next boot: no isolated CPUs"
+        return 0
+    fi
+    extra="isolcpus=${cpus} nohz_full=${cpus} rcu_nocbs=${cpus}"
+    write_grubenv zmrig_extra "$extra" || return 1
+    say "next boot: ${extra}"
+}
+
 # The flags handed to the miner. Printed by `zmrig-os args` so the exact command
 # line can be copied into a bug report, and written to run/zmrig/args so the
 # supervisor and the doctor never disagree about it.
 build_args() {
-    local cores threads prio args=""
+    local cores threads prio args="" iso_cores mask
 
     # Physical cores, not threads: `balanced` on a 16-thread Ryzen used to ask
     # for 15 mining threads on 8 cores, which is the fastest way to make a
     # RandomX rig slower and hotter at the same time.
     cores=$(core_count)
+    # Isolation takes CPUs away from the miner, so it takes cores away too: a
+    # `balanced` rig that pins seven threads on a machine where the kernel only
+    # lets the miner run on three cores is a rig with two threads per scratchpad
+    # and a cache that thrashes. The mode is computed over the cores the miner
+    # may actually use.
+    if [ -n "${ISOLATED_CPUS:-}" ]; then
+        iso_cores=$(plan_iso_groups "$SYS" $ISOLATED_CPUS)
+        [ "${iso_cores:-0}" -gt 0 ] && cores="$iso_cores"
+    fi
     threads="$THREADS"
-    [ "$threads" = "auto" ] && threads=$(mode_threads "$cores")
+    if [ "$threads" = "auto" ]; then
+        threads=$(mode_threads "$cores")
+        # max and light leave the count to the miner, which is right on an open
+        # machine and wrong under a mask: with isolation there is a hard ceiling,
+        # so fill it exactly instead of hoping the miner reads the same hint.
+        if [ -z "$threads" ] && [ -n "${ISOLATED_CPUS:-}" ]; then threads="$cores"; fi
+    fi
     prio=$(mode_priority)
 
     [ -n "$WALLET" ] || die "no wallet configured: run 'zmrig-os setup'"
@@ -527,9 +637,17 @@ build_args() {
 
     # Pinning also protects the thread count chosen above: without it the
     # scheduler is free to put two of those threads on one core's sibling pair
-    # the moment a housekeeping task wakes up.
-    mask=$(affinity_mask)
-    [ -n "$mask" ] && args="$args --cpu-affinity $mask"
+    # the moment a housekeeping task wakes up. Under isolation the mask is the
+    # isolated set, because that is the whole point of isolating it; above 64
+    # CPUs no 64-bit mask can describe the set, so nothing is pinned rather than
+    # pinning the wrong cores.
+    if [ -n "${ISOLATED_CPUS:-}" ]; then
+        mask=$(plan_mask_hex $ISOLATED_CPUS)
+        [ -n "$mask" ] && args="$args --cpu-affinity 0x$mask"
+    else
+        mask=$(affinity_mask)
+        [ -n "$mask" ] && args="$args --cpu-affinity $mask"
+    fi
 
     [ -n "$EXTRA_ARGS" ] && args="$args $EXTRA_ARGS"
 
@@ -719,6 +837,12 @@ supervise() {
     if [ -e "$RUN/nostart" ]; then
         log_os "not starting: zmrig.os.nostart=1 was on the kernel command line"
         return 0
+    fi
+
+    # Once per supervisor, not per miner start: moving a few hundred IRQ masks
+    # takes a moment, and the answer does not change while the service is up.
+    if [ -n "${ISOLATED_CPUS:-}" ] && is_root; then
+        steer_irqs || true
     fi
 
     # Armed once, before the first miner starts, so the first reading it can act
@@ -934,6 +1058,185 @@ cmd_mode() {
     fi
 }
 
+# Keep N logical CPUs for mining, as whole SMT groups, and pin the miner to them.
+#
+# What this buys: the scheduler stops putting the pool's socket, the SSH session
+# and the sysctl write on the cores that are hashing. What it costs: those CPUs
+# are also unavailable to anything else, so `isolate N` on a 4-core box leaves 2
+# cores for the OS and 2 for the miner.
+#
+# Half of it cannot be changed at runtime - isolcpus/nohz_full/rcu_nocbs are
+# parsed before the scheduler exists - so on an installed rig the parameters are
+# written into the GRUB environment block and take effect on the next boot. On a
+# live stick the media is read-only: the tool prints the parameters to add to the
+# boot entry and applies the user-space half (affinity and IRQ steering) now.
+cmd_isolate() {
+    local want="${1:-show}" total cpus house params
+
+    load_conf
+    total=$(thread_count)
+
+    case "$want" in
+        show|"")
+            say "cpus        $total logical ($(plan_join_list $(seq 0 $((total - 1))) 2>/dev/null || echo "?"))"
+            if [ -n "${ISOLATED_CPUS:-}" ]; then
+                say "isolated    $(iso_list) ($(printf '%s' "$ISOLATED_CPUS" | wc -w) of the ${ISOLATE} asked for)"
+                say "housekeeping $(housekeeping_list)"
+                say "affinity    --cpu-affinity 0x$(plan_mask_hex $ISOLATED_CPUS)"
+            else
+                say "isolated    none (zmrig-os isolate N)"
+            fi
+            if is_installed; then
+                params=$(read_grubenv zmrig_extra)
+                say "next boot   ${params:-no kernel parameters set}"
+            else
+                say "next boot   a live stick boots with the parameters in its GRUB entry"
+            fi
+            return 0
+            ;;
+        off) want=0 ;;
+    esac
+
+    case "$want" in
+        *[!0-9]*) die "usage: zmrig-os isolate N | isolate off | isolate" ;;
+    esac
+
+    if [ "$want" -ge "$total" ]; then
+        die "cannot isolate ${want} of ${total} CPUs: at least one has to stay with the kernel"
+    fi
+
+    cpus=$(plan_iso_cpus "$SYS" "$want" "$total")
+    if [ "$want" -gt 0 ] && [ -z "$cpus" ]; then
+        die "cannot take ${want} CPUs out of ${total}: no whole cores are free on this machine"
+    fi
+
+    # What the SMT rule actually produced, not what was asked for: the difference
+    # is the machine's topology, and silently rounding would misdescribe it.
+    [ "$want" = "0" ] || ISOLATE=$(printf '%s' "$cpus" | wc -w)
+    [ "$want" = "0" ] && ISOLATE=0
+    ISOLATED_CPUS="$cpus"
+    save_conf
+
+    if [ "$ISOLATE" = "0" ]; then
+        say "isolation off: every CPU is available to the kernel (applies on the next miner start)"
+    else
+        say "isolated $(iso_list): ${ISOLATE} logical CPU(s) for mining, $(housekeeping_list) for the kernel"
+        say "the miner is pinned with --cpu-affinity 0x$(plan_mask_hex $ISOLATED_CPUS) on its next start"
+    fi
+
+    # Kernel-side, next boot, when there is somewhere to write it.
+    if is_installed; then
+        if write_iso_boot_params; then
+            say "reboot once to put the kernel side in place (isolcpus, nohz_full, rcu_nocbs)"
+        else
+            warn "could not write the GRUB environment block; add these by hand instead:"
+            [ -z "$cpus" ] || say "  isolcpus=$(iso_list) nohz_full=$(iso_list) rcu_nocbs=$(iso_list)"
+        fi
+    else
+        say "live stick: the boot entry is on read-only media, so the kernel side has to be"
+        say "typed once (press 'e' in GRUB) or built in:"
+        [ -z "$cpus" ] || say "  isolcpus=$(iso_list) nohz_full=$(iso_list) rcu_nocbs=$(iso_list)"
+    fi
+
+    if running; then
+        say "restarting the miner so the new affinity applies"
+        cmd_restart
+    fi
+}
+
+# Everything a rig needs, in one command, so a fleet is a loop over a list of
+# wallets rather than a sequence of six commands that must be given in order.
+#
+#   zmrig-os quickstart --wallet 4... [--pool host:port] [--coin xmr]
+#                       [--mode max] [--fleet https://...] [--no-start]
+cmd_quickstart() {
+    local wallet="" pool="" coin="" mode="" fleet="" start=1
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --wallet)   wallet="${2:?--wallet needs an address}" ; shift ;;
+            --wallet=*) wallet="${1#*=}" ;;
+            --pool)     pool="${2:?--pool needs host:port}" ; shift ;;
+            --pool=*)   pool="${1#*=}" ;;
+            --coin)     coin="${2:?}" ; shift ;;
+            --coin=*)   coin="${1#*=}" ;;
+            --mode)     mode="${2:?}" ; shift ;;
+            --mode=*)   mode="${1#*=}" ;;
+            --fleet)    fleet="${2:?--fleet needs a URL}" ; shift ;;
+            --fleet=*)  fleet="${1#*=}" ;;
+            --no-start) start=0 ;;
+            -h|--help)  sed -n '/^cmd_quickstart()/,/^}/p' "$0" | sed -n 's/^# \{0,1\}//p' ; return 0 ;;
+            *) die "unknown option: $1 (zmrig-os quickstart --help)" ;;
+        esac
+        shift
+    done
+
+    load_conf
+    [ -n "$wallet" ] || [ -n "$WALLET" ] ||
+        die "no wallet: pass --wallet 4... (or run this again after 'zmrig-os setup')"
+
+    [ -z "$wallet" ] || WALLET="$wallet"
+    validate_wallet "$WALLET" "${coin:-$ALGO}" || die "that is not a valid address for ${coin:-$ALGO}"
+
+    if [ -n "$pool" ]; then
+        case "$pool" in
+            *:*) POOL="$pool" ;;
+            *) die "a pool is host:port, for example gulf.moneroocean.stream:10001" ;;
+        esac
+    fi
+    [ -z "$coin" ] || ALGO="$coin"
+    if [ -n "$mode" ]; then
+        case "$mode" in
+            max|balanced|eco|light|safe) MODE="$mode" ;;
+            *) die "unknown mode: $mode (max, balanced, eco, light, safe)" ;;
+        esac
+    fi
+    if [ -n "$fleet" ]; then
+        case "$fleet" in
+            https://*|http://*) FLEET_URL="$fleet" ;;
+            *) die "the fleet URL must start with https:// (or http:// on a LAN)" ;;
+        esac
+    fi
+
+    # A new wallet or algorithm invalidates the thread count measured for the
+    # old one: the memory per thread changed, so the answer changed with it.
+    AUTOTUNED=""
+    MEASURED_THREADS=""
+    MEASURED_HS=""
+    TUNED_AT=""
+    save_conf
+
+    say "wallet      $(wallet_short)"
+    say "pool        $POOL"
+    say "coin        $ALGO, mode $MODE"
+
+    if is_root; then
+        cmd_tune >/dev/null 2>&1 || warn "the tuner did not finish; the rig mines anyway"
+        say "tuning      applied (huge pages, THP, governor)"
+    else
+        warn "not root: nothing was tuned (run again as root, or reboot)"
+    fi
+
+    if [ -n "$fleet" ]; then
+        say "fleet       $FLEET_URL"
+        cmd_device | sed 's/^/  /'
+    fi
+
+    if [ "$start" = "1" ]; then
+        [ -n "$fleet" ] || cmd_device | sed 's/^/  /'
+        cmd_restart >/dev/null 2>&1 || cmd_start >/dev/null 2>&1 || warn "the miner did not start; see zmrig-os logs"
+        sleep 1
+        if running; then
+            say "mining      started (pid $(cat "$PIDFILE" 2>/dev/null))"
+        else
+            warn "the miner is not running; 'zmrig-os status' says why"
+        fi
+    fi
+
+    say ""
+    say "next: zmrig-os status | zmrig-os logs 40 | zmrig-os doctor | zmrig-os isolate 4"
+}
+
 cmd_boot() {
     # Everything the boot needs, in the order the kernel allows it: pages first
     # while memory is still unfragmented, then the clock, then the miner.
@@ -968,7 +1271,7 @@ cmd_boot() {
 }
 
 cmd_tune() {
-    local tune cores irq
+    local tune cores irq algo_args huge_args
     # `zmrig-os tune` is documented as a standalone command and used to depend on
     # its caller having loaded the config.
     load_conf
@@ -977,6 +1280,17 @@ cmd_tune() {
     if [ ! -x "$tune" ]; then
         warn "no tuner at $tune"
         return 1
+    fi
+
+    # The image has no udev, so a hwmon chip is loaded by name or not at all.
+    # coretemp and k10temp are in /etc/modules; these four are the ones that turn
+    # "no sensor in /sys" into a working thermal governor on a desktop board
+    # (Super I/O at 0x290, the I2C bus that reaches it, and the disk that reports
+    # its own temperature). A module the kernel does not have fails silently.
+    if is_root && [ "$DRYRUN" = "0" ]; then
+        for mod in msr coretemp k10temp nct6775 it87 i2c-i801 i2c-piix4 i2c-nct6775 drivetemp; do
+            modprobe -q "$mod" 2>/dev/null || true
+        done
     fi
 
     # THP is `always` for max and balanced, matching the GRUB entries: with the
@@ -989,14 +1303,27 @@ cmd_tune() {
     cores=$(core_count)
     [ "${cores:-1}" -ge 4 ] && irq="steer" || irq="keep"
 
+    # The algorithm decides how much memory is reserved, and it is the same
+    # number the initramfs used: a Scala rig must not have Monero's 2.3 GB
+    # reserved for it, and a Monero rig must not be short.
+    algo_args="--algo ${ALGO:-auto} --mode ${MODE:-max}"
+    case "${HUGEPAGES:-}" in
+        # HUGEPAGES is a count, and it says "exactly this", including 0 for none.
+        # Anything that is not a number is a page size (2M, 1G) or the word auto.
+        0|off|no)  huge_args="--hugepages off" ;;
+        ''|auto)   huge_args="--hugepages 2M" ;;
+        *[!0-9]*)  huge_args="--hugepages ${HUGEPAGES}" ;;
+        *)         huge_args="--hugepages 2M --pages ${HUGEPAGES}" ;;
+    esac
+
     # NUMA balancing migrates pages while a process runs, which for a uniformly
     # random walk over 2.3 GiB is a stalled hash that buys nothing. In light mode
     # the machine is somebody's desktop, so it is left alone.
     case "$MODE" in
-        eco)   run "$tune" --profile watt --thp madvise --swappiness 10 --numa off --irq "$irq" ;;
-        safe)  run "$tune" --profile watt --thp madvise --swappiness 10 --numa off --irq "$irq" ;;
-        light) run "$tune" --hugepages off --thp always --swappiness 10 --numa keep --irq keep ;;
-        *)     run "$tune" --profile free --thp always --swappiness 1 --numa off --irq "$irq" ;;
+        eco)   run "$tune" $huge_args $algo_args --profile watt --thp madvise --swappiness 10 --numa off --irq "$irq" ;;
+        safe)  run "$tune" $huge_args $algo_args --profile watt --thp madvise --swappiness 10 --numa off --irq "$irq" ;;
+        light) run "$tune" --hugepages off $algo_args --thp always --swappiness 10 --numa keep --irq keep ;;
+        *)     run "$tune" $huge_args $algo_args --profile free --thp always --swappiness 1 --numa off --irq "$irq" ;;
     esac
 }
 
@@ -1086,6 +1413,10 @@ cmd_status() {
     printf '%-14s %s\n' "mode"     "$MODE$( [ "$MODE" = "safe" ] && printf ' (max %s C)' "$SAFE_TEMP" )"
     printf '%-14s %s\n' "form"     "$( if is_installed; then printf 'installed on %s, slot %s' "$(media_label)" "$(boot_slot)"; else printf 'live image (nothing is written to disk)'; fi )"
     printf '%-14s %s\n' "updates"  "$( if [ "${AUTO_UPDATE:-1}" = "1" ]; then printf 'daily, automatically'; [ "${AUTO_IMAGE:-0}" = "1" ] && printf ' (including the OS image, with rollback)'; else printf 'off (AUTO_UPDATE=0)'; fi )"
+    # Huge pages and where the threads are allowed to run: the two numbers a
+    # "why is it slower than yesterday" question usually turns into.
+    printf '%-14s %s\n' "hugepages" "$(awk '/^HugePages_Total:/ { print $2 " x " $3 }' /proc/meminfo 2>/dev/null || echo '?')$( [ -n "${HUGEPAGES:-}" ] && printf ' (HUGEPAGES=%s)' "$HUGEPAGES" )"
+    printf '%-14s %s\n' "cpus"     "$( if [ -n "${ISOLATED_CPUS:-}" ]; then printf 'mining on %s, kernel on %s' "$(iso_list)" "$(housekeeping_list)"; else printf 'shared (zmrig-os isolate N keeps some for mining)'; fi )"
     printf '%-14s %s\n' "thermal"  "$(thermal_now)"
     printf '%-14s %s\n' "fee"      "${DONATE}% of Monero time (--donate-level=0 to turn off)"
     printf '%-14s %s\n' "device"   "$(device_id 2>/dev/null || echo '?')"
@@ -1093,27 +1424,71 @@ cmd_status() {
     printf '%-14s %s\n' "version"  "$(image_version) ($( "$(zmrig_bin)" --version 2>/dev/null | head -1 || echo 'miner not installed'))"
 }
 
-# The temperature the governor is acting on, from the same two places the miner
-# reads: the hwmon CPU chips first, then a thermal zone. Printed by `status` so
-# a farmer can see the number the fan is fighting without ssh-ing into sysfs.
+# The temperature the governor is acting on.
+#
+# Not "the first sensor that exists": a board exposes a dozen of them and the
+# one that matters is the CPU die. Read in tiers, and inside a tier take the
+# hottest reading, because coretemp publishes one file per core and a governor
+# watching core 0 while core 5 cooks is not a governor.
+#
+#   tier 1  the CPU die: coretemp, k10temp, zenpower, k8temp, the ACPI
+#           processor zone, x86_pkg_temp
+#   tier 2  the board: the Super I/O chips (nct6775/6683/6687, it87), the
+#           vendor ECs (asus, dell_smm, thinkpad, applesmc), sp5100_tco
+#   tier 3  anything else, except acpitz
+#   tier 4  acpitz, and only acpitz: it reports a southbridge estimate that
+#           sits 10-20 C below the die, which is how a rig cooks with the fan
+#           controller convinced it is cold
 thermal_now() {
-    local f t best=""
-    for f in /sys/class/hwmon/hwmon*/temp*_input; do
-        [ -r "$f" ] || continue
-        case "$(cat "$(dirname "$f")/name" 2>/dev/null)" in
-            coretemp|k10temp|zenpower|k8temp|cpu_thermal|cpu-thermal|soc_thermal|acpitz|it87) ;;
-            *) continue ;;
-        esac
-        t=$(cat "$f" 2>/dev/null) || continue
-        [ -n "$t" ] && { [ -z "$best" ] || [ "$t" -gt "$best" ]; }; best=$t
-    done
-    if [ -z "$best" ]; then
-        for f in /sys/class/thermal/thermal_zone*/temp; do
+    local f name t best want
+    local sys="$SYS"
+    for want in cpu board other; do
+        best=""
+        for f in "$sys"/class/hwmon/hwmon*/temp*_input; do
             [ -r "$f" ] || continue
+            name=$(cat "$(dirname "$f")/name" 2>/dev/null) || continue
+            case "$want:$name" in
+                cpu:coretemp|cpu:k10temp|cpu:zenpower|cpu:k8temp|cpu:cpu_thermal) ;;
+                cpu:cpu-thermal|cpu:soc_thermal|cpu:x86_pkg_temp|cpu:fam15h_power) ;;
+                board:nct6775|board:nct6683|board:nct6687|board:it87|board:sp5100_tco) ;;
+                board:asus|board:asus_wmi_sensors|board:dell_smm|board:thinkpad) ;;
+                board:applesmc|board:ec_sys) ;;
+                other:*)
+                    # Everything the board did not label, apart from the tier-4
+                    # guess that would otherwise win by being the last resort.
+                    case "$name" in acpitz) continue ;; esac
+                    ;;
+                *) continue ;;
+            esac
             t=$(cat "$f" 2>/dev/null) || continue
-            [ -n "$t" ] && { [ -z "$best" ] || [ "$t" -gt "$best" ]; }; best=$t
+            case "$t" in ''|*[!0-9-]*) continue ;; esac
+            if [ "$t" -gt 0 ] && { [ -z "$best" ] || [ "$t" -gt "$best" ]; }; then
+                best="$t"
+            fi
         done
-    fi
+        if [ -n "$best" ]; then
+            printf '%s C' "$((best / 1000))"
+            return 0
+        fi
+    done
+
+    # No hwmon driver (a kernel without CONFIG_SENSORS_*, or a VM). The thermal
+    # zones are ACPI's own answer: still acpitz last, still the hottest first.
+    best=""
+    local guessed=""
+    for f in "$sys"/class/thermal/thermal_zone*/temp; do
+        [ -r "$f" ] || continue
+        t=$(cat "$f" 2>/dev/null) || continue
+        case "$t" in ''|*[!0-9-]*) continue ;; esac
+        [ "$t" -gt 0 ] || continue
+        if [ "$(cat "$(dirname "$f")/type" 2>/dev/null)" = "acpitz" ]; then
+            if [ -z "$guessed" ] || [ "$t" -gt "$guessed" ]; then guessed="$t"; fi
+        else
+            if [ -z "$best" ] || [ "$t" -gt "$best" ]; then best="$t"; fi
+        fi
+    done
+    [ -z "$best" ] && best="$guessed"
+
     if [ -z "$best" ]; then
         printf 'no sensor in /sys (the governor cannot act; see zmrig-os doctor)'
     else
@@ -1373,16 +1748,40 @@ affinity_reason() {
 }
 
 cmd_doctor() {
-    load_conf
-    local fails=0 warns=0 need_mb=2400 free_mb pages_need pages_have thp gov bin
+    local json=0
+    case "${1:-}" in
+        --json) json=1 ;;
+        ""|-*) ;;
+        *) die "usage: zmrig-os doctor [--json]" ;;
+    esac
 
+    load_conf
+    local fails=0 warns=0 need_mb free_mb pages_need pages_have thp gov bin sev REPORT="" first=1
+
+    # Every result is also kept, because --json is what a fleet reads and a
+    # second implementation of the same checks is a second set of answers.
+    REPORT=""
     check() { # status, name, detail
-        case "$1" in
-            ok)   printf '  PASS  %-22s %s\n' "$2" "$3" ;;
-            warn) printf '  WARN  %-22s %s\n' "$2" "$3"; warns=$((warns + 1)) ;;
-            *)    printf '  FAIL  %-22s %s\n' "$2" "$3"; fails=$((fails + 1)) ;;
+        local st="$1" name="$2" detail="$3"
+        REPORT="${REPORT}${st} ${name} ${detail}
+"
+        [ "$json" = "1" ] && return 0
+        case "$st" in
+            ok)   printf '  PASS  %-22s %s\n' "$name" "$detail" ;;
+            warn) printf '  WARN  %-22s %s\n' "$name" "$detail"; warns=$((warns + 1)) ;;
+            *)    printf '  FAIL  %-22s %s\n' "$name" "$detail"; fails=$((fails + 1)) ;;
         esac
     }
+    # In JSON mode the counters still have to move, so they are counted after the
+    # fact from REPORT; check() above only prints when it is not JSON.
+    tally() {
+        fails=$(printf '%s' "$REPORT" | grep -c '^fail ' || true)
+        warns=$(printf '%s' "$REPORT" | grep -c '^warn ' || true)
+    }
+
+    if [ -n "$PLAN_MISSING" ]; then
+        check fail plan "os/plan.sh is missing from this image: the page and CPU numbers below are guesses"
+    fi
 
     bin=$(zmrig_bin)
     if [ -x "$bin" ]; then check ok binary "$($bin --version 2>/dev/null | head -1)"; else check fail binary "missing: $bin"; fi
@@ -1420,22 +1819,33 @@ cmd_doctor() {
         *)     check fail compat "$(hw_reason "$hv" "$hw_mem")" ;;
     esac
 
+    # The same arithmetic the initramfs ran before userspace started, so a doctor
+    # warning and a boot warning are the same sentence about the same number.
+    local cores page_kb
+    cores=$(thread_count)
+    page_kb=$(awk '/^Hugepagesize:/ { print $2 }' /proc/meminfo 2>/dev/null || echo 2048)
     free_mb=$(mem_total_mb); [ -n "$free_mb" ] || free_mb=0
-    [ "$MODE" = "light" ] && need_mb=400
+    need_mb=$(plan_need_mb "$ALGO" "$MODE" "$cores" "$THREADS")
     if [ "$free_mb" -ge "$need_mb" ]; then
-        check ok memory "${free_mb} MB total, need ${need_mb} MB"
+        check ok memory "${free_mb} MB total, ${ALGO} needs ${need_mb} MB"
+    elif [ "$MODE" = "light" ]; then
+        check ok memory "${free_mb} MB total, light mode needs ${need_mb} MB"
     else
-        check fail memory "${free_mb} MB total, need ${need_mb} MB: use --mode light or a bigger box"
+        check fail memory "${free_mb} MB total but ${ALGO} needs ${need_mb} MB in this mode: use --mode light or a bigger box"
     fi
 
-    pages_need=$(( need_mb / 2 + $(core_count) * 2 + 8 ))
+    pages_need=$(plan_pages "$ALGO" "$MODE" "$cores" "$free_mb" "$page_kb" "$THREADS" "$HUGEPAGES")
     pages_have=$(awk '/^HugePages_Total:/ { print $2 }' /proc/meminfo 2>/dev/null || echo 0)
-    if [ "$MODE" = "light" ]; then
-        check ok hugepages "not needed in light mode"
+    if [ "${HUGEPAGES:-}" = "0" ]; then
+        check warn hugepages "reservation disabled (HUGEPAGES=0); the miner runs on THP, which is slower"
+    elif [ "${pages_need:-0}" = "0" ]; then
+        check warn hugepages "this kernel reports no 2 MB page size"
     elif [ "${pages_have:-0}" -ge "$pages_need" ]; then
-        check ok hugepages "${pages_have} x 2 MB reserved"
+        check ok hugepages "${pages_have} x $(( page_kb / 1024 )) MB reserved for ${ALGO}"
+    elif [ "${pages_have:-0}" -gt 0 ]; then
+        check warn hugepages "${pages_have} of ${pages_need} pages reserved (THP backs the rest; a reserved pool is faster)"
     else
-        check warn hugepages "${pages_have:-0} of ${pages_need} x 2 MB reserved (THP will back the rest)"
+        check warn hugepages "none reserved: the miner runs on THP (~20% slower than a reserved pool)"
     fi
 
     thp=$(cat /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null | sed 's/.*\[\(.*\)\].*/\1/' || echo unknown)
@@ -1453,6 +1863,21 @@ cmd_doctor() {
     esac
 
     if msr_usable; then check ok msr "/dev/cpu/0/msr present"; else check warn msr "not applied (VM, or no msr module)"; fi
+
+    # What the miner will actually be allowed to run on.
+    if [ -n "${ISOLATED_CPUS:-}" ]; then
+        check ok affinity "mining on CPU $(iso_list), kernel on $(housekeeping_list)"
+    else
+        check ok affinity "no CPUs isolated (zmrig-os isolate N keeps some for mining)"
+    fi
+
+    # A sensor the governor cannot read is a safe mode that cannot act. The image
+    # has no udev, so this is 'the module was loaded' or nothing.
+    sev=$(thermal_now)
+    case "$sev" in
+        *"no sensor"*) check fail sensor "$sev" ;;
+        *)             check ok sensor "hottest CPU reading ${sev}" ;;
+    esac
 
     if is_installed; then
         check ok form "installed on $(media_label), slot $(boot_slot) -> $(read_grubenv zmrig_slot)"
@@ -1493,6 +1918,88 @@ cmd_doctor() {
         fi
         fee=$(printf '%s' "$out" 2>/dev/null | grep -a 'donate' | head -1 | sed 's/^ *//')
         [ -n "${fee:-}" ] && check ok fee "$fee"
+    fi
+
+    # ---------------------------------------------------------------- security
+    # Four things that turn a mining rig into somebody else's machine. None of
+    # them is exotic; all of them are one forgotten flag away.
+
+    # 1. The miner's HTTP API. It can restart the miner and read its config;
+    #    bound to a LAN address without a token it is an open control port.
+    if [ "${API_PORT:-0}" != "0" ]; then
+        case "${API_HOST:-127.0.0.1}" in
+            127.0.0.1|localhost|::1)
+                check ok api "http api on ${API_HOST}:${API_PORT} (loopback only)" ;;
+            *)
+                if [ -n "${API_TOKEN:-}" ]; then
+                    check ok api "http api on ${API_HOST}:${API_PORT} with a token"
+                else
+                    check fail api "http api on ${API_HOST}:${API_PORT} with NO token: anyone on that network can control the miner"
+                fi ;;
+        esac
+    fi
+
+    # 2. The fleet token is the rig's identity: anyone who reads it can command
+    #    this machine. It lives in os.conf, which is 0600 for that reason.
+    if [ -n "${FLEET_URL:-}" ]; then
+        case "$FLEET_URL" in
+            https://*) check ok fleet "${FLEET_URL} (tls)" ;;
+            *)         check warn fleet "${FLEET_URL} is not https: the device key travels in clear text" ;;
+        esac
+    fi
+
+    if [ -f "$CONF" ]; then
+        # -rw-r-----  positions 6 and 9 are "group may write" and "anybody may
+        # write". Anyone who can rewrite this file chooses where the rig mines.
+        case "$(ls -l "$CONF" 2>/dev/null | cut -c1-10)" in
+            ??????w???|????????w?)
+                check warn perms "$CONF is writable by group or other: whoever can write it chooses the wallet" ;;
+            *)
+                check ok perms "$CONF is not writable by group or other" ;;
+        esac
+    fi
+
+    # 3. sshd: keys only, and root may not log in with a password. The image
+    #    ships no password for root at all, so this is belt and braces - but a
+    #    rig that has been on the end of a USB stick may have been changed.
+    if [ -r "$(P /etc/ssh/sshd_config)" ]; then
+        if grep -qiE '^[[:space:]]*PermitRootLogin[[:space:]]+yes' "$(P /etc/ssh/sshd_config)" ||
+           grep -qiE '^[[:space:]]*PasswordAuthentication[[:space:]]+yes' "$(P /etc/ssh/sshd_config)"; then
+            check warn ssh "sshd allows password logins in /etc/ssh/sshd_config"
+        else
+            check ok ssh "key-only"
+        fi
+    fi
+
+    # 4. The medium: an installed rig verifies its root filesystem at boot when a
+    #    checksum sits next to it, and a rig without one is booting unverified.
+    if is_installed; then
+        if [ -r "${STATE}/rootfs-$(boot_slot).squashfs.sha256" ]; then
+            check ok integrity "slot $(boot_slot) is verified at boot"
+        else
+            check warn integrity "no checksum next to rootfs-$(boot_slot).squashfs: this slot boots unverified"
+        fi
+    fi
+
+    if [ "$json" = "1" ]; then
+        tally
+        printf '{"fail":%d,"warn":%d,"checks":[' "$fails" "$warns"
+        first=1
+        while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            st=${line%% *}; rest=${line#* }
+            name=${rest%% *}; detail=${rest#* }
+            [ "$first" = "1" ] || printf ','
+            first=0
+            printf '{"status":"%s","check":"%s","detail":"%s"}' \
+                "$st" "$(json_escape "$name")" "$(json_escape "$detail")"
+        done <<EOF
+$REPORT
+EOF
+        printf ']}\n'
+        tally
+        [ "$fails" = "0" ]
+        return $?
     fi
 
     printf '\n  %d failed, %d warnings\n' "$fails" "$warns"
@@ -1731,6 +2238,15 @@ EOF2
     run cp "$kernel"    "${rootfs_mnt}/boot/vmlinuz-a"        || die "cannot copy the kernel"
     run cp "$initramfs" "${rootfs_mnt}/boot/initramfs-a.gz"   || die "cannot copy the initramfs"
     run cp "$squashfs"  "${rootfs_mnt}/zmrig/rootfs-a.squashfs" || die "cannot copy the root filesystem"
+    # The checksum the initramfs checks before it mounts this slot. It has to be
+    # written from what was actually copied, not from the source file: a copy
+    # that went wrong is exactly what this is for.
+    slot_sha=$(sha256sum "${rootfs_mnt}/zmrig/rootfs-a.squashfs" 2>/dev/null | cut -d' ' -f1)
+    if [ -n "$slot_sha" ]; then
+        printf '%s\n' "$slot_sha" > "${rootfs_mnt}/zmrig/rootfs-a.squashfs.sha256"
+    else
+        warn "could not checksum the installed root filesystem; it will boot unverified"
+    fi
     run cp "$bootimg"   "${rootfs_mnt}/boot/boot.img"         2>/dev/null || true
     run cp "$core"      "${rootfs_mnt}/boot/core.img"         2>/dev/null || true
     # The bootloader images travel with the install, so this machine can flash
@@ -2091,7 +2607,9 @@ ota_write_slot() { # iso_path version
     # Verify what is on the medium, then rename all three into place.
     img=$(sha256sum "$tmp" | cut -d' ' -f1)
     say "sha256    ${img%%????????????????*}"
+    printf '%s\n' "$img" > "${STATE}/rootfs-${slot}.squashfs.sha256.new" 2>/dev/null || true
     run mv "$tmp" "${STATE}/rootfs-${slot}.squashfs" || return 1
+    run mv "${STATE}/rootfs-${slot}.squashfs.sha256.new" "${STATE}/rootfs-${slot}.squashfs.sha256" 2>/dev/null || true
     [ -f "${MEDIA}/boot/vmlinuz-${slot}.new" ] &&
         run mv "${MEDIA}/boot/vmlinuz-${slot}.new" "${MEDIA}/boot/vmlinuz-${slot}"
     [ -f "${MEDIA}/boot/initramfs-${slot}.new" ] &&
@@ -2380,6 +2898,12 @@ fleet_url() { printf '%s' "${FLEET_URL:-}"; }
 
 # One JSON string field, without a JSON library. `.*` is greedy on purpose: the
 # key is unique inside a command object, so the last match is the right one.
+# One string, safe inside a JSON document: backslash, quote and the control
+# characters that would otherwise end the line or the document early.
+json_escape() {
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\t\r' '  ' | tr -d '\000-\010\013\014\016-\037'
+}
+
 json_field() {
     sed -n 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
 }
@@ -2802,8 +3326,10 @@ cmd_version() {
     if [ -x "$(zmrig_bin)" ]; then "$(zmrig_bin)" --version 2>/dev/null | head -1; fi
 }
 
+# The usage text *is* the header of this file: one copy, so a new command cannot
+# be documented in one place and forgotten in the other.
 usage() {
-    sed -n '3,31p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,/^# Environment/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
 }
 
 main() {
@@ -2813,6 +3339,8 @@ main() {
     case "$cmd" in
         setup)    cmd_setup "$@" ;;
         mode)     cmd_mode "$@" ;;
+        isolate)  cmd_isolate "$@" ;;
+        quickstart|quick) cmd_quickstart "$@" ;;
         boot)     cmd_boot "$@" ;;
         tune)     cmd_tune "$@" ;;
         start)    cmd_start "$@" ;;
@@ -2842,6 +3370,34 @@ main() {
         *) die "unknown command: $cmd (try 'zmrig-os help')" ;;
     esac
 }
+
+# The memory and CPU arithmetic, shared with the initramfs so `doctor`, `tune`
+# and the boot cannot disagree about how many pages this machine needs.
+for _plan in "${ROOT}/usr/local/lib/zmrig/plan.sh" /plan.sh; do
+    [ -r "$_plan" ] || continue
+    . "$_plan"
+    break
+done
+unset _plan
+
+# A damaged image must still answer `doctor` and `status`: these keep the two
+# numbers meaningful when plan.sh is missing, and `doctor` reports the missing
+# file instead of the tool dying halfway down the list.
+PLAN_MISSING=""
+if ! command -v plan_pages >/dev/null 2>&1; then
+    PLAN_MISSING="1"
+    plan_cache_mb() { printf '%s' 256; }
+    plan_dataset_mb() { printf '%s' 2080; }
+    plan_threads() { printf '%s' "$2"; }
+    plan_need_mb() { printf '%s' 2336; }
+    plan_pages() {
+        case "${5:-0}" in ''|0|*[!0-9]*) printf '%s' 0 ;; *) printf '%s' "$(( (2336 * 1024 + $5 - 1) / $5 ))" ;; esac
+    }
+    plan_mask_hex() { return 1; }
+    plan_iso_cpus() { return 0; }
+    plan_housekeeping() { return 0; }
+    plan_join_list() { printf '%s' "$*" | tr ' ' ','; }
+fi
 
 # The test suite sources this file to assert the pure decisions (the partition
 # table, the plan, the version comparison) without running a command.

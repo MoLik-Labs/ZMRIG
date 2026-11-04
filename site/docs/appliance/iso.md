@@ -60,6 +60,56 @@ that arms the governor.
 The wizard does not appear when a wallet is already known. `zmrig.os.nostart=1`
 boots the machine without mining, which is what a repair stick wants.
 
+## One command, no questions
+
+The wizard asks one question at a time, which is right at a keyboard. Over ssh,
+or from a script that provisions ten machines, the same thing takes one line:
+
+```bash
+zmrig-os quickstart --wallet 4... --pool gulf.moneroocean.stream:10001 --mode balanced
+```
+
+It validates the address and the pool, writes the config, tunes the machine for
+the algorithm it was given, prints the Device ID and starts the miner — and says
+whether the miner actually started, which is the part a provisioning script
+tends to skip. `--coin` picks the algorithm the memory reservation is sized for,
+`--fleet` enrols the rig with a bot, `--no-start` stops before mining.
+
+A wrong argument is refused before anything is written: a pool without a port, an
+address that is not an address, a mode that does not exist.
+
+## Keeping the kernel off the mining cores
+
+A mining thread that gets scheduled onto the CPU taking the pool's interrupts
+loses more than the interrupt costs: its 2 MiB scratchpad cools out of the cache
+while another core warms its own.
+
+```bash
+zmrig-os isolate 4     # four logical CPUs for mining
+zmrig-os isolate       # what is isolated now
+zmrig-os isolate off   # give them back
+```
+
+CPUs are taken as whole SMT pairs, from the top, and cpu0 is never taken — that
+is where interrupts and most kernel threads land. On a 4-core/8-thread machine
+`isolate 3` gives you 2 CPUs, not 3: the third would be the twin of a CPU that
+stays with the kernel, and half an isolated core is not isolated. The command
+prints the exact set it took instead of pretending it took what was asked.
+
+Both halves are written, because either one alone buys nothing:
+
+* the boot parameters `isolcpus=`, `nohz_full=` and `rcu_nocbs=` — merged into
+  the GRUB environment block on an installed disk, printed for you to type on a
+  read-only stick;
+* `--cpu-affinity` for the miner, plus the IRQ masks moved to the remaining CPUs
+  every time the supervisor starts.
+
+`ISOLATE=4` in `/etc/zmrig/os.conf`, or `zmrig.os.isolate=4` on the kernel
+command line, makes it survive a reboot; `ISOLATE=0` hands the machine back to
+`AFFINITY=auto`, which pins the miner to every physical core. The thread count
+follows the mask: a `balanced` rig on a machine where the miner may only use three
+cores pins three threads, not seven.
+
 ## Modes
 
 The miner's aggressiveness is a single word, changeable while it runs:
@@ -432,6 +482,22 @@ API_TOKEN="a long random string"
 With those three lines, `http://rig:18080/2/summary` answers anyone holding the
 token, which is what a fleet dashboard, Home Assistant or a `curl` in a cron job
 needs. Leaving `API_HOST` at `127.0.0.1` keeps it on the machine.
+
+The other machine-readable surface is the image's own health check:
+
+```bash
+zmrig-os doctor --json
+```
+
+One object, one entry per check, and a non-zero exit when something failed:
+
+```json
+{"fail":1,"warn":3,"checks":[{"status":"ok","check":"wallet","detail":"46SQLW7D...ysb5tJ"}, ...]}
+```
+
+That is the line to put in a cron job or a monitoring agent, because it needs no
+parsing of prose and no `grep` to decide whether a fan stopped or a wallet was
+still empty.
 
 ## One bot for the whole shelf
 

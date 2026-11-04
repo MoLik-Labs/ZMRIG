@@ -4,7 +4,7 @@
 //   GET /                 status page (HTML, no JavaScript required)
 //   GET /api/stats        pool + ledger statistics (JSON)
 //   GET /api/audit        last N blocks with their exact split (JSON)
-//   GET /api/worker/:addr balance and shares for one address
+//   GET /api/worker/:addr balance, hashrate and every rig for one wallet
 //   GET /api/config       the published fee, name and window (JSON)
 //   GET /healthz          200 when the pool has a current job
 //   GET /metrics          Prometheus text format
@@ -227,10 +227,12 @@ async function handle(request, response, { pool, ledger, config }) {
   }
 
   if (path.startsWith('/api/worker/')) {
+    // One wallet, every rig behind it. `wallet.rig` or `wallet/rig` also works,
+    // because a rig that asks about itself wants the wallet's answer.
     const address = decodeURIComponent(path.slice('/api/worker/'.length));
-    const balance = ledger.balanceOf(address);
+    const summary = ledger.walletSummary(address);
 
-    return json(balance ? 200 : 404, balance ? { address, ...balance } : { error: 'unknown worker' }), true;
+    return json(summary ? 200 : 404, summary || { error: 'unknown wallet' }), true;
   }
 
   if (path === '/metrics') {

@@ -59,6 +59,55 @@ bật bộ điều tiết.
 Khi đã có ví thì wizard không hiện nữa. `zmrig.os.nostart=1` khởi động máy mà
 không đào — đúng thứ một USB cứu hộ cần.
 
+## Một lệnh, không hỏi gì
+
+Wizard hỏi từng câu một, đúng cho người ngồi trước bàn phím. Còn khi ssh vào máy,
+hoặc khi script provisioning dựng mười máy một lúc, thì cùng việc đó gói trong một
+dòng:
+
+```bash
+zmrig-os quickstart --wallet 4... --pool gulf.moneroocean.stream:10001 --mode balanced
+```
+
+Nó kiểm ví và pool, ghi cấu hình, tinh chỉnh máy theo đúng thuật toán được đưa,
+in Device ID rồi khởi động miner — và nói rõ miner có chạy thật hay không, đúng
+phần mà script provisioning hay bỏ qua. `--coin` chọn thuật toán để tính dung
+lượng bộ nhớ đặt trước, `--fleet` ghi danh rig với bot, `--no-start` dừng trước
+khi đào.
+
+Tham số sai bị từ chối trước khi ghi bất cứ thứ gì: pool thiếu cổng, chuỗi không
+phải địa chỉ ví, chế độ không tồn tại.
+
+## Giữ nhân hệ điều hành ra khỏi lõi đào
+
+Một luồng đào bị scheduler đẩy sang CPU đang phục vụ ngắt của pool thì mất nhiều
+hơn cái giá của một lần ngắt: scratchpad 2 MiB của nó nguội dần trong cache trong
+khi lõi khác hâm nóng scratchpad của chính nó.
+
+```bash
+zmrig-os isolate 4     # bốn CPU logic dành cho đào
+zmrig-os isolate       # xem đang giữ những CPU nào
+zmrig-os isolate off   # trả lại
+```
+
+CPU được lấy theo từng cặp SMT nguyên vẹn, từ trên xuống, và không bao giờ lấy
+cpu0 — đó là nơi ngắt và phần lớn luồng của nhân đổ về. Trên máy 4 lõi/8 luồng,
+`isolate 3` cho bạn 2 CPU chứ không phải 3: CPU thứ ba là anh em sinh đôi của một
+CPU ở lại với nhân, mà nửa lõi thì không phải là lõi đã tách. Lệnh in ra đúng tập
+nó lấy được, không giả vờ lấy đúng như bạn xin.
+
+Cả hai nửa đều được ghi, vì chỉ một nửa thì không mua được gì:
+
+* tham số khởi động `isolcpus=`, `nohz_full=` và `rcu_nocbs=` — gộp vào GRUB
+  environment block trên ổ đã cài, còn trên USB chỉ đọc thì in ra để bạn tự gõ;
+* `--cpu-affinity` cho miner, và mặt nạ ngắt được dời sang các CPU còn lại mỗi
+  lần supervisor khởi động.
+
+`ISOLATE=4` trong `/etc/zmrig/os.conf`, hoặc `zmrig.os.isolate=4` trên dòng lệnh
+nhân, để nó sống qua lần khởi động lại; `ISOLATE=0` trả máy lại cho `AFFINITY=auto`,
+tức ghim miner vào toàn bộ lõi vật lý. Số luồng đi theo mặt nạ: rig `balanced` trên
+máy mà miner chỉ được dùng ba lõi sẽ ghim ba luồng, không phải bảy.
+
 ## Các chế độ
 
 Mức "hung hăng" của miner là một từ, đổi được khi đang chạy:
@@ -411,6 +460,21 @@ API_TOKEN="một chuỗi ngẫu nhiên dài"
 Với ba dòng đó, `http://rig:18080/2/summary` trả lời cho ai có token — đúng thứ
 một dashboard fleet, Home Assistant hay một lệnh `curl` trong cron cần. Để
 `API_HOST` là `127.0.0.1` thì API chỉ nằm trong máy.
+
+Bề mặt thứ hai, dành cho máy đọc, là bước kiểm sức khoẻ của chính ảnh:
+
+```bash
+zmrig-os doctor --json
+```
+
+Một object, mỗi kiểm tra một mục, và mã thoát khác 0 khi có mục hỏng:
+
+```json
+{"fail":1,"warn":3,"checks":[{"status":"ok","check":"wallet","detail":"46SQLW7D...ysb5tJ"}, ...]}
+```
+
+Đó là dòng để đưa vào cron hay một agent giám sát, vì nó không cần bóc tách văn
+xuôi và không cần `grep` để biết quạt đã dừng hay ví vẫn còn trống.
 
 ## Một bot cho cả giá máy
 

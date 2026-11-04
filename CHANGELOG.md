@@ -1,3 +1,97 @@
+# 6.45.0 — the numbers the rig boots with and the numbers it is tuned with are one file
+
+Three programs had to agree on how much memory to reserve and which CPUs to keep
+for mining: the initramfs, which reserves pages before userspace exists, the
+control tool, which re-applies them at every boot, and the tuning script, which
+does the same on any Linux host. Each had its own copy of the arithmetic, and
+copies drift — a rig could boot with Monero's 2.3 GB reserved and then be tuned
+for Scala's 192 MB thirty seconds later.
+
+`os/plan.sh` is now that arithmetic, once: pure POSIX sh functions over their
+arguments and `/sys`, with no side effects, so the initramfs can call them before
+there is a shell and a test can call them on a fake tree. `plan_need_mb`,
+`plan_pages`, `plan_iso_cpus`, `plan_threads`, `plan_mask_hex`,
+`plan_housekeeping` and `plan_join_list`. The tuning script sources the same file
+and asks it, and takes `--algo`, `--mode`, `--threads` and `--pages` to be told
+what the config says instead of guessing.
+
+## Isolation that survives a reboot
+
+`zmrig-os isolate N` keeps N logical CPUs for mining — as whole SMT cores, from
+the top, never cpu0 — pins the miner to them with `--cpu-affinity`, moves the IRQ
+masks to what is left, and writes `isolcpus=`, `nohz_full=` and `rcu_nocbs=` into
+the GRUB environment block. That block holds more than one key now (`zmrig_slot`
+and `zmrig_extra`), and each write merges the 1024-byte block instead of
+replacing it: switching slots no longer forgets the kernel parameters, and
+changing the parameters no longer forgets the slot.
+
+The thread count follows the mask. A `balanced` rig on a machine where the miner
+may only run on three cores pins three threads, not seven: a pinned count larger
+than the mask is oversubscription, not throughput. `ISOLATE=0` hands the machine
+back to the `AFFINITY=auto` mask from 6.44.0, which is the default when nothing is
+isolated.
+
+## A tuner that is told what the rig is
+
+`HUGEPAGES` is documented and obeyed: empty sizes the pool from the algorithm,
+`0` turns the reservation off, a number is taken literally — `zmrig-os tune`
+passes the count straight through instead of replacing it with "2M". The
+reservation itself is capped at installed RAM minus 512 MB, so a 1 GB box gets a
+partial pool it can use rather than a write the kernel clamps to zero.
+
+`--algo` and `--mode` reach the tuner, so a Scala rig no longer reserves Monero's
+dataset, and `--mode eco` reserves for the threads eco actually runs. It also
+composes with 6.44.0's NUMA and interrupt steps: they are passed alongside.
+
+## Sensors: the die, not the guess
+
+`thermal_now` read whichever hwmon chip answered last, which on a desktop board
+is as likely to be a Super I/O as the CPU. It now reads in tiers — the CPU die
+(`coretemp`, `k10temp`, `zenpower`, `k8temp`, `x86_pkg_temp`), then the board
+(`nct6775`/`nct6683`/`nct6687`, `it87`, `asus`, `dell_smm`, `thinkpad`,
+`sp5100_tco`, `applesmc`), then anything else, and `acpitz` last, because it is a
+southbridge estimate that reads 10-20 °C below the die. Inside a tier it takes
+the hottest reading, not the last one read: a governor watching core 0 while
+core 5 cooks is not a governor.
+
+## Hardware compatibility
+
+The initramfs now carries the network drivers a rig actually has — `e1000e`,
+`igb`, `r8169`, `igc`, `atlantic`, `tg3`, `virtio_net`, USB tethering — and the
+eMMC/SD path (`mmc_core`, `mmc_block`, `sdhci`, `sdhci_pci`, `sdhci_acpi`), so a
+machine that boots from a USB stick can also reach a pool, and a small
+single-board machine can find its own storage.
+
+## The doctor answers in JSON
+
+`zmrig-os doctor --json` is one object with one entry per check and a non-zero
+exit when anything failed, which is what a monitoring agent needs instead of
+prose. `status` grew `hugepages` and `cpus` lines: the two numbers a "why is it
+slower than yesterday" question turns into. A damaged image that lost
+`os/plan.sh` still answers `doctor` and `status` — with a failed `plan` line —
+instead of dying on a missing function.
+
+## Forty rigs, one wallet, on the pool side
+
+6.43.0 summed the hashrate the fleet reports per wallet. This is the other half —
+what the pool itself does with a hundred connections on one address. The ledger
+already keyed by wallet, and now it says so: per-rig
+counters, `walletSummary()` over the same share records the payout uses, and
+`GET /api/worker/<wallet>` returning the balance, the summed hashrate and every
+rig behind it — including the rig that went quiet, listed with a zero rate. The
+rig map is capped and evicts the least recently seen, because a rig name is free
+text from a public connection. Wallet and rig rates use one shared window span,
+so the rigs add up to the wallet and the wallets add up to the pool.
+
+## Also
+
+* `zmrig-os quickstart --wallet … ` configures, tunes, enrols and starts in one
+  command, and reports whether the miner actually started.
+* `os/tests/plan.sh`: 84 tests over the memory and CPU arithmetic, including
+  fake `/sys` trees for SMT topology and sensor tiers. `control.sh` is 217, the
+  pool's unit tests 31.
+* `plan.sh` ships in the initramfs, the squashfs and the shellcheck list; the ISO
+  self-check knows about it.
 # 6.44.0 — the machine is asked what it can do
 
 RandomX's fast mode wants AVX2, AES-NI and 2 GB of memory for the dataset, and a

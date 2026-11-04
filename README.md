@@ -8,7 +8,7 @@
 
 by **[@nggkhaiz](https://github.com/NggKhaiz)**
 
-[![release](https://img.shields.io/badge/release-6.44.0-f2763f)](CHANGELOG.md)
+[![release](https://img.shields.io/badge/release-6.45.0-f2763f)](CHANGELOG.md)
 [![licence](https://img.shields.io/badge/licence-GPL--3.0-blue)](LICENSE)
 [![dev fee](https://img.shields.io/badge/developer%20fee-1%25%20%C2%B7%20off%20switch-f2763f)](doc/FEE.md)
 [![platform](https://img.shields.io/badge/platform-Linux%20x86--64%20%C2%B7%20macOS%20%C2%B7%20Windows-lightgrey)](#build-from-source)
@@ -223,8 +223,11 @@ boot rolls back to the other slot on the third try instead of needing a visit.
   anything, which is what lets the weekly build skip itself when Alpine has not
   moved.
 
-`zmrig-os status`, `mode`, `logs`, `bench 30`, `doctor`, `update`, `ssh-key` and
-`autotune`, `persist` are the whole interface; `doc/OS.md` is the operator manual and
+`zmrig-os quickstart --wallet 4...` configures, tunes, enrols and starts in one
+command. `status`, `mode`, `isolate N` (whole SMT cores for mining, kernel
+parameters and affinity written together), `logs`, `bench 30`, `doctor` (`--json`
+for scripts), `autotune`, `update`, `persist` and `ssh-key` are the whole
+interface; `doc/OS.md` is the operator manual and
 [docs/appliance/iso](https://molik-labs.github.io/ZMRIG/docs/appliance/iso) is the
 guide.
 

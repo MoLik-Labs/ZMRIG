@@ -60,7 +60,9 @@ mining threads on 8 cores — hotter and slower at the same time.
 **Pinning.** The miner is started with `--cpu-affinity`, a mask of one bit per
 physical core, so the scheduler cannot move a thread onto a sibling or leave it
 bouncing between cores. `AFFINITY=auto` (the default) computes it, `off` removes
-the flag, and any other value is passed through as an XMRig mask.
+the flag, and any other value is passed through as an XMRig mask. When CPUs are
+isolated (`zmrig-os isolate N`, below), the mask is the isolated set instead:
+pinning the miner to a core the kernel is also using is not isolation.
 
 **Interrupts.** With four cores or more, `zmrig-os tune` writes `0` into every
 writable `/proc/irq/*/smp_affinity_list` and `1` into the unbound workqueue
@@ -400,6 +402,105 @@ When all five hold, the rig logs one line saying what it saw and what it
 measured, and runs the measurement again. `zmrig-os doctor` reports the same
 comparison on demand, and `zmrig-os status` always prints it.
 
+## First setup in one command
+
+`setup` is a wizard: it asks, one question at a time, and it is the right thing
+to run at a keyboard. `quickstart` is the same thing with the answers on the
+command line, for the machine somebody is configuring over ssh or through an
+install script:
+
+```bash
+zmrig-os quickstart --wallet 4... --pool gulf.moneroocean.stream:10001 --mode balanced
+```
+
+It writes the config, tunes the machine (huge pages for the algorithm it was
+given, THP, governor), prints the Device ID, starts the miner and reports
+whether it actually started. `--coin` picks the algorithm the reservation is
+sized for, `--fleet` enrols the rig with a control plane, `--no-start` stops
+before the miner does. A wrong pool (`host` with no port), a wallet that is not
+an address, or a mode that does not exist is refused before anything is written,
+and a second run without `--wallet` re-uses the wallet already configured.
+
+## Keeping the kernel off the mining CPUs
+
+A mining thread that the scheduler moves onto the CPU serving the pool's
+interrupt loses more than the interrupt costs: its 2 MiB scratchpad cools down
+in the cache while another core warms its own.
+
+```bash
+zmrig-os isolate 4     # four logical CPUs for mining, whole SMT cores
+zmrig-os isolate       # what is isolated now
+zmrig-os isolate off   # give them back
+```
+
+Isolation is taken in whole SMT pairs, from the top. On a 4-core/8-thread
+machine `isolate 3` gives 2 CPUs, not 3 — the third would be the twin of one
+that stays with the kernel, and half a core is not isolated. cpu0 is never
+taken, because that is where IRQs and most kernel threads land by default, and
+`isolate N` where N is the whole machine is refused rather than accepted and
+ignored.
+
+Two halves have to agree, and the command writes both:
+
+* **kernel space** — `isolcpus=`, `nohz_full=` and `rcu_nocbs=` in the boot
+  parameters. On an installed disk they are merged into the GRUB environment
+  block as one `zmrig_extra` key, next to `zmrig_slot`, without disturbing it;
+  writing one key never rewrites the other. On a live stick the medium is
+  read-only, so the parameters are printed for the operator to add.
+* **user space** — `--cpu-affinity 0x...` for the miner, and the IRQ masks moved
+  to the housekeeping CPUs at every supervisor start.
+
+The thread count follows the mask: `balanced` on a machine where the miner may
+only run on six CPUs pins six threads, not the seven the whole machine would
+suggest. Pinning more threads than the mask allows is oversubscription, not
+throughput.
+
+`ISOLATE=N` (or `zmrig.os.isolate=N` on the kernel command line) makes that
+survive a reboot; with `ISOLATE=0` the miner goes back to `AFFINITY=auto`, pinned
+to every physical core.
+
+## Where the numbers come from
+
+How many pages an algorithm needs and which CPUs isolation will take are not
+decisions the tool should make twice. `os/plan.sh` is a POSIX sh library of pure
+functions — `plan_need_mb`, `plan_pages`, `plan_iso_cpus`, `plan_threads`,
+`plan_mask_hex`, `plan_housekeeping` — with no side effects, so the same
+arithmetic runs in three places:
+
+| caller | when | what it does with the answer |
+| --- | --- | --- |
+| `os/init` (PID 1) | before userspace exists | reserves the pages while memory is still unfragmented |
+| `zmrig-os tune` | every boot, and after `quickstart` | re-applies them and the THP policy |
+| `scripts/tune-linux.sh` | on any Linux host, image or not | the same reservation outside the image |
+
+For Monero at `max` on 8 logical CPUs the answer is 2416 MB — 256 MB cache,
+2080 MB dataset, 16 MB of scratchpads and 64 MB of slack — which is 1208 pages
+of 2 MiB, capped at installed RAM minus 512 MB so that a partial pool is
+reserved instead of a write that fails. Panthera/Scala needs 272 MB; `light`
+mode maps the cache only and needs 296 MB on four CPUs. `HUGEPAGES=N` bypasses
+the arithmetic and is obeyed exactly, including `HUGEPAGES=0` for "do not
+reserve anything".
+
+## The doctor, in a script
+
+`zmrig-os doctor` prints one line per check and exits non-zero when anything
+failed. `--json` is the same list for a fleet, a dashboard or a `cron` job:
+
+```bash
+zmrig-os doctor --json | jq -r '.checks[] | select(.status != "ok") | "\(.check): \(.detail)"'
+```
+
+```json
+{"fail":3,"warn":4,"checks":[{"status":"ok","check":"wallet","detail":"46SQLW7D...ysb5tJ"}, ...]}
+```
+
+The checks are the ones that decide whether a rig earns: binary, wallet, memory,
+huge pages, THP, governor, MSR, affinity, sensor, boot form, update source, swap,
+DNS, config permissions, root filesystem integrity, and whether the memory plan
+itself is intact. A damaged image that lost `os/plan.sh` still answers `doctor`
+and `status` — with a failed `plan` line — instead of dying on a missing
+function.
+
 ## Configuration
 
 `/etc/zmrig/os.conf` is a `KEY="value"` file; the tool never `source`s it, so a
@@ -421,6 +522,8 @@ config file cannot execute anything as root.
 | `API_PORT` | `0` | `zmrig`'s HTTP API for external monitoring (off by default) |
 | `API_HOST` | `127.0.0.1` | bind address for that API — `0.0.0.0` only with a token |
 | `API_TOKEN` | — | `Authorization: Bearer` value the API then requires |
+| `HUGEPAGES` | (empty) | pages to reserve: empty sizes the pool from `ALGO`, `0` turns it off, a number is obeyed exactly |
+| `ISOLATE` | `0` | logical CPUs to keep for mining, taken as whole SMT cores; `0` is off |
 | `AUTO_REBOOT` | `1` | reboot after five failed starts in a row |
 | `CHANNEL` | `stable` | which update channel to follow |
 | `FLEET_URL` | — | control plane (Telegram/Discord bot); empty means nothing is contacted |
@@ -439,7 +542,9 @@ zmrig.os.pool=host:port       pool
 zmrig.os.worker=rig-01        worker name
 zmrig.os.mode=max|balanced|eco|light|safe
 zmrig.os.maxtemp=72           safe mode: hold the CPU at or below this
-zmrig.os.hugepages=N          0 disables the reservation
+zmrig.os.hugepages=N          0 disables the reservation; empty sizes it from the algorithm
+zmrig.os.isolate=N            keep N logical CPUs for mining (whole cores), pin the miner, move IRQs
+zmrig.os.verify=0             skip the root filesystem checksum (a stick that boots slowly)
 zmrig.os.fleet=https://host   control plane: enrol and configure from a bot
 zmrig.os.data=/dev/sdX1       partition that keeps the config
 zmrig.os.debug=1              shell in the initramfs instead of the miner
@@ -554,14 +659,14 @@ building anything:
 ```
 
 ```
-ZMRIG OS 6.44.0
+ZMRIG OS 6.45.0
 
   base               Alpine Linux 3.22.1 (x86_64, OpenRC, musl)
   kernel             linux-lts 6.12.61
   root filesystem    squashfs, zstd level 19, 1 MiB blocks
   bootloader         GRUB, BIOS and UEFI, built with the image
 
-  published: v6.44.0
+  published: v6.45.0
              built on Alpine 3.22.1
              os-beta (rolling beta)
 

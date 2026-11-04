@@ -77,7 +77,7 @@ jobs:
           shellcheck -s sh -S error \
             os/overlay/usr/local/bin/zmrig-os \
             os/overlay/usr/local/lib/zmrig/firstboot.sh \
-            os/init os/chroot-setup.sh os/make-initramfs.sh os/upstream.sh
+            os/init os/plan.sh os/chroot-setup.sh os/make-initramfs.sh os/upstream.sh
 
       # Nothing shipped still talks to the person who wrote it: no `set -x` in a
       # boot script, no debug port, no stray TODO in the appliance.
@@ -89,6 +89,11 @@ jobs:
 
       - name: Control tool
         run: bash os/tests/control.sh
+
+      # The memory and CPU plan, on fake topologies: how many pages an
+      # algorithm needs, and which CPUs "isolate N" actually takes.
+      - name: Memory and CPU plan
+        run: bash os/tests/plan.sh
 
       # The rig half of the control plane, against the real server from fleet/.
       # It needs node, which the runner has, and nothing else.
