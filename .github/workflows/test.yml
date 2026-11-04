@@ -191,9 +191,12 @@ jobs:
       - name: The committed site is there
         run: |
           # `trailingSlash: false` in site/docusaurus.config.js, so a page is
-          # written as download.html and answered at /download by the host.
+          # written as docs/intro.html and answered at /docs/intro by the host.
+          # /download is not one of them: that page is rendered by the host from
+          # the release feed, which is why it can list a release published a
+          # minute ago without a rebuild.
           test -f web/index.html
-          test -f web/download.html
+          test -f web/docs/intro.html
           test -f web/vi/index.html
 
       - name: Routing, health, download, enrolment
