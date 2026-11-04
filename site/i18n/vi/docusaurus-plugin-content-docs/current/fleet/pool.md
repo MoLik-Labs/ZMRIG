@@ -73,8 +73,8 @@ curl -s 127.0.0.1:8080/api/worker/4YourMoneroAddress
 
 ## Hosting miễn phí
 
-Blueprint ở gốc repo deploy **fleet** — bot, dashboard và Discord — không phải
-pool này. Một workspace free chỉ được **750 instance-hours mỗi tháng** cho tất cả
+Blueprint ở gốc repo deploy **fleet và tài liệu** — bot, các lần báo danh và các
+trang trên một cổng — không phải pool này. Một workspace free chỉ được **750 instance-hours mỗi tháng** cho tất cả
 các service cộng lại, và một service chạy 24/7 đã dùng khoảng 744 giờ; thêm một
 service nữa là vượt hạn mức và Render treo các service free tới tháng sau. Vì thế
 blueprint của pool nằm ở `deploy/render-pool.yaml`: áp nó vào một workspace khác,

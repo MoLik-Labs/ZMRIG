@@ -89,6 +89,10 @@ immediately instead of within a minute.
   a few hundred bytes.
 * It is the same Node process as the bot. Nothing extra to host, nothing extra to
   pay for, and killing the dashboard does not stop the bot.
+* The one deployment that does not mount it is `node host/server.js`, the single
+  service Render runs: there the front door is the documentation, and two HTML
+  surfaces on one origin is one too many to keep safe. Run `cd fleet && npm start`
+  when you want the page.
 
 ## Security
 

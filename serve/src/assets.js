@@ -9,6 +9,14 @@
 // build` writes them to disk so a deploy ships them; this module also makes them
 // in memory when a sidecar is missing, which is what makes `npm start` on a bare
 // checkout work without a build step.
+//
+// They are made on demand, not at boot. Compressing the whole table up front is
+// fine on a laptop and wrong on the machine this actually runs on: a free Render
+// instance is 0.1 CPU, and brotli at quality 11 over the site is minutes of work
+// there, during which the health check fails and the deploy is rolled back. So
+// boot does the cheap half - read, stat, hash - and each file is compressed the
+// first time somebody asks for it, then kept. `warm()` in `app.js` does the first
+// few for the visitor who arrives before the process has settled.
 
 'use strict';
 
@@ -50,6 +58,17 @@ const COMPRESSIBLE = new Set(['.html', '.js', '.mjs', '.css', '.json', '.svg', '
 // response already carries the headers that make it worth sending.
 const MIN_COMPRESS = 1024;
 
+// Brotli's cost grows far faster than its gain. Against a 2 vCPU sandbox, a
+// 300 KB bundle at quality 11 takes over a second and saves a low single-digit
+// percentage over quality 9; on a free instance that is half a minute of one
+// visitor's afternoon. The thresholds are where the two curves cross: small
+// pages are cheap enough at 11 to be worth the best ratio, bundles are not.
+function quality(size) {
+  if (size <= 32 * 1024) return 11;
+  if (size <= 256 * 1024) return 9;
+  return 6;
+}
+
 function cacheControl(url) {
   // Docusaurus fingerprints everything under /assets/, so those can never
   // change and a browser may keep them forever.
@@ -87,24 +106,74 @@ function walk(dir, out, root) {
   return out;
 }
 
-function readSidecar(file, suffix, source) {
+function readSidecar(file, suffix, mtimeMs) {
   try {
     const stat = fs.statSync(`${file}${suffix}`);
     // A sidecar older than the file it belongs to came from a previous build.
     // Serving it would pin a page to content that no longer exists, with an
     // ETag that matches the new file - the worst of both, and invisible until
     // somebody notices the site is a version behind.
-    if (source && stat.mtimeMs < source.mtimeMs) return null;
+    if (mtimeMs && stat.mtimeMs < mtimeMs) return null;
     return fs.readFileSync(`${file}${suffix}`);
   } catch {
     return null;
   }
 }
 
+/**
+ * Make one representation of one file, if it is worth having.
+ *
+ * A sidecar from the build wins: it was made once, by a machine that had the
+ * time, and shipping it means a deploy does no compression at all. Otherwise it
+ * is done here, once, under the quality policy above.
+ */
+function make(entry, encoding, log) {
+  const suffix = encoding === 'br' ? '.br' : '.gz';
+  const sidecar = readSidecar(entry.path, suffix, entry.mtime);
+  if (sidecar) return sidecar.length < entry.body.length ? sidecar : null;
+  try {
+    const body =
+      encoding === 'br'
+        ? zlib.brotliCompressSync(entry.body, {
+            params: {
+              [zlib.constants.BROTLI_PARAM_QUALITY]: quality(entry.body.length),
+              [zlib.constants.BROTLI_PARAM_SIZE_HINT]: entry.body.length,
+            },
+          })
+        : zlib.gzipSync(entry.body, { level: entry.body.length <= 256 * 1024 ? 9 : 6 });
+    // A compressed copy that is not smaller is a copy that makes the response
+    // slower; drop it.
+    return body.length < entry.body.length ? body : null;
+  } catch (error) {
+    log(`compress failed for ${entry.file}: ${error.message}`);
+    return null;
+  }
+}
+
+/**
+ * Fill in the representations this client can read, and only those: a browser
+ * that asked for brotli never causes a gzip copy to exist, which is half the CPU
+ * of the eager version for the same bytes on the wire.
+ */
+function pack(entry, encoding, log = () => {}) {
+  if (!entry.packable) return entry;
+  if (encoding === 'br') {
+    if (!entry.triedBr) {
+      entry.triedBr = true;
+      entry.br = make(entry, 'br', log);
+    }
+  } else if (encoding === 'gzip') {
+    if (!entry.triedGz) {
+      entry.triedGz = true;
+      entry.gz = make(entry, 'gzip', log);
+    }
+  }
+  return entry;
+}
+
 function load(root, { log = () => {}, compress = true } = {}) {
   const files = new Map();
   let raw = 0;
-  let packed = 0;
   let notFound = null;
 
   for (const file of walk(root, [], root)) {
@@ -116,36 +185,24 @@ function load(root, { log = () => {}, compress = true } = {}) {
 
     const entry = {
       file: rel,
+      mtime: stat.mtimeMs,
       size: stat.size,
       etag: etagOf(stat),
       type,
       cache: cacheControl(rel),
       body,
+      // Read lazily by `pack()`. A file that nobody opens costs nothing.
+      packable: Boolean(compress && COMPRESSIBLE.has(kind) && body.length >= MIN_COMPRESS),
       br: null,
       gz: null,
+      triedBr: false,
+      triedGz: false,
     };
     raw += body.length;
-
-    if (compress && COMPRESSIBLE.has(kind) && body.length >= MIN_COMPRESS) {
-      try {
-        entry.br = readSidecar(file, '.br', stat) || zlib.brotliCompressSync(body, {
-          params: {
-            [zlib.constants.BROTLI_PARAM_QUALITY]: 11,
-            [zlib.constants.BROTLI_PARAM_SIZE_HINT]: body.length,
-          },
-        });
-        entry.gz = readSidecar(file, '.gz', stat) || zlib.gzipSync(body, { level: 9 });
-        // A compressed copy that is not smaller is a copy that makes the
-        // response slower; drop it.
-        if (entry.br.length >= body.length) entry.br = null;
-        if (entry.gz.length >= body.length) entry.gz = null;
-        packed += (entry.br ? entry.br.length : body.length);
-      } catch (error) {
-        log(`compress failed for ${rel}: ${error.message}`);
-      }
-    } else {
-      packed += body.length;
-    }
+    // Where it came from, so a sidecar can be found and its mtime compared. Not
+    // enumerable: this object is logged and asserted on, and an absolute path
+    // from the build machine has no business in either.
+    Object.defineProperty(entry, 'path', { value: file });
 
     if (rel === '/404.html') {
       notFound = entry;
@@ -164,7 +221,28 @@ function load(root, { log = () => {}, compress = true } = {}) {
     }
   }
 
-  return { files, notFound, raw, packed, count: files.size };
+  const table = { files, notFound, raw, count: files.size };
+
+  // The bytes the table actually holds, which grows as files are asked for. This
+  // is the number worth reporting: it says how much memory the site costs and how
+  // much of it has been compressed so far. `entries()` de-duplicates, because a
+  // page is reachable under two URLs and is one buffer.
+  const entries = () => new Set(files.values());
+  Object.defineProperty(table, 'packed', {
+    get() {
+      let total = 0;
+      for (const entry of entries()) total += (entry.br || entry.gz || entry.body).length;
+      return total;
+    },
+  });
+  Object.defineProperty(table, 'packedCount', {
+    get() {
+      let total = 0;
+      for (const entry of entries()) if (entry.br || entry.gz) total += 1;
+      return total;
+    },
+  });
+  return table;
 }
 
 // `Accept-Encoding` is a weighted list: `br;q=0` means "anything but brotli",
@@ -209,7 +287,14 @@ function identityAllowed(header) {
 }
 
 /** Pick the smallest representation the client can take. */
-function pick(entry, acceptEncoding) {
+function pick(entry, acceptEncoding, log) {
+  if (entry.packable) {
+    const br = accepts(acceptEncoding, 'br');
+    const gzip = accepts(acceptEncoding, 'gzip');
+    if (br) pack(entry, 'br', log);
+    else if (gzip) pack(entry, 'gzip', log);
+    else if (!identityAllowed(acceptEncoding)) pack(entry, 'br', log);
+  }
   if (entry.br && accepts(acceptEncoding, 'br')) return { body: entry.br, encoding: 'br' };
   if (entry.gz && accepts(acceptEncoding, 'gzip')) return { body: entry.gz, encoding: 'gzip' };
   // `identity;q=0` with nothing else acceptable: a compressed body the client
@@ -221,4 +306,4 @@ function pick(entry, acceptEncoding) {
   return { body: entry.body, encoding: null };
 }
 
-module.exports = { load, pick, accepts, identityAllowed, weights, cacheControl, contentType, etagOf, IMMUTABLE, HTML, MEDIA, DATA };
+module.exports = { load, pack, make, pick, quality, accepts, identityAllowed, weights, cacheControl, contentType, etagOf, IMMUTABLE, HTML, MEDIA, DATA };

@@ -88,9 +88,13 @@ npm run check                   # prints the config, opens no socket
 npm start
 ```
 
-The blueprint in the repository root deploys the bot, Discord, and the dashboard
-as one service. Three facts about Render's free plan are worth knowing before you
-deploy, because they decide the shape of the whole thing:
+The blueprint in the repository root deploys one service that runs the bot,
+Discord, the rigs' check-ins **and** the documentation site — `node
+host/server.js`, one port, one health check. The browser dashboard is the one
+surface it does not mount: the public host's front door is the documentation, and
+`cd fleet && npm start` is what gives you the dashboard. Three facts about
+Render's free plan are worth knowing before you deploy, because they decide the
+shape of the whole thing:
 
 | Fact | What it means here |
 | --- | --- |

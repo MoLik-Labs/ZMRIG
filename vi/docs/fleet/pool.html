@@ -8,8 +8,8 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.e1cb14c0.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.13be16fe.js" defer="defer"></script>
-<script src="/ZMRIG/vi/assets/js/main.76704faa.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/runtime~main.9d33a46b.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/main.8930c216.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -57,8 +57,8 @@ phần lẻ (dust) ghi thành dòng riêng thay vì lặng lẽ cộng vào phí
 </ul>
 <div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token function" style="color:rgb(130, 170, 255)">curl</span><span class="token plain"> </span><span class="token parameter variable" style="color:rgb(191, 199, 213)">-s</span><span class="token plain"> </span><span class="token number" style="color:rgb(247, 140, 108)">127.0</span><span class="token plain">.0.1:8080/api/audit?limit</span><span class="token operator" style="color:rgb(137, 221, 255)">=</span><span class="token number" style="color:rgb(247, 140, 108)">5</span><span class="token plain"> </span><span class="token operator" style="color:rgb(137, 221, 255)">|</span><span class="token plain"> python3 </span><span class="token parameter variable" style="color:rgb(191, 199, 213)">-m</span><span class="token plain"> json.tool</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain"></span><span class="token function" style="color:rgb(130, 170, 255)">curl</span><span class="token plain"> </span><span class="token parameter variable" style="color:rgb(191, 199, 213)">-s</span><span class="token plain"> </span><span class="token number" style="color:rgb(247, 140, 108)">127.0</span><span class="token plain">.0.1:8080/api/worker/4YourMoneroAddress</span><br></div></code></pre></div></div>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="hosting-miễn-phí">Hosting miễn phí<a href="#hosting-miễn-phí" class="hash-link" aria-label="Đường dẫn trực tiếp đến Hosting miễn phí" title="Đường dẫn trực tiếp đến Hosting miễn phí" translate="no">​</a></h2>
-<p>Blueprint ở gốc repo deploy <strong>fleet</strong> — bot, dashboard và Discord — không phải
-pool này. Một workspace free chỉ được <strong>750 instance-hours mỗi tháng</strong> cho tất cả
+<p>Blueprint ở gốc repo deploy <strong>fleet và tài liệu</strong> — bot, các lần báo danh và các
+trang trên một cổng — không phải pool này. Một workspace free chỉ được <strong>750 instance-hours mỗi tháng</strong> cho tất cả
 các service cộng lại, và một service chạy 24/7 đã dùng khoảng 744 giờ; thêm một
 service nữa là vượt hạn mức và Render treo các service free tới tháng sau. Vì thế
 blueprint của pool nằm ở <code>deploy/render-pool.yaml</code>: áp nó vào một workspace khác,

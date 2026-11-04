@@ -8,7 +8,7 @@
 
 by **[@nggkhaiz](https://github.com/NggKhaiz)**
 
-[![release](https://img.shields.io/badge/release-6.45.0-f2763f)](CHANGELOG.md)
+[![release](https://img.shields.io/badge/release-6.46.0-f2763f)](CHANGELOG.md)
 [![licence](https://img.shields.io/badge/licence-GPL--3.0-blue)](LICENSE)
 [![dev fee](https://img.shields.io/badge/developer%20fee-1%25%20%C2%B7%20off%20switch-f2763f)](doc/FEE.md)
 [![platform](https://img.shields.io/badge/platform-Linux%20x86--64%20%C2%B7%20macOS%20%C2%B7%20Windows-lightgrey)](#build-from-source)
@@ -396,9 +396,13 @@ JSON object in Render's *Environment* tab, or `fleet/roster.json` in the
 repository — names every rig and what it should be running; on every check-in the
 server queues whatever differs. A free Render instance gives 750 instance hours a
 month and an empty filesystem after every deploy, so this is not a workaround: a
-service that remembers nothing comes back identical anyway. One service holds the
-Telegram bot, the Discord bot and the dashboard, because two always-on services
-would exhaust the month.
+service that remembers nothing comes back identical anyway.
+
+One service holds everything, because a month is 744 hours: the Telegram bot, the
+Discord bot, the rigs' check-ins **and** this documentation with its download
+page. `node host/server.js` is that process — one port, one health check, three
+kinds of client. The browser dashboard is the one thing it does not mount (the
+public front door is the documentation); `cd fleet && npm start` brings it back.
 
 Rig side, once: `zmrig-os fleet --url https://your-fleet` — or
 `zmrig.os.fleet=https://your-fleet` on the kernel command line for a stick that
@@ -416,13 +420,15 @@ to `master` or a tag publishes it with its checksum and the manifest
 
 [![Deploy the documentation and the download page](https://img.shields.io/badge/Render-deploy%20the%20web%20host-46E3B7?logo=render&logoColor=white)](https://render.com/deploy?repo=https://github.com/MoLik-Labs/ZMRIG)
 
-That button reads `render.yaml` and starts the host on a free instance: the
-documentation, `/download`, and the `/iso/*` links, with no account on this
-project and nothing to configure. The release job then asks GitHub for every asset it just
-uploaded and fails if one does not answer, so a broken link is a red build, not a
-support question.
+That button reads `render.yaml` and starts one free instance: the documentation,
+`/download`, the `/iso/*` links, the bots if you connect them, and the endpoint
+your rigs check in to. No account on this project, nothing to configure, and no
+build step — `web/` is committed, so a deploy installs nothing and cannot fail on
+a dependency. The release job then asks GitHub for every asset it just uploaded
+and fails if one does not answer, so a broken link is a red build, not a support
+question.
 
-`serve/` puts a stable name in front of all of that:
+`host/` puts a stable name in front of all of that:
 
 ```
 https://<your-host>/iso/v3      -> the newest x86-64-v3 image
@@ -434,11 +440,12 @@ https://<your-host>/api/releases.json
 
 Those redirects read the release feed, cached for ten minutes, so they never need
 a redeploy when a version changes. The same process also serves this
-documentation, so a single Render service gives you the docs, the download page
-and the permanent links:
+documentation and answers your rigs, so a single Render service gives you the
+docs, the download page, the permanent links and the fleet:
 
 ```bash
-cd serve && npm start          # reads site/build, port 8080
+node host/server.js            # everything, one port, 8080
+cd serve && npm start          # just the site and the downloads
 ./scripts/latest-iso.sh --host https://your-host   # same answer, no GitHub
 ```
 
@@ -449,9 +456,12 @@ The image follows the same idea: `master` publishes `v<version>`, `BETA` publish
 the rolling `os-beta`, both replace assets in place so a version's link never
 rots, and a Monday run rebuilds only when Alpine itself moved.
 
-It holds every file in memory at boot — 238 routes, 6.3 MB, 1.6 MB compressed — so
-a page is a Map lookup and one `write`, with Brotli, `ETag` and `304`. Measured on
-a 2 vCPU machine: 0.25 ms p50 for the home page, 0.19 ms for a docs page. The
+It holds every file in memory at boot — 244 routes, 6.84 MB, in 17 ms — so a page
+is a Map lookup and one `write`, with Brotli, `ETag` and `304`. Compression
+happens on the first request for a file, not at boot, because the machine this
+runs on is a tenth of a CPU and compressing a site on it is what turns a deploy
+into a failed health check. Measured on a 2 vCPU machine: 0.34 ms p50 for the home
+page, 0.31 ms for a docs page, and 22–63 ms once per file, the first time. The
 blueprint is in `render.yaml`, the details in [`doc/WEB.md`](doc/WEB.md).
 
 ---
@@ -597,7 +607,7 @@ checks while two of the rows are wrong.
 * [`doc/FLEET.md`](doc/FLEET.md) — the control plane: making the bot, hosting it,
   every environment variable, the wire format, what the Device ID is and is not,
   and the troubleshooting table.
-* [`doc/WEB.md`](doc/WEB.md) — the web host: `serve/`, the Render blueprint,
+* [`doc/WEB.md`](doc/WEB.md) — the web host: `host/` and `serve/`, the blueprint,
   every endpoint and environment variable, why a request costs a Map lookup, and
   the measured latency numbers.
 * [`doc/PERFORMANCE.md`](doc/PERFORMANCE.md) · [`doc/BENCHMARKS.md`](doc/BENCHMARKS.md)

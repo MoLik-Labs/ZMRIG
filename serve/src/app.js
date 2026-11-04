@@ -262,6 +262,38 @@ function createApp({
     res.end(body);
   }
 
+  /**
+   * Compress the pages a visitor is most likely to open first, one per tick.
+   *
+   * Nothing waits for this: the socket is already listening and each file is
+   * handled between requests, so a cold start answers immediately and the warm
+   * copy is there by the time somebody clicks a link. Pages first, because a
+   * page is what a visitor asks for; the bundles they load happen in parallel
+   * from the browser and are cached by the client anyway.
+   */
+  function warm({ limit = 24 } = {}) {
+    const unique = [...new Set(table.files.values())];
+    const pages = unique.filter((entry) => entry.type.startsWith('text/html'));
+    const others = unique
+      .filter((entry) => !entry.type.startsWith('text/html'))
+      .sort((a, b) => b.size - a.size);
+    const queue = [...pages, ...others].slice(0, limit);
+    let index = 0;
+    const step = () => {
+      if (index >= queue.length) return;
+      const entry = queue[index];
+      index += 1;
+      try {
+        assets.pack(entry, 'br', log);
+      } catch (error) {
+        log(`warm ${entry.file}: ${error.message}`);
+      }
+      setImmediate(step);
+    };
+    setImmediate(step);
+    return queue.length;
+  }
+
   return {
     handler: (req, res) => {
       handler(req, res).catch((error) => {
@@ -275,6 +307,7 @@ function createApp({
         }
       });
     },
+    warm,
     table,
     arches: ARCHES,
   };

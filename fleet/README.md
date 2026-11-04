@@ -86,9 +86,16 @@ npm run check                   # what the environment says, no socket opened
 ```
 
 On [Render](https://render.com): *New → Blueprint*, pick this repository, and
-choose the root `render.yaml`. Render asks once for the secrets it needs — the
-two bot tokens, your admin ids, `FLEET_WEB_PASSWORD` if you want the dashboard,
-and `FLEET_ROSTER` — and then you are done: every later deploy reads them again.
+choose the root `render.yaml`. It starts `node host/server.js`, which is this
+code **and** the documentation site on one port — a free workspace fits exactly
+one always-on service, so it carries all three jobs. Render asks once for the
+secrets it needs — the two bot tokens, your admin ids and `FLEET_ROSTER` — and
+then you are done: every later deploy reads them again.
+
+The dashboard is not mounted there: the public host's front door is the
+documentation. `npm start` in this directory is what serves it, with
+`FLEET_WEB_PASSWORD` and CSRF on every form, and `fleet/render.yaml` is the
+blueprint for running this half alone.
 
 ### The roster, and why nothing is stored
 

@@ -175,6 +175,44 @@ jobs:
       - name: The download helper
         run: bash tests/releases/latest-iso.test.sh
 
+  # The one service Render runs: bots, rigs and the documentation on one port.
+  # The two halves are tested in their own jobs; what is tested here is that they
+  # do not shadow each other, because that is the failure this deployment shape
+  # can have and nothing else would catch it.
+  host:
+    name: host (one service, three jobs)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: The committed site is there
+        run: test -f web/index.html && test -f web/download/index.html
+
+      - name: Routing, health, download, enrolment
+        run: node --test host/tests/*.test.js
+
+      - name: The process boots and answers for real
+        run: |
+          set -euo pipefail
+          FLEET_ADMIN_IDS='tg:1' FLEET_STATE=/tmp/host-ci.json PORT=8098 \
+            node host/server.js > /tmp/host.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8098/healthz > /tmp/health.json; then break; fi
+            sleep 1
+          done
+          cat /tmp/host.log
+          # One health check that reports all three jobs, so a missing site or a
+          # missing bot is visible from the outside.
+          python3 -c 'import json; d=json.load(open("/tmp/health.json")); assert d["ok"] and d["site"]["files"] > 0, d; print(d)'
+          curl -fsS http://127.0.0.1:8098/ | grep -qi zmrig
+          # The device protocol still owns its path.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8098/v1/hello)
+          test "$code" = "401"
+          kill %1 || true
+
   # The image Render builds. Without this job the first person to find out that
   # `deploy/Dockerfile` no longer compiles is whoever deployed it: a Render build
   # failure shows two lines of a log and one source file name, which is how a

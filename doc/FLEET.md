@@ -84,7 +84,11 @@ page at `/` (or the dashboard, if you set a password — §3), and accepts rigs 
 The blueprint in the repository root deploys this service: *New → Blueprint* in
 Render, pick the repository, apply. It asks for the secrets once — they are
 marked `sync: false`, so they are typed into Render and never read from the
-repository.
+repository. It starts `node host/server.js`, which is this service **and** the
+documentation site on one port and one instance — see
+[`WEB.md`](WEB.md) for the shape and for why one service is not a preference but
+the only deployment the free plan allows. `cd fleet && npm start` runs the same
+fleet without the site, which is what gives you the browser dashboard.
 
 Three things about the free plan shape the design, and none of them is a
 workaround for a bug in this code:
@@ -92,9 +96,9 @@ workaround for a bug in this code:
 * **750 instance hours per workspace per calendar month**, shared by every free
   service. A 31-day month is 744 hours, so exactly one always-on service fits.
   Two services that both stay awake run the workspace out of hours, and Render
-  then suspends the free services until the next month. This is why the bot, the
-  dashboard and the Discord bot are one process, and why the pool is not part of
-  this blueprint.
+  then suspends the free services until the next month. This is why the Telegram
+  bot, the Discord bot, the rigs' check-ins and the documentation are one
+  process, and why the pool is not part of this blueprint.
 * **It sleeps after 15 minutes without inbound traffic.** A sleeping bot answers
   nothing. While a fleet is checking in every sixty seconds that traffic keeps it
   awake by itself; `.github/workflows/keepalive.yml` covers the quiet case by
@@ -110,16 +114,22 @@ workaround for a bug in this code:
 
 One process, and only one:
 
-* **hosted** — the page you check the machines on and control them from, and the
-  Telegram/Discord bots that do the same thing in chat. Same process, same port,
-  same password.
+* **hosted** — the Telegram and Discord bots that check and control the machines,
+  the endpoint the rigs check in to, and the documentation with its download
+  page. One process, one port, one health check.
+* **hosted only when you run it alone** — the browser dashboard. It is an HTML
+  login surface, and the public host's front door is the documentation, so
+  `node host/server.js` does not mount it; `cd fleet && npm start` does, with
+  `FLEET_WEB_PASSWORD` and CSRF on every form. The bots and the rigs are the same
+  either way.
 * **not hosted, ever** — the pool. Its code stays in the repository because it is
   a useful thing to have built, but nothing here deploys it, and a rig points at
   whatever pool the operator chooses. There is also no database, no object
   storage, no uploads, no accounts and no analytics: the service holds the fleet
   in memory and reads the roster from the environment.
-* **not hosted here either** — the documentation site. It is static, so it lives
-  on GitHub Pages, which costs nothing and cannot sleep.
+* **not hosted here** — anything that needs a disk. There is no disk worth
+  having: see the third point under Render above, and `doc/PERSISTENT_OPTIONS.md`
+  for the reasoning behind that being a feature rather than a limitation.
 
 The direction of traffic is one way. Rigs push and poll; the service never
 connects out to a rig, which is why a rig behind a carrier NAT is a normal rig and
@@ -374,7 +384,7 @@ One request a minute from the rig:
 ```json
 POST /v1/hello
 Authorization: Bearer <64 hex characters: the device key>
-{"device":"ZMR-1A2B-3C4D-5E6F","version":"6.45.0",
+{"device":"ZMR-1A2B-3C4D-5E6F","version":"6.46.0",
  "status":{"state":"mining","hashrate":1201.4,"temp":64,"uptime":86400,
            "mode":"max","wallet":"4...","pool":"gulf.moneroocean.stream:10001",
            "coin":"xmr","threads":"8","slot":"a","installed":true},

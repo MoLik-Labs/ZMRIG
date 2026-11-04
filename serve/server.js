@@ -67,10 +67,11 @@ function main() {
 
   server.listen(port, bind, () => {
     const mib = (app.table.raw / 1048576).toFixed(1);
-    const packed = (app.table.packed / 1048576).toFixed(1);
     log(`listening on ${bind}:${server.address().port}`);
     log(`site ${root}`);
-    log(`files ${app.table.count} pages, ${mib} MB raw, ${packed} MB compressed, in memory`);
+    log(`files ${app.table.count} routes, ${mib} MB in memory, compressed on demand`);
+    // The pages a visitor opens first, compressed now that the socket is open.
+    log(`warming ${app.warm()} pages`);
     log(`releases ${repo}, cached ${Math.round(ttl / 1000)} s`);
     // Warm the feed so the first visitor does not pay for the GitHub round trip.
     releases.latest().then((data) => {

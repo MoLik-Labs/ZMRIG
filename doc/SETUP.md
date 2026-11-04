@@ -338,9 +338,11 @@ disk; that is the one real cost of running a pool.
 
 ### 5a. Render (free tier, WebSocket only)
 
-`render.yaml` in the repository root is a blueprint: *New → Blueprint → point at
-this repository*. Then in the service's **Environment** tab set the one value
-marked `sync: false`:
+`deploy/render-pool.yaml` is the blueprint: *New → Blueprint → point at this
+repository → pick that file*. Apply it in a workspace of its own, because the
+root `render.yaml` already spends the free tier's one always-on service on the
+bots and the documentation site. Then in the service's **Environment** tab set the
+one value marked `sync: false`:
 
 ```
 DAEMON = https://your-node.example:18081

@@ -41,22 +41,54 @@ test('cache policy separates fingerprinted assets from pages', () => {
   }
 });
 
-test('text is compressed once, at load, and small files are left alone', () => {
+test('text is compressed when it is first asked for, and small files are left alone', () => {
   const root = makeSite();
   try {
     const table = assets.load(root);
     const css = table.files.get('/assets/css/main.abc123.css');
-    assert.ok(css.br && css.gz, 'a 2 KB stylesheet gets both copies');
-    assert.ok(css.br.length < css.body.length, 'brotli is smaller than the original');
-    assert.ok(table.files.get('/notes.txt').br === null, 'a 6-byte file is not worth compressing');
-    assert.ok(table.files.get('/img/logo.svg').body.length > 0);
-    assert.equal(table.files.get('/img/logo.svg').gz, null, 'an image is already compressed');
 
-    // The same bytes every run: the sidecar files are what a deploy ships.
-    assert.equal(table.files.get('/docs/intro').br, null, 'a 90-byte page is not compressed either');
+    // Loading the table is cheap on purpose: a free instance is 0.1 CPU, and
+    // compressing the whole site at boot is what made a cold start take minutes.
+    assert.equal(css.br, null, 'nothing is compressed at boot');
+    assert.equal(css.gz, null);
+    assert.equal(table.packedCount, 0, 'so no compressed copy exists yet');
+    assert.ok(table.packed <= table.raw, 'and the table holds only the files themselves');
+
+    // A browser asks for brotli: one copy is made, and only that one.
+    const chosen = assets.pick(css, 'gzip, deflate, br');
+    assert.equal(chosen.encoding, 'br');
+    assert.ok(chosen.body.length < css.body.length, 'brotli is smaller than the original');
+    assert.ok(css.br, 'the copy is kept');
+    assert.equal(css.gz, null, 'and the gzip copy the client never asked for is not made');
+    assert.equal(table.packedCount, 1, 'exactly the file that was asked for');
+
+    // Second visitor, same bytes: no work at all.
+    const again = Date.now();
+    assert.strictEqual(assets.pick(css, 'gzip, deflate, br').body, css.br);
+    assert.ok(Date.now() - again < 50);
+
+    // A client that can only take gzip gets gzip, made on demand.
+    assert.equal(assets.pick(css, 'gzip').encoding, 'gzip');
+    assert.ok(css.gz);
+
+    assert.ok(table.files.get('/notes.txt').br === null, 'a 6-byte file is not worth compressing');
+    assert.equal(assets.pick(table.files.get('/notes.txt'), 'gzip, deflate, br').encoding, null);
+    assert.ok(table.files.get('/img/logo.svg').body.length > 0);
+    assert.equal(assets.pick(table.files.get('/img/logo.svg'), 'br').encoding, null, 'an image is already compressed');
+    assert.equal(assets.pick(table.files.get('/docs/intro'), 'br').encoding, null, 'a 90-byte page is not compressed either');
   } finally {
     removeSite(root);
   }
+});
+
+test('the compression level follows the size of the file', () => {
+  // The ratio of brotli's cost to its gain flattens out; a 300 KB bundle at
+  // quality 11 is seconds of one visitor's afternoon and a few percent.
+  assert.equal(assets.quality(4 * 1024), 11);
+  assert.equal(assets.quality(32 * 1024), 11);
+  assert.equal(assets.quality(33 * 1024), 9);
+  assert.equal(assets.quality(256 * 1024), 9);
+  assert.equal(assets.quality(1024 * 1024), 6);
 });
 
 test('a sidecar written at build time is used instead of compressing again', () => {
@@ -67,6 +99,8 @@ test('a sidecar written at build time is used instead of compressing again', () 
     fs.writeFileSync(`${file}.gz`, Buffer.from('sidecar-gzip'));
     const table = assets.load(root);
     const entry = table.files.get('/assets/js/main.def456.js');
+    assets.pack(entry, 'br');
+    assets.pack(entry, 'gzip');
     assert.equal(entry.br.toString(), 'sidecar-brotli');
     assert.equal(entry.gz.toString(), 'sidecar-gzip');
     assert.equal(table.files.get('/assets/js/main.def456.js.br'), undefined, 'sidecars are not routes');
@@ -134,6 +168,7 @@ test('a precompressed copy older than its page is not served', () => {
 
     const table = assets.load(root);
     const entry = table.files.get('/assets/css/main.abc123.css');
+    assets.pack(entry, 'br');
     assert.notEqual(entry.br, stale, 'the stale sidecar is ignored');
     assert.ok(entry.br.length > stale.length, 'a fresh copy was made from the file itself');
     assert.equal(require('node:zlib').brotliDecompressSync(entry.br).toString(), entry.body.toString());
@@ -144,6 +179,7 @@ test('a precompressed copy older than its page is not served', () => {
     fs.utimesSync(css, new Date('2020-01-01T00:00:00Z'), new Date('2020-01-01T00:00:00Z'));
     fs.writeFileSync(`${css}.br`, entry.br);
     const reloaded = assets.load(root).files.get('/assets/css/main.abc123.css');
+    assets.pack(reloaded, 'br');
     assert.deepEqual(reloaded.br, entry.br);
   } finally {
     removeSite(root);
