@@ -69,7 +69,18 @@ request to the control plane cannot talk a rig into a wallet it would reject.
   just now;
 * every command result, including refusals.
 
-Each kind has a cooldown per rig, so a hot machine does not shout every minute.
+Each kind has a cooldown per rig, so a hot machine does not shout every minute
+(`FLEET_ALERT_COOLDOWN`, seconds, default 1800). The threshold is
+`FLEET_ALERT_TEMP` (default 85 °C) and the hashrate rule is
+`FLEET_ALERT_HASHRATE_DROP` (default 0.5, meaning "half").
+
+The temperature is the hottest reading the rig can find, not the first one:
+`coretemp`, `k10temp` or `x86_pkg_temp` before the board's Super I/O chip, and
+`acpitz` — which reports a southbridge estimate 10–20 °C below the die — only
+when nothing else exists. A rig whose number is 0 has no sensor at all, and
+`zmrig-os doctor` says so in one line; the alert cannot fire on a machine that
+cannot measure itself, which is why it is worth looking at.
+
 The second hashrate rule is the slow one, and it says what it compared:
 
 ```

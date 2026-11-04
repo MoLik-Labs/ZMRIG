@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 #
-# shellcheck.sh - every shell script in the repository, at warning severity.
+# tests/lint/shellcheck.sh - every shell script, at warning severity.
+#
+# (This comment used to start with the tool's own name: to shellcheck 0.9 that reads
+# as a directive, and it refuses to parse the file. Hence the path prefix.)
 #
 #   bash tests/lint/shellcheck.sh
 #
@@ -37,8 +40,8 @@ for f in $FILES; do
     [ -f "$f" ] || continue
     INTERPRETER=$(head -1 "$f")
     case "$INTERPRETER" in
-        *bash*) DIALECT=bash ;;
-        *sh*)   DIALECT=sh ;;
+        *bash*) DIALECT="bash" ;;
+        *sh*)   DIALECT="sh" ;;
         *)      continue ;;   # not a script
     esac
 

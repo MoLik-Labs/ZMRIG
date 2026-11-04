@@ -68,7 +68,18 @@ control plane cũng không lừa được rig dùng ví mà nó sẽ từ chối
 * mọi kết quả lệnh, kể cả bị từ chối.
 
 Mỗi loại có thời gian chờ riêng cho từng rig, nên máy nóng không hét lên mỗi
-phút. Luật hashrate thứ hai là luật chậm, và nó nói rõ nó so với cái gì:
+phút (`FLEET_ALERT_COOLDOWN`, giây, mặc định 1800). Ngưỡng là `FLEET_ALERT_TEMP`
+(mặc định 85 °C), còn luật hashrate là `FLEET_ALERT_HASHRATE_DROP` (mặc định 0.5,
+tức "một nửa").
+
+Nhiệt độ là chỉ số nóng nhất mà rig tìm được, không phải chỉ số đầu tiên:
+`coretemp`, `k10temp` hay `x86_pkg_temp` trước, rồi mới tới chip Super I/O của
+bo mạch, và `acpitz` — vốn báo ước lượng từ chip cầu nam, thấp hơn lõi 10–20 °C —
+chỉ khi không còn gì khác. Rig báo 0 là rig không có cảm biến, và `zmrig-os
+doctor` nói đúng một dòng về việc đó; cảnh báo không thể bắn trên một cái máy
+không tự đo được, nên con số 0 đáng để ý.
+
+Luật hashrate thứ hai là luật chậm, và nó nói rõ nó so với cái gì:
 
 ```
 🐌 rig-2 is at 640.0 H/s, 45% of the 1.4 kH/s it measured itself

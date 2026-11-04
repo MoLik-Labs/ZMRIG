@@ -288,6 +288,30 @@ if [ "$SELF_CHECK" = "1" ]; then
         fail=1
     fi
 
+    # PID 1 cannot be run in a test, so the two invariants that fail silently are
+    # asserted against its source. Both were broken once and cost a rig its
+    # configuration: the environment block has to be built by the merge in
+    # plan.sh (a block written from scratch drops zmrig_extra), and the nostart
+    # flag has to reach /etc (a flag in /run is wiped by OpenRC's tmpfs).
+    if grep -q 'plan_grubenv_block zmrig_slot' "${HERE}/init"; then
+        printf '  ok    the initramfs merges the GRUB environment block\n'
+    else
+        printf '  BAD   os/init writes the environment block without merging it\n'
+        fail=1
+    fi
+    if grep -q '/newroot/etc/zmrig/nostart' "${HERE}/init"; then
+        printf '  ok    nostart is written where OpenRC cannot wipe it\n'
+    else
+        printf '  BAD   os/init writes nostart only under /run\n'
+        fail=1
+    fi
+    if grep -q 'zmrig_extra' "${HERE}/overlay/usr/local/bin/zmrig-os"; then
+        printf '  ok    the installed menu reads the kernel parameters\n'
+    else
+        printf '  BAD   the installed grub.cfg ignores zmrig_extra\n'
+        fail=1
+    fi
+
     # The fleet check-in: a crontab that names the tool, and a tool that knows
     # the command. Without both, an enrolled rig silently stops listening.
     if grep -q 'zmrig-os sync' "${HERE}/overlay/etc/crontabs/root" 2>/dev/null &&
