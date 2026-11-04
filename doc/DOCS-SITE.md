@@ -52,6 +52,31 @@ npm test             # unit tests for the builders, calculators and i18n
 `onBrokenMarkdownLinks` are both `throw`, so a page that was renamed without
 updating its links fails the build rather than shipping a 404.
 
+### The build is compiled by Rust, not by Babel and webpack
+
+`future.faster` in `docusaurus.config.js` (and `@docusaurus/faster` in
+`package.json`) switches the toolchain to rspack, SWC, lightningcss and the MDX
+compile cache. Measured on this repository, both locales, on the development
+machine:
+
+| | before | after |
+| --- | --- | --- |
+| `npm run build` | 53 s | 11 s |
+| published tree | 7,233,791 B / 182 files | 7,094,619 B / 176 files |
+| `assets/` | 1,376,643 B | 1,308,307 B |
+
+Two of the eight flags are off on purpose and both were found by a test:
+
+* **`ssgWorkerThreads`** needs `future.v4.removeLegacyPostBuildHeadAttribute`,
+  and that pass is what adds the per-page `og:image` / `twitter:image` cards.
+  With the worker on, `tests/docs/identity.sh` reported 54 pages with no card.
+* **`swcHtmlMinimizer`** drops the quotes around attribute values
+  (`property=og:image content=…`). That is legal HTML5, but the same tags are
+  read by link-preview scrapers, and the saving is a few kilobytes of prose.
+
+The published output is byte-identical in structure either way: same 62 HTML
+pages, same assets, same search index.
+
 ### Layout
 
 ```text

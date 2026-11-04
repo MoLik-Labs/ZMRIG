@@ -97,8 +97,11 @@ make_topology /tmp/zmrig-plan-4c "0" "1" "2" "3"
 eq "2 of 8 threads is one whole core" "3 7" "$(plan_iso_cpus /tmp/zmrig-plan-8t 2 8)"
 eq "3 of 8 threads cannot split a pair, so it takes 2" "3 7" "$(plan_iso_cpus /tmp/zmrig-plan-8t 3 8)"
 eq "4 of 8 threads is two whole cores" "2 3 6 7" "$(plan_iso_cpus /tmp/zmrig-plan-8t 4 8)"
-eq "the low-numbered CPUs stay with the kernel" "0-1,4-5" \
-   "$(plan_join_list $(plan_housekeeping 8 $(plan_iso_cpus /tmp/zmrig-plan-8t 4 8)))"
+iso_list=$(plan_iso_cpus /tmp/zmrig-plan-8t 4 8)
+hk_list=$(plan_housekeeping 8 "$iso_list")
+# plan_join_list's whole job is to turn a list into a mask, so it splits.
+# shellcheck disable=SC2086
+eq "the low-numbered CPUs stay with the kernel" "0-1,4-5" "$(plan_join_list $hk_list)"
 eq "a non-SMT machine takes the top CPUs one by one" "2 3" "$(plan_iso_cpus /tmp/zmrig-plan-4c 2 4)"
 eq "asking for every CPU is refused: the kernel needs one" "" "$(plan_iso_cpus /tmp/zmrig-plan-4c 4 4)"
 eq "asking for none is not an error" "" "$(plan_iso_cpus /tmp/zmrig-plan-4c 0 4)"
@@ -332,6 +335,80 @@ rm -f "$SYSROOT/class/thermal/thermal_zone1/temp"
 eq "acpitz is the last resort, not the first answer" "32 C" \
     "$(ZMRIG_OS_SYS="$SYSROOT" "$TOOL" status 2>/dev/null | awk '$1 == "thermal" { print $2, $3 }')"
 rm -rf "$SYSROOT"
+
+# ------------------------------------------------------------ the A/B block
+# GRUB wants exactly 1024 bytes and ignores a block of any other size, so a
+# wrong-size write is a rollback that silently does nothing. And the block holds
+# the kernel parameters as well as the slot: replacing it to change the slot is
+# how a rig comes back after a rollback without `isolcpus=`, mining on half its
+# cores and looking healthy.
+ENVROOT=$(mktemp -d)
+ENV="${ENVROOT}/grubenv"
+printf '# GRUB Environment Block\nzmrig_slot=a\nzmrig_extra=isolcpus=4-7 nohz_full=4-7\n' > "$ENV"
+
+block=$(plan_grubenv_block zmrig_slot b "$ENV")
+eq "the block is exactly 1024 bytes" "1024" "$(printf '%s\n' "$block" | wc -c | tr -d ' ')"
+eq "the new slot is in it" "zmrig_slot=b" "$(printf '%s\n' "$block" | sed -n 's/^\(zmrig_slot=.*\)/\1/p')"
+eq "the kernel parameters survive a slot change" "zmrig_extra=isolcpus=4-7 nohz_full=4-7" \
+   "$(printf '%s\n' "$block" | sed -n 's/^\(zmrig_extra=.*\)/\1/p')"
+eq "the header is the first line" "# GRUB Environment Block" "$(printf '%s\n' "$block" | head -1)"
+eq "the old slot key is not left behind" "1" \
+   "$(printf '%s\n' "$block" | grep -c '^zmrig_slot=')"
+
+# Writing twice must not grow the block: the padding is stripped before the
+# merge, and a write that kept it would overflow after a few hundred reboots.
+printf '%s\n' "$block" > "$ENV"
+again=$(plan_grubenv_block zmrig_slot a "$ENV")
+eq "a second write is still 1024 bytes" "1024" "$(printf '%s\n' "$again" | wc -c | tr -d ' ')"
+eq "and only one slot key survives it" "1" "$(printf '%s\n' "$again" | grep -c '^zmrig_slot=')"
+eq "with the value it was given" "zmrig_slot=a" "$(printf '%s\n' "$again" | sed -n 's/^\(zmrig_slot=.*\)/\1/p')"
+
+# A value with an '=' in it (a kernel parameter always has one) is a value, not
+# a second key.
+eq "a value containing = is kept whole" "zmrig_extra=quiet loglevel=3" \
+   "$(printf '%s\n' "$(plan_grubenv_block zmrig_extra 'quiet loglevel=3' "$ENV")" | sed -n 's/^\(zmrig_extra=.*\)/\1/p')"
+
+# Too many keys for the block is a failure to report, not a block to write.
+big=$(awk 'BEGIN { s = ""; for (i = 0; i < 1500; i++) s = s "x"; print "k=" s }' )
+if plan_grubenv_block k "$big" "$ENV" > /dev/null 2>&1; then
+    bad "a value too large for the block was written anyway"
+else
+    ok "a block that would overflow is refused"
+fi
+
+# A missing file is a fresh install, not an error.
+eq "a fresh block still has the right size" "1024" \
+   "$(printf '%s\n' "$(plan_grubenv_block zmrig_slot a /nonexistent/grubenv)" | wc -c | tr -d ' ')"
+rm -rf "$ENVROOT"
+
+# ------------------------------------------------------------ the restart delay
+# A crash loop is the pool's problem as much as the rig's, so the wait between
+# attempts doubles up to five minutes instead of retrying every ten seconds.
+eq "the first restart waits 10 s" "10" "$(plan_restart_delay 1)"
+eq "the second waits 20 s" "20" "$(plan_restart_delay 2)"
+eq "the third waits 40 s" "40" "$(plan_restart_delay 3)"
+eq "the fourth waits 80 s" "80" "$(plan_restart_delay 4)"
+eq "the fifth waits 160 s" "160" "$(plan_restart_delay 5)"
+eq "the sixth is capped at five minutes" "300" "$(plan_restart_delay 6)"
+eq "and it stays capped" "300" "$(plan_restart_delay 40)"
+eq "a zero count still waits something" "10" "$(plan_restart_delay 0)"
+eq "junk waits something too" "10" "$(plan_restart_delay x)"
+# A start that lasted this long clears the count: "five failures in a row" must
+# not mean "five failures since August".
+eq "a healthy run is ten minutes" "600" "$(plan_healthy_run)"
+
+# ------------------------------------------------------------ the rollback rule
+# Three boots that never reached "the miner has been up for five minutes" is the
+# trigger; whether another slot exists decides between rolling back and trying
+# the broken one again.
+eq "the limit is three boots" "3" "$(plan_boot_limit)"
+eq "a first boot is kept" "keep" "$(plan_boot_action 0 1)"
+eq "two failures are still a keep" "keep" "$(plan_boot_action 2 1)"
+eq "the third failure rolls back" "rollback" "$(plan_boot_action 3 1)"
+eq "and keeps rolling back" "rollback" "$(plan_boot_action 9 1)"
+eq "without another slot it boots anyway" "boot-anyway" "$(plan_boot_action 3 0)"
+eq "a counter that is not a number is zero" "keep" "$(plan_boot_action "" 1)"
+eq "junk in the counter is zero too" "keep" "$(plan_boot_action "x" 1)"
 
 rmroot
 unset ZMRIG_OS_ROOT ZMRIG_OS_DRYRUN ZMRIG_OS_SYS

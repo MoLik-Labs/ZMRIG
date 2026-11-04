@@ -123,17 +123,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      # `-S error` only: these are POSIX sh on purpose, and shellcheck's notes
-      # about `local` are not worth failing a build over.
+      # Warnings fail the job too, and each script is read in the dialect it was
+      # written in: `oneclick.sh` and the setup scripts are bash, `latest-iso.sh`
+      # is POSIX sh because it runs on somebody's busybox.
       - name: Shellcheck
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends shellcheck
-          shellcheck -s sh -S error \
+          shellcheck -s bash -S warning \
             oneclick.sh \
             scripts/tune-linux.sh \
-            scripts/latest-iso.sh \
             scripts/publish-site.sh
+          shellcheck -s sh -S warning scripts/latest-iso.sh
 
       # plan, config, governor, tuner targets, purge.
       - name: The installer's decisions

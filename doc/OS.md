@@ -256,13 +256,39 @@ initramfs and `zmrig-os` write that block in shell (header, `zmrig_slot=X`, `#`
 padding) because the guest deliberately has no `grub-editenv`.
 
 The initramfs keeps a counter on the boot medium: incremented on every boot of an
-installed system, reset by the supervisor once the miner has been up for five
+installed system, reset by the supervisor once a miner start has lasted ten
 minutes. Three boots that never got that far flip the machine to the other slot,
-write the environment block and reboot.
+write the environment block and reboot. The rule itself lives in `os/plan.sh`
+(`plan_boot_limit`, `plan_boot_action`) so `os/tests/plan.sh` can assert the
+boundary instead of describing it.
+
+Two things about that write are load-bearing, and both were wrong once:
+
+* **It merges.** The block also holds `zmrig_extra` — `isolcpus=`, `nohz_full=`,
+  `rcu_nocbs=`, the thermal cap. The old `write_grubenv` rewrote the block with
+  the slot alone, so a rig that rolled back came up mining on half its cores,
+  configured by nobody, and the log said nothing. `plan_grubenv_block` parses
+  what is there, replaces the one key, and pads back to exactly 1024 bytes.
+* **The installed menu reads it.** Every entry `zmrig-os install` writes passes
+  `${zmrig_extra}`, and `/etc/init.d`-time `load_env` reads the block. The menu
+  did not, for a while: `zmrig-os isolate 4` wrote the parameters, printed
+  "next boot: isolcpus=…", and the next boot ignored them. `tests/` asserts the
+  generated `grub.cfg` contains the reference (`os/tests/control.sh`).
+
+`zmrig.os.nostart=1` is written to `/etc/zmrig/nostart` and, for anything that
+looks there, `/run/zmrig/nostart`. `/run` is the wrong place to keep it — OpenRC
+mounts a fresh tmpfs over it, and the flag written there was gone before the
+supervisor read it.
 
 ## Updates
 
 Installed rigs run `/etc/periodic/daily/zmrig-auto` from busybox `crond`:
+
+An update is refused when the manifest carries no sha256 for the file: an
+unwatched update that cannot be verified is a truncated download or a captive
+portal page installed as the miner. `verify_sha` (interactive paths, checksum
+optional) and `verify_sha_required` (the automatic path, checksum mandatory) are
+two functions so the difference is a decision and not an oversight.
 
 | What | Where it goes | Rollback |
 | --- | --- | --- |
@@ -445,8 +471,10 @@ Two halves have to agree, and the command writes both:
 * **kernel space** — `isolcpus=`, `nohz_full=` and `rcu_nocbs=` in the boot
   parameters. On an installed disk they are merged into the GRUB environment
   block as one `zmrig_extra` key, next to `zmrig_slot`, without disturbing it;
-  writing one key never rewrites the other. On a live stick the medium is
-  read-only, so the parameters are printed for the operator to add.
+  writing one key never rewrites the other. The installed menu entries reference
+  `${zmrig_extra}`, which is what makes the write take effect on the next boot.
+  On a live stick the medium is read-only, so the parameters are printed for the
+  operator to add.
 * **user space** — `--cpu-affinity 0x...` for the miner, and the IRQ masks moved
   to the housekeeping CPUs at every supervisor start.
 
@@ -659,14 +687,14 @@ building anything:
 ```
 
 ```
-ZMRIG OS 6.47.0
+ZMRIG OS 6.48.0
 
   base               Alpine Linux 3.22.1 (x86_64, OpenRC, musl)
   kernel             linux-lts 6.12.61
   root filesystem    squashfs, zstd level 19, 1 MiB blocks
   bootloader         GRUB, BIOS and UEFI, built with the image
 
-  published: v6.47.0
+  published: v6.48.0
              built on Alpine 3.22.1
              os-beta (rolling beta)
 

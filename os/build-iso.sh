@@ -106,7 +106,7 @@ CACHE="${WORK}/cache"
 # log and, in CI, as annotations, because the job log is not always readable from
 # where somebody is debugging.
 size_report() { # rootfs_dir squashfs
-    local rootfs="$1" squash="$2" total line out
+    local rootfs="$1" squash="$2" total out
 
     [ -d "$rootfs" ] || return 0
     total=$(du -sm "$rootfs" 2>/dev/null | cut -f1)
@@ -271,10 +271,9 @@ if [ "$SELF_CHECK" = "1" ]; then
 
     # The installer writes these three files and nothing else bootable; if the
     # build stops producing them, `zmrig-os install` turns a disk into a brick.
-    for f in "${HERE}/overlay/usr/local/bin/zmrig-os"; do
-        for need in BOOTX64.EFI core.img boot.img; do
-            grep -q "$need" "$f" || { printf '  BAD   %s never mentions %s\n' "$f" "$need"; fail=1; }
-        done
+    tool="${HERE}/overlay/usr/local/bin/zmrig-os"
+    for need in BOOTX64.EFI core.img boot.img; do
+        grep -q "$need" "$tool" || { printf '  BAD   %s never mentions %s\n' "$tool" "$need"; fail=1; }
     done
     grep -q 'grub-mkimage -O x86_64-efi' "${HERE}/build-iso.sh" &&
         printf '  ok    the image builds its own EFI bootloader\n' ||

@@ -395,31 +395,41 @@ other_slot() { case "$1" in a) printf 'b' ;; *) printf 'a' ;; esac; }
 # used to forget the other - which is how a rig boots the wrong slot after
 # somebody isolates a few CPUs.
 write_grubenv() { # key value
-    local env="${BOOT_DIR}/grub/grubenv" line
+    local env="${BOOT_DIR}/grub/grubenv"
     [ -d "${BOOT_DIR}/grub" ] || return 1
-    line="$1=$2"
 
-    # Existing keys, minus the one being written. A file that does not exist yet
-    # is not an error: a fresh install writes the block after this.
-    if [ -r "$env" ]; then
-        sed 's/^#.*$//' "$env" 2>/dev/null | awk -v key="$1" 'index($0, "=") > 0 && substr($0, 1, index($0, "=") - 1) != key' > "${env}.body" 2>/dev/null ||
-            : > "${env}.body"
-    else
-        : > "${env}.body"
+    # The block is built by plan.sh, which merges the keys already in it. The
+    # initramfs calls the same function: it used to have its own copy that
+    # replaced the block, so an automatic rollback dropped `zmrig_extra` and the
+    # rig came back without its isolated CPUs. One implementation, two callers.
+    if command -v plan_grubenv_block >/dev/null 2>&1; then
+        plan_grubenv_block "$1" "$2" "$env" > "${env}.new" 2>/dev/null || { rm -f "${env}.new"; return 1; }
+        mv "${env}.new" "$env" 2>/dev/null || return 1
+        return 0
     fi
 
-    {
-        printf '%s\n' "$line"
-        cat "${env}.body"
-    } | awk 'BEGIN { head = "# GRUB Environment Block\n" } { body = body $0 "\n" }
+    # A root filesystem whose plan.sh did not load: the tool still has to be able
+    # to switch a slot, so the fallback writes the one key it was given. The
+    # block may not exist yet (a fresh install), and awk treats a missing input
+    # file as an error, so /dev/null stands in for it.
+    local src="$env"
+    [ -r "$env" ] || src=/dev/null
+    awk -v key="$1" -v value="$2" -v total=1024 '
+        BEGIN { head = "# GRUB Environment Block\n" }
+        {
+            if ($0 == "" || substr($0, 1, 1) == "#") next
+            eq = index($0, "=")
+            if (eq > 0 && substr($0, 1, eq - 1) == key) next
+            body = body $0 "\n"
+        }
         END {
-            room = 1024 - length(head) - length(body) - 1
+            body = key "=" value "\n" body
+            room = total - length(head) - length(body) - 1
             if (room < 0) exit 1
             pad = ""
             for (i = 0; i < room; i++) pad = pad "#"
             printf "%s%s%s\n", head, body, pad
-        }' > "${env}.new" 2>/dev/null || { rm -f "${env}.new" "${env}.body"; return 1; }
-    rm -f "${env}.body"
+        }' "$src" > "${env}.new" 2>/dev/null || { rm -f "${env}.new"; return 1; }
     mv "${env}.new" "$env" 2>/dev/null || return 1
 }
 
@@ -543,10 +553,12 @@ iso_list() {
 }
 
 housekeeping_list() {
-    local total
+    local total cpus
     total=$(thread_count)
+    # The mask is a list by design ("4-7"), and plan_housekeeping splits it.
+    cpus=$(plan_housekeeping "$total" ${ISOLATED_CPUS:-} 2>/dev/null || true)
     # shellcheck disable=SC2086
-    plan_join_list $(plan_housekeeping "$total" ${ISOLATED_CPUS:-})
+    plan_join_list $cpus
 }
 
 # Move every IRQ that can be moved off the isolated CPUs.
@@ -838,7 +850,11 @@ supervise() {
 
     mkdir -p "$RUN" "$(dirname "$LOG")" 2>/dev/null || true
 
-    if [ -e "$RUN/nostart" ]; then
+    # Two places, because the initramfs cannot know whether /run survived: it
+    # writes /etc/zmrig/nostart, which the overlay keeps for this boot, and
+    # /run/zmrig/nostart for anything that looks there. Missing the flag means
+    # mining when somebody asked for a rig that does not mine.
+    if [ -e "$ROOT/etc/zmrig/nostart" ] || [ -e "$RUN/nostart" ]; then
         log_os "not starting: zmrig.os.nostart=1 was on the kernel command line"
         return 0
     fi
@@ -899,7 +915,17 @@ supervise() {
         set -e
 
         rm -f "$PIDFILE"
-        log_os "exit $rc after $(( $(date +%s) - started ))s"
+        ran=$(( $(date +%s) - started ))
+        log_os "exit $rc after ${ran}s"
+
+        # "Five failed starts in a row" is what the reboot is for, so a start
+        # that actually lasted has to clear the count. Without this a rig that
+        # crashes once a week walked to a reboot once a month, and the reboot
+        # told nobody anything: the last failure was five weeks old.
+        if [ "$ran" -ge "${HEALTHY_RUN:-$(plan_healthy_run 2>/dev/null || printf 600)}" ]; then
+            [ "$fails" = "0" ] || log_os "ran for ${ran}s: clearing the failure count"
+            fails=0
+        fi
 
         # `zmrig-os autotune` asked for this: it wrote the new thread count and
         # killed the miner so this loop would pick it up. Counting it as a
@@ -926,8 +952,13 @@ supervise() {
             exit 1
         fi
 
-        log_os "restarting in 10 s (failure $fails)"
-        sleep 10
+        # A crash loop is usually the pool or the network, and hammering it every
+        # ten seconds turns a five-minute outage into a socket storm. The delay
+        # doubles up to five minutes; the arithmetic is in plan.sh so the test
+        # suite can check the shape of it without waiting ten minutes.
+        delay=$(plan_restart_delay "$fails" 2>/dev/null || printf '10')
+        log_os "restarting in ${delay}s (failure $fails)"
+        sleep "$delay"
     done
 }
 
@@ -1500,6 +1531,19 @@ thermal_now() {
     fi
 }
 
+# The same reading as a plain number of degrees, or empty when there is none.
+# Anything that parses thermal_now's output as a number gets 0 instead of a
+# temperature ("68 C" has a space in it), which is how the fleet payload sent a
+# temperature of zero for every rig while the status line printed a real one.
+thermal_c() {
+    local t
+    t=$(thermal_now 2>/dev/null) || return 0
+    case "$t" in
+        *" C") printf '%s' "${t% C}" ;;
+        *)     printf '' ;;
+    esac
+}
+
 wallet_short() {
     if [ -n "$WALLET" ]; then
         printf '%s...%s' "$(printf '%s' "$WALLET" | cut -c1-8)" "$(printf '%s' "$WALLET" | tail -c 6)"
@@ -1914,7 +1958,9 @@ cmd_doctor() {
     fi
 
     if [ -x "$bin" ] && [ -n "$WALLET" ]; then
-        # shellcheck disable=SC2086
+        # build_args prints one argument per line; splitting them back into
+        # words is the whole point of it.
+        # shellcheck disable=SC2046
         if out=$("$bin" $(build_args) --check 2>&1); then
             check ok config "miner --check passed"
         else
@@ -2077,6 +2123,69 @@ install_plan() { # disk kernel initramfs squashfs esp_part root_part
         "copy        $3 -> root/boot/initramfs-a.gz" \
         "write       boot.img -> first 512 bytes of $1, core.img -> sector 2048" \
         "write       root/boot/grub/grub.cfg and grubenv (slot a)"
+}
+
+grub_cfg_for() { # rootfs_dir [version]
+    local rootfs_mnt="$1" version="${2:-$(image_version)}" slot
+    {
+        cat <<EOF2
+# ZMRIG OS on disk. Written by 'zmrig-os install'; edit the parameters rather
+# than the entries, and see 'zmrig-os help' for everything they do.
+set timeout=3
+set default="a"
+if [ -f \${prefix}/grubenv ]; then
+    load_env
+fi
+set default="\${zmrig_slot}"
+set zmrig_params="quiet loglevel=3 nowatchdog console=tty0 console=ttyS0,115200"
+# Empty unless 'zmrig-os isolate' has written it, and defined here so the
+# entries below read the same with or without an environment block.
+set zmrig_extra=""
+EOF2
+        for slot in a b; do
+            [ -f "${rootfs_mnt}/zmrig/rootfs-${slot}.squashfs" ] || [ "$slot" = "a" ] || continue
+            cat <<EOF2
+
+menuentry "ZMRIG OS ${version} - slot ${slot} - max hashrate" --id "max-${slot}" {
+    linux /boot/vmlinuz-${slot} \${zmrig_params} \${zmrig_extra} zmrig.slot=${slot} zmrig.os.mode=max transparent_hugepage=always
+    initrd /boot/initramfs-${slot}.gz
+}
+menuentry "ZMRIG OS ${version} - slot ${slot} - max hashrate, CPU mitigations off" --id "fast-${slot}" {
+    linux /boot/vmlinuz-${slot} \${zmrig_params} \${zmrig_extra} zmrig.slot=${slot} zmrig.os.mode=max transparent_hugepage=always mitigations=off
+    initrd /boot/initramfs-${slot}.gz
+}
+menuentry "ZMRIG OS ${version} - slot ${slot} - safe (never above 72 C)" --id "safe-${slot}" {
+    linux /boot/vmlinuz-${slot} \${zmrig_params} \${zmrig_extra} zmrig.slot=${slot} zmrig.os.mode=safe zmrig.os.maxtemp=72 transparent_hugepage=madvise
+    initrd /boot/initramfs-${slot}.gz
+}
+menuentry "ZMRIG OS ${version} - slot ${slot} - install to disk" --id "install-${slot}" {
+    linux /boot/vmlinuz-${slot} \${zmrig_params} \${zmrig_extra} zmrig.slot=${slot} zmrig.os.nostart=1 transparent_hugepage=madvise
+    initrd /boot/initramfs-${slot}.gz
+}
+menuentry "ZMRIG OS ${version} - slot ${slot} - debug shell" --id "debug-${slot}" {
+    linux /boot/vmlinuz-${slot} \${zmrig_params} \${zmrig_extra} zmrig.slot=${slot} zmrig.os.debug=1 zmrig.os.nostart=1 nomodeset
+    initrd /boot/initramfs-${slot}.gz
+}
+EOF2
+        done
+    }
+}
+
+# A fresh environment block for a new install: exactly 1024 bytes, because GRUB
+# ignores a block of any other size, and built by the same function the
+# initramfs uses so an install and a rollback agree about the format.
+grubenv_init() { # path
+    local path="$1"
+    if command -v plan_grubenv_block >/dev/null 2>&1; then
+        plan_grubenv_block zmrig_slot a /dev/null > "$path" 2>/dev/null && return 0
+    fi
+    awk 'BEGIN {
+        head = "# GRUB Environment Block\nzmrig_slot=a\n"
+        n = 1023 - length(head)
+        pad = ""
+        for (i = 0; i < n; i++) pad = pad "#"
+        printf "%s%s\n", head, pad
+    }' > "$path"
 }
 
 cmd_install() {
@@ -2263,57 +2372,22 @@ EOF2
     printf '%s\n' "$(image_version)" > "${rootfs_mnt}/zmrig/version" 2>/dev/null || true
     : > "${rootfs_mnt}/zmrig/installed"
 
-    # GRUB config: two slots, chosen by the environment block, with the same
-    # menu a live image has. Slot B appears only once an update writes it, so a
-    # fresh install cannot boot into a root filesystem that does not exist.
-    {
-        cat <<EOF2
-# ZMRIG OS on disk. Written by 'zmrig-os install'; edit the parameters rather
-# than the entries, and see 'zmrig-os help' for everything they do.
-set timeout=3
-set default="a"
-if [ -f \${prefix}/grubenv ]; then
-    load_env
-fi
-set default="\${zmrig_slot}"
-set zmrig_params="quiet loglevel=3 nowatchdog console=tty0 console=ttyS0,115200"
-EOF2
-        for slot in a b; do
-            [ -f "${rootfs_mnt}/zmrig/rootfs-${slot}.squashfs" ] || [ "$slot" = "a" ] || continue
-            cat <<EOF2
-
-menuentry "ZMRIG OS $(image_version) - slot ${slot} - max hashrate" --id "max-${slot}" {
-    linux /boot/vmlinuz-${slot} \${zmrig_params} zmrig.slot=${slot} zmrig.os.mode=max transparent_hugepage=always
-    initrd /boot/initramfs-${slot}.gz
-}
-menuentry "ZMRIG OS $(image_version) - slot ${slot} - max hashrate, CPU mitigations off" --id "fast-${slot}" {
-    linux /boot/vmlinuz-${slot} \${zmrig_params} zmrig.slot=${slot} zmrig.os.mode=max transparent_hugepage=always mitigations=off
-    initrd /boot/initramfs-${slot}.gz
-}
-menuentry "ZMRIG OS $(image_version) - slot ${slot} - safe (never above 72 C)" --id "safe-${slot}" {
-    linux /boot/vmlinuz-${slot} \${zmrig_params} zmrig.slot=${slot} zmrig.os.mode=safe zmrig.os.maxtemp=72 transparent_hugepage=madvise
-    initrd /boot/initramfs-${slot}.gz
-}
-menuentry "ZMRIG OS $(image_version) - slot ${slot} - install to disk" --id "install-${slot}" {
-    linux /boot/vmlinuz-${slot} \${zmrig_params} zmrig.slot=${slot} zmrig.os.nostart=1 transparent_hugepage=madvise
-    initrd /boot/initramfs-${slot}.gz
-}
-menuentry "ZMRIG OS $(image_version) - slot ${slot} - debug shell" --id "debug-${slot}" {
-    linux /boot/vmlinuz-${slot} \${zmrig_params} zmrig.slot=${slot} zmrig.os.debug=1 zmrig.os.nostart=1 nomodeset
-    initrd /boot/initramfs-${slot}.gz
-}
-EOF2
-        done
-    } > "${rootfs_mnt}/boot/grub/grub.cfg"
+# The menu an installed rig boots with. Two slots, chosen by the environment
+# block, with the same choices a live image has. Slot B appears only once an
+# update writes it, so a fresh install cannot boot a root filesystem that does
+# not exist.
+#
+# ${zmrig_extra} is the line that makes `zmrig-os isolate N` mean something:
+# isolcpus / nohz_full / rcu_nocbs are parsed before the scheduler exists, so the
+# tool can only write them into the environment block and let the next boot pick
+# them up. Without this reference the parameters were written, reported as "next
+# boot: isolcpus=4-7", and silently ignored, which is a rig that looks isolated
+# and mines on every core.
+    run mkdir -p "${rootfs_mnt}/boot/grub"
+    grub_cfg_for "$rootfs_mnt" > "${rootfs_mnt}/boot/grub/grub.cfg"
 
     # 1024 bytes: GRUB ignores an environment block of any other size.
-    awk 'BEGIN {
-        head = "# GRUB Environment Block\nzmrig_slot=a\n"
-        n = 1024 - length(head) - 1
-        pad = ""
-        for (i = 0; i < n; i++) pad = pad "#"
-        printf "%s%s\n", head, pad
-    }' > "${rootfs_mnt}/boot/grub/grubenv"
+    grubenv_init "${rootfs_mnt}/boot/grub/grubenv"
 
     # The config the installed system boots with: the same wallet, pool and
     # mode, plus the marker that makes /etc/zmrig persistent.
@@ -2676,7 +2750,10 @@ cmd_auto() {
         run mkdir -p "$RUN"
         say "downloading $url"
         if fetch "$url" > "$tmp"; then
-            if verify_sha "$tmp" "$sha"; then
+            if [ -z "$sha" ]; then
+                warn "the manifest has no checksum for the miner: refusing an update that cannot be verified"
+                rm -f "$tmp"
+            elif verify_sha_required "$tmp" "$sha"; then
                 ota_install_binary "$tmp" "$latest" || warn "the binary could not be installed"
                 if running; then cmd_restart; fi
             else
@@ -2697,7 +2774,10 @@ cmd_auto() {
             run mkdir -p "$STATE"
             say "downloading $url"
             if fetch "$url" > "$iso"; then
-                if verify_sha "$iso" "$sha"; then
+                if [ -z "$sha" ]; then
+                    warn "the manifest has no checksum for the image: refusing to write an unverified slot"
+                    rm -f "$iso"
+                elif verify_sha_required "$iso" "$sha"; then
                     if ota_write_slot "$iso" "$latest"; then
                         rm -f "$iso"
                         say "the next boot runs $latest; 'zmrig-os slot $(boot_slot)' undoes it"
@@ -2745,6 +2825,16 @@ verify_sha() { # file expected
     [ -n "$expected" ] || return 0
     actual=$(sha256sum "$file" | cut -d' ' -f1)
     [ "$actual" = "$expected" ]
+}
+
+# The same check for an update nobody is watching. A manifest with no checksum
+# cannot be verified, and the failure it lets through is the quiet one: a
+# truncated download, a captive-portal HTML page saved under the binary's name, a
+# redirect to a mirror that served the wrong file. Staying one version behind is
+# always better than installing that and restarting the miner into it.
+verify_sha_required() { # file expected
+    [ -n "${2:-}" ] || return 1
+    verify_sha "$1" "$2"
 }
 
 # --------------------------------------------------------------- helpers
@@ -2950,7 +3040,7 @@ ack_add() { # id ok cmd detail
 }
 
 fleet_body() {
-    local state rate temp up installed=false slot coin threads reason log state_reason
+    local state rate temp up installed=false slot coin threads reason log
     load_conf
 
     if running; then
@@ -2968,8 +3058,8 @@ fleet_body() {
     # keeping state of its own.
     measured="$MEASURED_HS"
     case "$measured" in ''|*[!0-9]*) measured=0 ;; esac
-    temp=$(thermal_now 2>/dev/null || echo 0)
-    case "$temp" in ''|*[!0-9]*) temp=0 ;; *) temp=$((temp / 1000)) ;; esac
+    temp=$(thermal_c 2>/dev/null || true)
+    case "$temp" in ''|*[!0-9]*) temp=0 ;; esac
     up=$(cut -d. -f1 /proc/uptime 2>/dev/null || echo 0)
     case "$up" in ''|*[!0-9]*) up=0 ;; esac
     if is_installed; then installed=true; else installed=false; fi
@@ -3379,6 +3469,8 @@ main() {
 # and the boot cannot disagree about how many pages this machine needs.
 for _plan in "${ROOT}/usr/local/lib/zmrig/plan.sh" /plan.sh; do
     [ -r "$_plan" ] || continue
+    # The path depends on how the image was laid out, which is the point.
+    # shellcheck source=/dev/null
     . "$_plan"
     break
 done

@@ -1,3 +1,88 @@
+# 6.48.0 — the boot that comes back configured
+
+Five bugs in the installed appliance, all of them quiet: each one made a rig look
+healthier than it was, and none of them printed a warning. Found by reading the
+boot path against the tests that claim to cover it.
+
+## The rollback dropped the kernel parameters
+
+An installed rig keeps a 1024-byte GRUB environment block with `zmrig_slot` in it.
+It also keeps `zmrig_extra`: `isolcpus=`, `nohz_full=`, `rcu_nocbs=` and the
+thermal cap, written there by `zmrig-os isolate` because none of them can be
+applied after boot. The initramfs's `write_grubenv` wrote a block containing the
+slot and nothing else, so the automatic rollback — the path that runs when nobody
+is watching — threw every other key away. The rig came back on the other slot,
+mining on every core, and the log said it had rolled back successfully.
+
+Both writers now build the block with `plan_grubenv_block` in `os/plan.sh`, which
+parses what is there, replaces one key, and pads back to exactly 1024 bytes. A key
+too large for the block is refused rather than written truncated.
+
+## The installed menu never read `zmrig_extra`
+
+Worse than the first one, because it was unconditional: the `grub.cfg` that
+`zmrig-os install` writes implemented `load_env` and then used `${zmrig_params}`
+only. `zmrig-os isolate 4` wrote the parameters, printed `next boot: isolcpus=…`,
+and the next boot ignored them — on every installed rig, from the first release
+that had `isolate`. Every entry now passes `${zmrig_extra}`, `set zmrig_extra=""`
+is in the header so the reference is defined with or without a block, and the
+generator is a function (`grub_cfg_for`) so `os/tests/control.sh` can assert the
+menu rather than the source file.
+
+## `zmrig.os.nostart=1` did not survive the boot
+
+The initramfs wrote the flag to `/run/zmrig/nostart`. OpenRC mounts a fresh tmpfs
+over `/run`, so by the time the supervisor looked, the flag was gone and the rig
+mined. The same file warns, three hundred lines earlier, that `/run` is exactly
+the wrong place for a marker that has to outlive the handover. It is now written
+to `/etc/zmrig/nostart` (overlay, one boot) as well, and the supervisor checks
+both.
+
+## Every rig reported a temperature of zero
+
+`thermal_now` prints `68 C` for people. The fleet payload parsed it with a
+digit test, which rejects the space, and fell back to `0`. So the server's
+`alert_temp` comparison was against zero for every rig in the fleet: the overheat
+alert could never fire, and `/devices` showed a column of `0 °C` that looked like
+a sensor problem. `thermal_c` returns the number, `fleet_body` uses it, and
+`os/tests/fleet.sh` proves 68 arrives at the real server code.
+
+## The supervisor's failure counter never reset
+
+`zmrig-os run` reboots after five failed starts in a row. The count only ever went
+up: a rig that restarted once a month rebooted after five months, and the log said
+"five failed starts" about a run of failures that had started in the spring. A
+start that lasts ten minutes now clears it (`plan_healthy_run`), and the restart
+delay doubles from 10 s to five minutes (`plan_restart_delay`) instead of
+reconnecting to the pool every ten seconds through an outage.
+
+## An update with no checksum is refused
+
+`verify_sha` returned success when the manifest had no `binary_sha256`, which
+means a truncated download, an error page behind a redirect, or a mirror serving
+the wrong file was installed as the miner and the supervisor was restarted into
+it. The automatic path now uses `verify_sha_required` and says so in one line;
+the interactive paths keep the optional behaviour, where an operator is present
+to decide.
+
+## Also
+
+- The site's own title and footer said "1 % developer fee" a release after the
+  constant moved to 3 %. `scripts/verify-fee.sh` now reads
+  `site/docusaurus.config.js` as well, and fails on a stale rate there.
+- Shellcheck runs at `-S warning` in CI, for every script in the repository, in
+  the dialect each shebang asks for (`tests/lint/shellcheck.sh`, 56 scripts). That
+  found a `for` loop over a quoted string that only ever ran once, an `rm -rf` in
+  `scripts/publish-site.sh` that an empty `OWNED_DIRS` could have pointed at `/`,
+  three dead variables, and a keyword used as a variable name.
+- `os/make-initramfs.sh` counts the modules it staged instead of leaving the
+  count in a pipeline's subshell, so "no kernel modules staged" is reported from
+  a number.
+
+Tests: `os/tests/plan.sh` 113, `os/tests/control.sh` 240, `os/tests/fleet.sh` 27,
+`zmrig/tests/cli.sh` 49, `scripts/verify-fee.sh` 10, oneclick ×5,
+`tests/lint/shellcheck.sh` 56 scripts.
+
 # 6.47.0 — a fee that is stated, and the pages that prove it
 
 The developer fee is 3 % of Monero mining time. This is a user-visible change

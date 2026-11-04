@@ -99,8 +99,9 @@ prints the exact set it took instead of pretending it took what was asked.
 Both halves are written, because either one alone buys nothing:
 
 * the boot parameters `isolcpus=`, `nohz_full=` and `rcu_nocbs=` — merged into
-  the GRUB environment block on an installed disk, printed for you to type on a
-  read-only stick;
+  the GRUB environment block on an installed disk and read by every installed
+  menu entry (`${zmrig_extra}`), so they take effect on the next boot; printed
+  for you to type on a read-only stick;
 * `--cpu-affinity` for the miner, plus the IRQ masks moved to the remaining CPUs
   every time the supervisor starts.
 
@@ -324,7 +325,16 @@ zmrig-os auto --apply    # do it now instead of at 03:00
   slot, verified, and only then made the default for the next boot.
 - **An update that will not boot undoes itself.** The initramfs counts boots that
   never became a mining rig; three of them flip the machine to the other slot
-  and reboot. `zmrig-os slot` shows both, `zmrig-os slot b` picks one.
+  and reboot. `zmrig-os slot` shows both, `zmrig-os slot b` picks one. The flip
+  merges the GRUB environment block instead of replacing it, so the kernel
+  parameters on that machine — `isolcpus=`, `nohz_full=`, the thermal cap —
+  survive the rollback. A rig that comes back on the other slot comes back
+  configured.
+- **An update with no checksum is refused.** The manifest names a sha256 for the
+  binary and for the image; without one there is no way to tell a truncated
+  download or a captive-portal page from the real file, and installing that as
+  the miner is worse than staying a version behind. `zmrig-os auto` says so in
+  one line and exits 0, so the daily job stays quiet.
 - `AUTO_UPDATE=0` turns the whole thing off. No manifest reachable means
   "offline", which is not an error: the rig keeps mining and the job exits 0.
 
@@ -366,7 +376,11 @@ Long uptime is not one feature, it is a chain of them:
 
 - the miner exits on a stall or on a run of rejected shares
   (`--health-restart`, 900 s), and says so in the log;
-- `zmrig-os run` restarts it 10 s later, forever;
+- `zmrig-os run` restarts it 10 s later, then 20, 40, 80, 160, and five minutes
+  from the fifth failure on: a crash loop is usually the pool or the network, and
+  reconnecting every ten seconds turns a short outage into a socket storm;
+- a start that lasted ten minutes clears that count, so "five failed starts in a
+  row" means in a row and not since last month;
 - five failed starts in a row reboot the machine, because at that point the
   operating system is the thing that is broken;
 - logs rotate at 8 MB, so a notebook that has been mining for a year still boots;

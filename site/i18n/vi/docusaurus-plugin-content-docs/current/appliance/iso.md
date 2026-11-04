@@ -99,7 +99,9 @@ nó lấy được, không giả vờ lấy đúng như bạn xin.
 Cả hai nửa đều được ghi, vì chỉ một nửa thì không mua được gì:
 
 * tham số khởi động `isolcpus=`, `nohz_full=` và `rcu_nocbs=` — gộp vào GRUB
-  environment block trên ổ đã cài, còn trên USB chỉ đọc thì in ra để bạn tự gõ;
+  environment block trên ổ đã cài và được mọi menu entry đã cài đọc
+  (`${zmrig_extra}`), nên có hiệu lực từ lần boot sau; trên USB chỉ đọc thì in ra
+  để bạn tự gõ;
 * `--cpu-affinity` cho miner, và mặt nạ ngắt được dời sang các CPU còn lại mỗi
   lần supervisor khởi động.
 
@@ -312,7 +314,15 @@ zmrig-os auto --apply    # làm ngay thay vì đợi 03:00
   kiểm tra rồi mới thành mặc định cho lần boot sau.
 - **Bản cập nhật không boot được thì tự lùi.** Initramfs đếm số lần boot mà máy
   không trở thành một rig đang đào; ba lần thì nó chuyển sang slot kia và reboot.
-  `zmrig-os slot` xem cả hai, `zmrig-os slot b` chọn một.
+  `zmrig-os slot` xem cả hai, `zmrig-os slot b` chọn một. Lần lùi đó *gộp* GRUB
+  environment block chứ không ghi đè, nên các tham số nhân của máy —
+  `isolcpus=`, `nohz_full=`, mức nhiệt trần — sống qua lần lùi. Rig quay về slot
+  kia vẫn về đúng cấu hình của nó.
+- **Bản cập nhật không có checksum thì bị từ chối.** Manifest ghi sha256 cho
+  binary và cho ảnh; không có thì không cách nào phân biệt một file tải dở hay
+  một trang captive portal với file thật, và cài đúng thứ đó làm miner thì tệ hơn
+  là chậm một phiên bản. `zmrig-os auto` nói đúng một dòng rồi thoát 0, nên job
+  hằng ngày vẫn im lặng.
 - `AUTO_UPDATE=0` tắt toàn bộ. Không với tới được manifest nghĩa là "đang offline",
   không phải lỗi: rig vẫn đào và job thoát 0.
 
@@ -345,7 +355,11 @@ Chạy lâu không phải một tính năng mà là một chuỗi:
 
 - miner tự thoát khi bị treo hoặc khi share bị từ chối liên tiếp
   (`--health-restart`, 900 giây), và ghi lý do vào log;
-- `zmrig-os run` khởi động lại sau 10 giây, mãi mãi;
+- `zmrig-os run` khởi động lại sau 10 giây, rồi 20, 40, 80, 160, và từ lần thứ
+  năm trở đi là năm phút: crash loop thường là do pool hoặc mạng, và kết nối lại
+  mười giây một lần biến một lần mất mạng ngắn thành bão socket;
+- một lần chạy sống được mười phút thì xoá bộ đếm đó, nên "năm lần liên tiếp"
+  đúng nghĩa liên tiếp chứ không phải từ tháng trước;
 - năm lần thất bại liên tiếp thì máy reboot, vì lúc đó thứ hỏng là hệ điều hành;
 - log xoay ở 8 MB, nên máy đào một năm vẫn khởi động được;
 - chrony giữ đồng hồ đúng, vì đăng nhập pool qua TLS sẽ hỏng nếu lệch giờ.

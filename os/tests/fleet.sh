@@ -99,6 +99,24 @@ let data='';process.stdin.on('data',(d)=>data+=d).on('end',()=>{
 });")
 [ "$ENROLLED" = "stopped" ] && ok "the rig reports its real state (stopped, no wallet)" || bad "the rig reports its real state (got '$ENROLLED')"
 
+# The temperature in the payload is what the server's alerts compare against
+# `alert_temp`, so a payload that always says 0 is a rig that can never overheat
+# as far as the bot is concerned. This used to happen: the reading is "68 C" and
+# the code testing it for digits rejected the space, so every rig in the fleet
+# reported a temperature of zero.
+FAKESYS="${WORK}/sys"
+mkdir -p "$FAKESYS/class/hwmon/hwmon0" "$FAKESYS/devices/system/cpu"
+printf 'coretemp\n' > "$FAKESYS/class/hwmon/hwmon0/name"
+printf '68000\n' > "$FAKESYS/class/hwmon/hwmon0/temp1_input"
+ZMRIG_OS_SYS="$FAKESYS" zig_tool sync --now >/dev/null 2>&1
+TEMP_SEEN=$(curl -fsS "${CONTROL}/state?id=${ID}" | node -e "
+let data='';process.stdin.on('data',(d)=>data+=d).on('end',()=>{
+  const parsed=JSON.parse(data);
+  process.stdout.write(parsed.device ? String(parsed.device.status.temp) : 'none');
+});")
+[ "$TEMP_SEEN" = "68" ] && ok "the check-in carries the real temperature (68)" ||
+    bad "the check-in carries the real temperature (got '$TEMP_SEEN')"
+
 # ------------------------------------------------------------- enrolment
 
 check "the bot can enrol the rig" bash -c "curl -fsS '${CONTROL}/enrol?id=${ID}&owner=tg:1&label=basement' >/dev/null"

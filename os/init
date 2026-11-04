@@ -186,15 +186,28 @@ find_rootfs || fatal "no ZMRIG root filesystem found on any disk, CD or USB devi
 write_grubenv() { # slot
     local env=/media/boot/grub/grubenv
     [ -d /media/boot/grub ] || return 0
-    # Exactly 1024 bytes: the header, the key, then '#' padding. GRUB ignores a
-    # block of any other size, which would make the rollback silently do nothing.
-    awk -v slot="$1" 'BEGIN {
-        head = "# GRUB Environment Block\nzmrig_slot=" slot "\n"
-        n = 1024 - length(head) - 1
-        pad = ""
-        for (i = 0; i < n; i++) pad = pad "#"
-        printf "%s%s\n", head, pad
-    }' > "${env}.new" 2>/dev/null || return 0
+
+    # The block holds the slot *and* the kernel parameters this rig needs
+    # (`zmrig_extra`: isolcpus, nohz_full, the thermal cap). It is built by
+    # plan.sh, which merges the keys already there, because the version that
+    # lived here replaced the whole block: an automatic rollback then booted the
+    # other slot without `isolcpus=`, and the rig came back mining on half its
+    # cores with nothing in the log to say why. One implementation, two callers.
+    if command -v plan_grubenv_block >/dev/null 2>&1; then
+        plan_grubenv_block zmrig_slot "$1" "$env" > "${env}.new" 2>/dev/null || return 0
+    else
+        # A root filesystem without plan.sh is a broken image, but being unable
+        # to switch slots at all is worse than losing the parameters, so the
+        # slot is still written.
+        log "warning: plan.sh is missing, writing the slot without the other keys"
+        awk -v slot="$1" 'BEGIN {
+            head = "# GRUB Environment Block\nzmrig_slot=" slot "\n"
+            n = 1023 - length(head)
+            pad = ""
+            for (i = 0; i < n; i++) pad = pad "#"
+            printf "%s%s%s\n", head, pad
+        }' > "${env}.new" 2>/dev/null || return 0
+    fi
     mv "${env}.new" "$env" 2>/dev/null || return 0
 }
 
@@ -208,16 +221,42 @@ if [ -f /media/zmrig/installed ]; then
         case "$boot_count" in ''|*[!0-9]*) boot_count=0 ;; esac
     fi
 
-    if [ "$boot_count" -ge 3 ] && [ "$boot_slot" = "$SLOT" ]; then
-        case "$SLOT" in a) other=b ;; *) other=a ;; esac
-        if [ -f "/media/zmrig/rootfs-${other}.squashfs" ]; then
-            log "slot ${SLOT} failed to start ${boot_count} times: switching to slot ${other} and rebooting"
-            printf '0 %s\n' "$other" > "$boot_state" 2>/dev/null || true
-            write_grubenv "$other"
-            sync
-            reboot -f 2>/dev/null || exec /bin/sh
-        fi
-        log "slot ${SLOT} has failed ${boot_count} times and there is no other slot: booting it anyway"
+    other_has=0
+    case "$SLOT" in a) other=b ;; *) other=a ;; esac
+    [ -f "/media/zmrig/rootfs-${other}.squashfs" ] && other_has=1
+
+    # Three failed boots of the same slot is the trigger; whether there is
+    # another slot is what decides between rolling back and trying again. The
+    # rule lives in plan.sh so this and its test cannot disagree about it.
+    boot_action=""
+    if command -v plan_boot_action >/dev/null 2>&1; then
+        boot_action=$(plan_boot_action "$boot_count" "$other_has")
+    fi
+    case "$boot_action" in
+        rollback|boot-anyway) ;;
+        *)
+            # No plan.sh (a damaged image), or the counter says keep trying.
+            if [ "$boot_count" -ge 3 ]; then
+                [ "$other_has" = "1" ] && boot_action=rollback || boot_action=boot-anyway
+            else
+                boot_action=keep
+            fi
+            ;;
+    esac
+
+    if [ "$boot_slot" = "$SLOT" ]; then
+        case "$boot_action" in
+            rollback)
+                log "slot ${SLOT} failed to start ${boot_count} times: switching to slot ${other} and rebooting"
+                printf '0 %s\n' "$other" > "$boot_state" 2>/dev/null || true
+                write_grubenv "$other"
+                sync
+                reboot -f 2>/dev/null || exec /bin/sh
+                ;;
+            boot-anyway)
+                log "slot ${SLOT} has failed ${boot_count} times and there is no other slot: booting it anyway"
+                ;;
+        esac
     fi
 
     mkdir -p /media/zmrig/state 2>/dev/null || true
@@ -411,7 +450,12 @@ if [ "$DEBUG" = "1" ]; then
 fi
 
 if [ "$NOSTART" = "1" ]; then
-    printf '1' > /newroot/run/zmrig/nostart
+    # /etc/zmrig, not /run/zmrig: OpenRC mounts a fresh tmpfs over /run, and a
+    # flag written there is gone before the supervisor looks for it - which made
+    # `zmrig.os.nostart=1` a promise the boot did not keep, on the images the
+    # smoke test uses. /etc is the overlay, so it lasts exactly one boot.
+    printf '1' > /newroot/etc/zmrig/nostart 2>/dev/null || true
+    printf '1' > /newroot/run/zmrig/nostart 2>/dev/null || true
 fi
 
 # The media stays visible inside the running system at /media: an installed rig

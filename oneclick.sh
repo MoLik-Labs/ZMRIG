@@ -512,12 +512,11 @@ has_systemd() {
 }
 
 detect_os() {
-    OS_ID="unknown"; OS_LIKE=""; OS_VER=""
+    OS_ID="unknown"; OS_VER=""
     if [ -r /etc/os-release ]; then
         # shellcheck disable=SC1091
         . /etc/os-release
         OS_ID="${ID:-unknown}"
-        OS_LIKE="${ID_LIKE:-}"
         OS_VER="${VERSION_ID:-}"
     elif have sw_vers; then
         OS_ID="macos"
@@ -1555,11 +1554,13 @@ current_hashrate() {
     # line: that is the miner's.
     stamp=$(printf '%s' "$raw" | grep -oE '[0-9]{2}:[0-9]{2}:[0-9]{2}' | tail -1) || true
     if [ -n "$stamp" ]; then
-        local then now delta
-        then=$(date -d "today ${stamp}" +%s 2>/dev/null || echo 0)
+        # `then` is a keyword: naming a variable after it works, but only until
+        # somebody reads the block quickly.
+        local stamp_at now delta
+        stamp_at=$(date -d "today ${stamp}" +%s 2>/dev/null || echo 0)
         now=$(date +%s)
-        if [ "$then" -gt 0 ]; then
-            delta=$((now - then))
+        if [ "$stamp_at" -gt 0 ]; then
+            delta=$((now - stamp_at))
             [ "$delta" -lt 0 ] && delta=$((delta + 86400))
             [ "$delta" -le 90 ] || return 1
         fi

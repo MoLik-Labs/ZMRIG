@@ -13,6 +13,7 @@ tar -xzf hwloc-${HWLOC_VERSION}.tar.gz
 
 cd hwloc-${HWLOC_VERSION}
 ./configure --disable-shared --enable-static --disable-libudev --disable-libxml2 --disable-cairo --disable-pci --disable-opencl --disable-cuda --disable-nvml --disable-libnuma
+# shellcheck disable=SC2046,SC2044  # word splitting is the point here
 make -C src -j$(nproc || sysctl -n hw.ncpu || sysctl -n hw.logicalcpu)
 cp -fr include ../../deps
 cp src/.libs/libhwloc.a ../../deps/lib

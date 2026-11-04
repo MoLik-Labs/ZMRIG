@@ -30,7 +30,7 @@ const algolia = algoliaConfig();
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   title: "ZMRIG",
-  tagline: "RandomX miner with a 1 % developer fee you can see and switch off",
+  tagline: "RandomX miner with a 3 % developer fee you can see and switch off",
   // One tone, one shape: a bold Z (bar, diagonal, bar) drawn on a 32 unit grid.
   // `logo.svg` and `logo-dark.svg` are the same geometry in black and white;
   // `favicon.svg` picks the tone from the browser's colour scheme so it stays
@@ -43,6 +43,32 @@ const config = {
     { tagName: "meta", attributes: { name: "theme-color", content: "#ffffff", media: "(prefers-color-scheme: light)" } },
     { tagName: "meta", attributes: { name: "theme-color", content: "#0b0b0c", media: "(prefers-color-scheme: dark)" } },
   ],
+
+  // The Rust toolchain Docusaurus 3.6+ offers: rspack instead of webpack, SWC
+  // instead of Babel, lightningcss instead of cssnano, and the MDX compile cache.
+  // It is a build-time choice only — the output is the same site — and it is what
+  // keeps a documentation change from costing a minute of CI on every push.
+  // `@docusaurus/faster` is a dependency for exactly this block.
+  future: {
+    faster: {
+      rspackBundler: true,
+      rspackPersistentCache: true,
+      swcJsLoader: true,
+      swcJsMinimizer: true,
+      // swcHtmlMinimizer stays off: it drops the quotes around attribute values
+      // (`property=og:image content=…`), which is legal HTML5 but is fed to link
+      // preview scrapers that parse the tag with a regular expression, and it
+      // saves a few kilobytes of a page that is already mostly prose.
+      swcHtmlMinimizer: false,
+      lightningCssMinimizer: true,
+      mdxCrossCompilerCache: true,
+      // ssgWorkerThreads stays off on purpose: it needs the v4 flag that removes
+      // the post-build <head> attribute pass, and that pass is what adds the
+      // per-page og:image / twitter:image cards. `tests/docs/identity.sh` checks
+      // for those on every page, and with the worker on they are simply absent.
+      ssgWorkerThreads: false,
+    },
+  },
 
   url: SITE,
   baseUrl: BASE,
@@ -214,7 +240,7 @@ const config = {
             ],
           },
         ],
-        copyright: `ZMRIG ${VERSION} · GPL-3.0 · made by <a href="https://github.com/NggKhaiz">@nggkhaiz</a> · no tracking, no accounts · the 1 % fee is printed and switchable off`,
+        copyright: `ZMRIG ${VERSION} · GPL-3.0 · made by <a href="https://github.com/NggKhaiz">@nggkhaiz</a> · no tracking, no accounts · the 3 % fee is printed and switchable off`,
       },
       docs: {
         sidebar: {

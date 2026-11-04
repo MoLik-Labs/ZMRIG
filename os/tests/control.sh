@@ -199,6 +199,14 @@ expect_ok "nostart boots without mining" "$TOOL" run
 contains "not starting" "$CHECK_MSG" && ok "nostart says why it is idle" || bad "nostart says why it is idle"
 rm -f "$ROOTDIR/run/zmrig/nostart"
 
+# The initramfs writes the flag to /etc, because OpenRC puts a fresh tmpfs over
+# /run and the copy there is gone before the supervisor reads it. Either file
+# has to stop the miner: the one that works on a real boot is the /etc one.
+: > "$ROOTDIR/etc/zmrig/nostart"
+expect_ok "the flag in /etc stops the miner too" "$TOOL" run
+contains "not starting" "$CHECK_MSG" && ok "and it says why it is idle" || bad "and it says why it is idle"
+rm -f "$ROOTDIR/etc/zmrig/nostart"
+
 # ---------------------------------------------------------------- updater
 mkdir -p "$ROOTDIR/bucket"
 printf '#!/bin/sh\necho zmrig 9.9.9\nexit 0\n' > "$ROOTDIR/bucket/zmrig-new"
@@ -429,7 +437,7 @@ mkdir -p "$ROOTDIR/etc/zmrig"
 printf 'x86-64-v3' > "$ROOTDIR/etc/zmrig/arch"
 # The update tests above pointed ZMRIG_OS_MANIFEST_URL at a local bucket; this
 # is about the URLs the tool derives when nobody overrides them.
-murl() { ZMRIG_OS_NO_MAIN=1 ZMRIG_OS_ROOT="$ROOTDIR" ZMRIG_OS_MANIFEST_URL= sh -c '. "$1"; CHANNEL="$2"; manifest_url' _ "$TOOL" "$1"; }
+murl() { ZMRIG_OS_NO_MAIN=1 ZMRIG_OS_ROOT="$ROOTDIR" ZMRIG_OS_MANIFEST_URL='' sh -c '. "$1"; CHANNEL="$2"; manifest_url' _ "$TOOL" "$1"; }
 [ "$(murl stable)" = "https://github.com/MoLik-Labs/ZMRIG/releases/latest/download/zmrig-os-stable-x86-64-v3.json" ] &&
     ok "the stable channel follows the newest stable release" ||
     bad "the stable channel URL is wrong ($(murl stable))"
@@ -518,6 +526,18 @@ if [ -f "$ROOTDIR/media/boot/grub/grubenv" ]; then
         bad "the GRUB environment block is ${size} bytes, GRUB ignores anything but 1024"
     grep -q '^zmrig_slot=b$' "$ROOTDIR/media/boot/grub/grubenv" &&
         ok "the block names the slot" || bad "the block names the slot"
+
+    # The block also carries the kernel parameters. Changing the slot must not
+    # drop them: `zmrig-os isolate` writes `isolcpus=` there, and an update that
+    # switched slots used to take the isolated CPUs away with it.
+    printf 'zmrig_extra=isolcpus=4-7\n' >> "$ROOTDIR/media/boot/grub/grubenv"
+    : > "$ROOTDIR/media/zmrig/rootfs-a.squashfs"
+    expect_ok "a slot change on a block with kernel parameters" "$TOOL" slot a
+    grep -q '^zmrig_extra=isolcpus=4-7$' "$ROOTDIR/media/boot/grub/grubenv" &&
+        ok "the kernel parameters survive a slot change" ||
+        bad "the slot change dropped the kernel parameters"
+    [ "$(wc -c < "$ROOTDIR/media/boot/grub/grubenv")" = "1024" ] &&
+        ok "and the block is still 1024 bytes" || bad "the block changed size"
 else
     bad "no GRUB environment block was written"
 fi
@@ -535,6 +555,29 @@ export ZMRIG_OS_MANIFEST_URL="file://$ROOTDIR/manifest.json"
 expect_ok "auto --check reads a manifest" "$TOOL" auto --check
 contains "installed" "$CHECK_MSG" && ok "it prints what is installed" || bad "it prints what is installed"
 contains "9.9.9" "$CHECK_MSG" && ok "it prints what is available" || bad "it prints what is available"
+
+# A manifest with no checksum is refused: an unattended update that cannot be
+# verified is a download installed as the miner with no way to tell a truncated
+# file from a good one.
+printf '{"version":"9.9.9","binary_url":"file:///dev/null"}\n' > "$ROOTDIR/manifest.json"
+expect_ok "an update with no checksum does not crash" "$TOOL" auto --once
+contains "no checksum" "$CHECK_MSG" && ok "it refuses an unverified update" ||
+    bad "it refuses an unverified update ($CHECK_MSG)"
+contains "9.9.9" "$CHECK_MSG" && ok "and it still reports the version it saw" ||
+    bad "and it still reports the version it saw"
+
+# A checksum that does not match is refused the same way, and this is the case
+# that a corrupted mirror produces.
+printf '{"version":"9.9.9","binary_url":"file:///dev/null","binary_sha256":"%s"}\n' \
+    "$(printf 'not the file' | sha256sum | cut -d' ' -f1)" > "$ROOTDIR/manifest.json"
+expect_ok "a mismatched checksum does not crash" "$TOOL" auto --once
+contains "checksum mismatch" "$CHECK_MSG" && ok "a wrong checksum is refused" ||
+    bad "a wrong checksum is refused ($CHECK_MSG)"
+
+cat > "$ROOTDIR/manifest.json" <<'EOF'
+{"version":"9.9.9","binary_url":"file:///dev/null","binary_sha256":""}
+EOF
+export ZMRIG_OS_MANIFEST_URL="file://$ROOTDIR/manifest.json"
 
 # An older manifest is not an update in either direction.
 printf '{"version":"0.0.1"}\n' > "$ROOTDIR/manifest.json"
@@ -575,6 +618,35 @@ contains "0FC63DAF-8483-4772-8E79-3D69D8477DE4" "$pts" &&
     ok "there is a Linux root partition" || bad "there is a Linux root partition"
 contains "start=2048, size=2048" "$pts" && ok "the BIOS boot partition is placed first" ||
     bad "the BIOS boot partition is placed first"
+
+# The installed menu is what decides whether `zmrig-os isolate` and `zmrig-os
+# slot` do anything. It shipped without `${zmrig_extra}` for a while: the tool
+# wrote isolcpus= into the environment block, printed "next boot: isolcpus=4-7",
+# and the boot ignored it, so the rig mined on every core while looking isolated.
+mkdir -p "$ROOTDIR/grubroot/zmrig"
+: > "$ROOTDIR/grubroot/zmrig/rootfs-a.squashfs"
+cfg=$(fn grub_cfg_for "$ROOTDIR/grubroot" 9.9.9)
+contains '${zmrig_extra}' "$cfg" && ok 'the installed menu passes ${zmrig_extra} to the kernel' ||
+    bad "the installed menu passes \${zmrig_extra} to the kernel"
+contains 'load_env' "$cfg" && ok "it loads the environment block" || bad "it loads the environment block"
+contains 'set zmrig_extra=""' "$cfg" && ok "zmrig_extra is defined even without a block" ||
+    bad "zmrig_extra is defined even without a block"
+contains 'set default="${zmrig_slot}"' "$cfg" && ok "the slot from the block chooses the entry" ||
+    bad "the slot from the block chooses the entry"
+contains 'max-a' "$cfg" && ok "slot a has a max-hashrate entry" || bad "slot a has a max entry"
+contains 'safe-a' "$cfg" && ok "slot a has a safe entry" || bad "slot a has a safe entry"
+case "$cfg" in *max-b*) bad "slot b is offered before it exists" ;; *) ok "slot b is not offered before it exists" ;; esac
+: > "$ROOTDIR/grubroot/zmrig/rootfs-b.squashfs"
+cfg=$(fn grub_cfg_for "$ROOTDIR/grubroot" 9.9.9)
+contains 'max-b' "$cfg" && ok "slot b appears once an update writes it" || bad "slot b appears once an update writes it"
+contains '/boot/initramfs-b.gz' "$cfg" && ok "and it points at its own initramfs" ||
+    bad "and it points at its own initramfs"
+
+# The fresh environment block: 1024 bytes, with the slot in it.
+fn grubenv_init "$ROOTDIR/grubenv.new"
+[ "$(wc -c < "$ROOTDIR/grubenv.new" | tr -d ' ')" = "1024" ] &&
+    ok "a new install writes a 1024-byte environment block" || bad "the block is the wrong size"
+grep -q '^zmrig_slot=a$' "$ROOTDIR/grubenv.new" && ok "and it starts on slot a" || bad "and it starts on slot a"
 
 plan=$(fn install_plan /dev/sda /m/vmlinuz /m/initramfs.gz /m/rootfs.squashfs /dev/sda2 /dev/sda3)
 contains "BOOTX64.EFI" "$plan" && ok "the plan installs the EFI loader" || bad "the plan installs the EFI loader"
@@ -618,6 +690,16 @@ for cpu in $(seq 0 15); do
         printf '%s,%s\n' "$((cpu - 8))" "$cpu" > "$FAKESYS/devices/system/cpu/cpu$cpu/topology/thread_siblings_list"
     fi
 done
+
+# A sensor in the fake /sys, so the status line has a real reading. The number
+# the control plane receives is checked in os/tests/fleet.sh, where the payload
+# actually goes to the server.
+mkdir -p "$FAKESYS/class/hwmon/hwmon3"
+printf 'k10temp\n' > "$FAKESYS/class/hwmon/hwmon3/name"
+printf '68000\n' > "$FAKESYS/class/hwmon/hwmon3/temp1_input"
+expect_ok "status reads the fake sensor" env ZMRIG_OS_SYS="$FAKESYS" "$TOOL" status
+contains "68 C" "$CHECK_MSG" && ok "the status line shows the temperature" ||
+    bad "the status line shows the temperature"
 
 expect_ok "topology counts cores, not hyperthreads" env ZMRIG_OS_SYS="$FAKESYS" "$TOOL" topology
 contains "8 physical, 16 threads" "$CHECK_MSG" && ok "8 cores on a 16-thread machine" || bad "8 cores on a 16-thread machine"
