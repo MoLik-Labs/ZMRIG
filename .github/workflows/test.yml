@@ -189,7 +189,12 @@ jobs:
         uses: actions/checkout@v5
 
       - name: The committed site is there
-        run: test -f web/index.html && test -f web/download/index.html
+        run: |
+          # `trailingSlash: false` in site/docusaurus.config.js, so a page is
+          # written as download.html and answered at /download by the host.
+          test -f web/index.html
+          test -f web/download.html
+          test -f web/vi/index.html
 
       - name: Routing, health, download, enrolment
         run: node --test host/tests/*.test.js
