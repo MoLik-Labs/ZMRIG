@@ -456,8 +456,8 @@ jobs:
           NOTES=$(mktemp)
 
           {
-            printf '**ZMRIG OS %s** — bootable live image, one file per instruction level, built from `%s`.\n\n' \
-              "${{ steps.tag.outputs.version }}" "${GITHUB_SHA:0:8}"
+            printf '**ZMRIG OS %s** — bootable live image, built from [`%s`](https://github.com/%s/commit/%s).\n\n' \
+              "${{ steps.tag.outputs.version }}" "${GITHUB_SHA:0:8}" "$GITHUB_REPOSITORY" "$GITHUB_SHA"
             cat <<'EOF'
           Write it to a stick and boot it:
 
@@ -465,32 +465,33 @@ jobs:
           dd if=zmrig-os-*.iso of=/dev/sdX bs=4M status=progress conv=fsync
           ```
 
-          Check the download before writing it — every image has its checksum next
-          to it:
+          Check the download first — every image has its checksum next to it:
 
           ```
           sha256sum -c zmrig-os-*.iso.sha256
           ```
 
-          The wizard asks for your wallet on the console on the first boot, or pass
-          `zmrig.os.wallet=4...` on the kernel command line. Nothing is installed to
-          any disk, and nothing on the stick is modified.
+          The wizard asks for your wallet on the console on the first boot, or
+          pass `zmrig.os.wallet=4...` on the kernel command line. Nothing is
+          installed to any disk, and nothing on the stick is modified.
 
-          | | |
+          | file | what it is |
           | --- | --- |
-          | `x86-64-v3` | needs AVX2 and AES-NI — any x86 CPU since about 2015 |
-          | `x86-64-v2` | runs on everything since Nehalem |
+          | `x86-64-v3` (recommended) | AVX2 and AES-NI — any x86 CPU since about 2015 |
+          | `x86-64-v2` | everything since Nehalem |
           | `zmrig-os-beta-*.json` | the manifest `zmrig-os update` reads |
 
-          Only the images of this version are attached: the rolling tag replaces
-          them in place, so a link never points at a build that has been replaced.
+          Only the current version is attached: the rolling tag replaces its files
+          in place, so a download link never points at a build that was replaced.
           EOF
             echo
             echo '## Downloads'
             echo
             echo '| image | size | sha256 |'
             echo '| --- | ---: | --- |'
-            for iso in dist/*.iso; do
+            # v3 first: it is the faster build, and the one almost every rig
+            # wants. `sort -r` puts v3 above v2 without hard-coding the level.
+            for iso in $(ls dist/*.iso | sort -r); do
               name=$(basename "$iso")
               sum=$(cut -d' ' -f1 "$iso.sha256")
               echo "| [$name](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${name}) | $(du -h "$iso" | cut -f1) | \`$sum\` |"
@@ -514,7 +515,16 @@ jobs:
             echo '`/iso/v2` and `/iso/beta` to the newest asset on each channel.'
           } > "$NOTES"
 
-          gh release edit "$TAG" --notes-file "$NOTES"
+          # The title names the version, because the tag does not: `os-beta` is
+          # rolling, so anybody looking at the release list sees which build is
+          # in it without opening it.
+          if [ "${{ steps.tag.outputs.prerelease }}" = "true" ]; then
+            gh release edit "$TAG" --title "ZMRIG OS ${{ steps.tag.outputs.version }} (rolling beta)" \
+              --notes-file "$NOTES"
+          else
+            gh release edit "$TAG" --title "ZMRIG OS ${{ steps.tag.outputs.version }}" \
+              --notes-file "$NOTES"
+          fi
 
       - name: Summarise
         run: |
