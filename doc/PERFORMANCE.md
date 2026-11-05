@@ -168,7 +168,11 @@ sudo zmrig-os hugepages off      # stop reserving it (next boot)
 
 `zmrig-os hugepages` writes `default_hugepagesz=1G hugepagesz=1G hugepages=3`
 into the same GRUB environment block `isolate` uses, composing with it rather
-than replacing it. `zmrig --check` prints the pool and what this run would take
+than replacing it. Reserving a gigantic pool **stops the 2 MiB reservation**:
+three 1 GiB pages have already taken 3 GB of contiguous memory, so the initramfs
+skips `/proc/sys/vm/nr_hugepages` for that boot and `zmrig-os tune` passes
+`--hugepages off`. Both say so in the log — the two pools are alternatives, and
+the miner maps whichever one exists. `zmrig --check` prints the pool and what this run would take
 from it, and `doctor` reports it as information, never as a failure.
 
 The gain on top of 2 MiB is small — published RandomX figures are 1–3 %, and it

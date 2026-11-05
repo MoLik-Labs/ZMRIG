@@ -49,6 +49,10 @@ sudo zmrig-os hugepages 1g 3       # dataset Monero là 3 trang; áp dụng lầ
 sudo zmrig-os hugepages off        # thôi đặt trước
 ```
 
+Đặt pool gigantic **thay thế** phần đặt trước 2 MiB chứ không cộng thêm — ba
+trang 1 GiB đã lấy 3 GB bộ nhớ vật lý liền mạch, và miner map pool nào đang có.
+Log lúc boot và `zmrig-os tune` đều nói pool nào đang có hiệu lực.
+
 Trên phần lớn máy ảo, pool không tạo được — ghi `nr_hugepages` dưới
 `hugepages-1048576kB` báo thành công mà vẫn để 0 — và đó không phải lỗi: fallback
 về trang 2 MiB là tự động, và phần lợi ích lớn (4 KiB lên 2 MiB) đã có sẵn — đo

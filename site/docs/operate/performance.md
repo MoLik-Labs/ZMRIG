@@ -49,6 +49,11 @@ sudo zmrig-os hugepages 1g 3       # a Monero dataset is 3 pages; next boot
 sudo zmrig-os hugepages off        # stop reserving it
 ```
 
+Reserving a gigantic pool **replaces** the 2 MiB reservation rather than adding
+to it — three 1 GiB pages have already taken 3 GB of contiguous memory, and the
+miner maps whichever pool exists. The boot log and `zmrig-os tune` both say which
+one is in force.
+
 On most virtual machines the pool cannot be made at all — writing
 `nr_hugepages` under `hugepages-1048576kB` reports success and leaves it at 0 —
 and that is not a fault: the fallback to 2 MiB pages is automatic and the gain
