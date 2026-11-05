@@ -132,8 +132,12 @@ async function main() {
 
   console.log(`\nroot         ${ROOT}`);
   console.log(`concurrency  ${CONCURRENCY}, ${SECONDS}s per path, gzip/brotli offered\n`);
-  console.log('  path                  req/s     p50 ms   p99 ms   MB/s    bytes   encoding');
-  console.log('  --------------------  -------  -------  -------  ------  -------  --------');
+  // The asset path is a content-hashed filename and it is longer than the three
+  // routes, so the column is sized from the data: a fixed width made the table
+  // wrap on the one row that proves the compression.
+  const width = Math.max(20, ...PATHS.map((item) => item.length));
+  console.log(`  ${'path'.padEnd(width)}  req/s     p50 ms   p99 ms   MB/s    bytes   encoding`);
+  console.log(`  ${'-'.repeat(width)}  -------  -------  -------  ------  -------  --------`);
 
   for (const urlPath of PATHS) {
     // One warm-up request per path: the first request to a page allocates and
@@ -141,7 +145,7 @@ async function main() {
     await request(port, urlPath).catch(() => {});
     const row = await measure(port, urlPath);
     console.log(
-      `  ${row.path.padEnd(20)}  ${String(row.rps).padStart(7)}  ${row.p50.padStart(7)}  ` +
+      `  ${row.path.padEnd(width)}  ${String(row.rps).padStart(7)}  ${row.p50.padStart(7)}  ` +
       `${row.p99.padStart(7)}  ${row.mbps.padStart(6)}  ${String(row.bytes).padStart(7)}  ${row.encoding}`,
     );
   }
