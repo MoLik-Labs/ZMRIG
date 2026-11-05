@@ -1212,6 +1212,25 @@ cmd_isolate() {
     fi
 }
 
+# Does the 1 GiB pool reserved at boot already hold everything this run needs?
+#
+# The miner asks for gigantic pages first and falls back to the 2 MiB pool, so a
+# rig with a big enough pool needs no second reservation — and cannot afford one:
+# `hugepages=3` has already taken 3 GB of contiguous memory, and another 2.3 GB
+# of 2 MiB pages on the same machine is how a rig ends up swapping while it mines.
+gigantic_covers() {
+    local giga need
+    giga=$(cat "$SYS/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages" 2>/dev/null || echo 0)
+    case "${giga:-x}" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    [ "$giga" -gt 0 ] || return 1
+    [ "${HUGEPAGES:-}" = "0" ] && return 1
+    need=$(plan_need_mb "$ALGO" "$MODE" "$(core_count)" "$THREADS" 2>/dev/null || echo 0)
+    [ "${need:-0}" -gt 0 ] || return 1
+    [ "$((giga * 1024))" -ge "$need" ]
+}
+
 # The page the miner reads its dataset through.
 #
 # 2 MiB pages are the difference between 855 and 1033 H/s on a two-core box, so
@@ -1465,6 +1484,14 @@ cmd_tune() {
         *[!0-9]*)  huge_args="--hugepages ${HUGEPAGES}" ;;
         *)         huge_args="--hugepages 2M --pages ${HUGEPAGES}" ;;
     esac
+
+    # A gigantic pool that already covers this run must not be topped up with
+    # 2 MiB pages: on a 4 GB box the two reservations together do not fit, and
+    # the one that loses is the one holding the dataset. The miner maps whichever
+    # pool exists, so "leave it alone" is `--hugepages off`.
+    if gigantic_covers; then
+        huge_args="--hugepages off"
+    fi
 
     # NUMA balancing migrates pages while a process runs, which for a uniformly
     # random walk over 2.3 GiB is a stalled hash that buys nothing. In light mode

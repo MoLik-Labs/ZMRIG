@@ -86,6 +86,15 @@ needs, `zmrig-os hugepages 1g 3` writes `default_hugepagesz=1G hugepagesz=1G
 hugepages=3` into the GRUB environment block the next boot reads, and `zmrig-os
 hugepages off` removes it.
 
+Reserving both pools is now impossible, which is the bug this would have
+shipped: `hugepages=3` on the kernel line takes 3 GB of physically contiguous
+memory at boot, and the initramfs would then ask `/proc` for Monero's 1 168 × 2 MiB
+as well — 5.3 GB on a 4 GB machine, with the gigantic pool already held, so the
+second write either fails or wins by pushing the rest of the system into swap
+while the dataset is built. `reserve_pages` in the initramfs and `zmrig-os tune`
+both skip the 2 MiB reservation when the gigantic pool already covers what this
+run needs, and say so in the log.
+
 That block also carries `isolcpus=`, and the writer is now one function
 (`write_boot_params`) that composes both settings, because reserving pages and
 then isolating CPUs used to be two writers to one value — the same class of bug

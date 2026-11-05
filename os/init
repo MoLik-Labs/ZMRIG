@@ -356,7 +356,7 @@ tune_thp() {
 }
 
 reserve_pages() {
-    local mem_mb page_kb need_mb want existing
+    local mem_mb page_kb need_mb want existing giga
 
     [ "$(cat /proc/sys/vm/nr_hugepages 2>/dev/null || echo 0)" != "0" ] && return 0
 
@@ -364,6 +364,21 @@ reserve_pages() {
     page_kb=$(awk '/^Hugepagesize:/ { print $2 }' /proc/meminfo 2>/dev/null || echo 0)
 
     need_mb=$(plan_need_mb "$ALGO_BOOT" "$MODE" "$CORES" "$THREADS_BOOT")
+
+    # A gigantic pool that already covers this run makes the 2 MiB reservation
+    # wrong, not redundant: `hugepages=3` on the kernel line has already taken
+    # 3 GB of physically contiguous memory, and asking /proc for another 2.3 GB
+    # on the same 4 GB box either fails or succeeds by evicting the dataset's
+    # neighbours into swap. Whichever pool the operator reserved at boot is the
+    # one the miner maps.
+    giga=$(cat /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages 2>/dev/null || echo 0)
+    case "${giga:-x}" in
+        ''|*[!0-9]*) giga=0 ;;
+    esac
+    if [ "$giga" -gt 0 ] && [ "$((giga * 1024))" -ge "$need_mb" ]; then
+        log "huge pages: ${giga} x 1 GiB reserved at boot covers the ${need_mb} MB this run needs; not reserving 2 MiB pages as well"
+        return 0
+    fi
     want=$(plan_pages "$ALGO_BOOT" "$MODE" "$CORES" "$mem_mb" "$page_kb" "$THREADS_BOOT" "$HUGEPAGES")
 
     if [ "${want:-0}" -le 0 ]; then

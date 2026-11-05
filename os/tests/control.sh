@@ -749,6 +749,34 @@ grep -q 'HUGEPAGES_1G=""' "$ROOTDIR/etc/zmrig/os.conf" &&
 out=$("$TOOL" hugepages 1g 2>&1 || true)
 contains "usage" "$out" && ok "a count is required for 1g" || bad "a count is required for 1g (got: $out)"
 
+# The two reservations do not fit together. A rig that reserved 3 x 1 GiB has
+# already taken 3 GB of contiguous memory; topping that up with Monero's 2.3 GB
+# of 2 MiB pages is how a 4 GB machine ends up swapping while it mines. The
+# tuner has to leave the pool alone, and the decision is pure: it reads one
+# number and one size.
+mkdir -p "$ROOTDIR/fakesys/kernel/mm/hugepages/hugepages-1048576kB"
+printf '3\n' > "$ROOTDIR/fakesys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages"
+covered=$(ZMRIG_OS_NO_MAIN=1 ZMRIG_OS_ROOT="$ROOTDIR" ZMRIG_OS_SYS="$ROOTDIR/fakesys" sh -c '
+    . "$1"
+    ALGO=rx/0; MODE=max; THREADS=2; HUGEPAGES=""
+    core_count() { printf 2; }
+    plan_need_mb() { printf 2336; }
+    gigantic_covers && echo yes || echo no
+' _ "$TOOL" 2>&1 | tail -1)
+[ "$covered" = "yes" ] && ok "3 GiB of 1 GiB pages covers a Monero run" ||
+    bad "3 GiB of 1 GiB pages covers a Monero run (got: $covered)"
+
+printf '1\n' > "$ROOTDIR/fakesys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages"
+covered=$(ZMRIG_OS_NO_MAIN=1 ZMRIG_OS_ROOT="$ROOTDIR" ZMRIG_OS_SYS="$ROOTDIR/fakesys" sh -c '
+    . "$1"
+    ALGO=rx/0; MODE=max; THREADS=2; HUGEPAGES=""
+    core_count() { printf 2; }
+    plan_need_mb() { printf 2336; }
+    gigantic_covers && echo yes || echo no
+' _ "$TOOL" 2>&1 | tail -1)
+[ "$covered" = "no" ] && ok "1 GiB of 1 GiB pages does not cover a 2336 MB run" ||
+    bad "1 GiB does not cover 2336 MB (got: $covered)"
+
 # ---------------------------------------------------------------- doctor
 # The doctor is expected to fail on an unconfigured sandbox (no binary on this
 # path, no MSR); what matters is that it runs and reports every check.
