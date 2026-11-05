@@ -9,7 +9,7 @@ image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 RandomX là proof-of-work phụ thuộc bộ nhớ: vòng hash đọc dataset theo thứ tự
 ngẫu nhiên. Gần như mọi thứ quan trọng suy ra từ đúng một câu đó.
 
-## Ba đòn bẩy thật sự
+## Bốn đòn bẩy thật sự
 
 **Huge pages.** Mức lợi lớn nhất và rõ nhất. Trang 4 KiB làm mỗi vài lần truy cập
 dataset lại thành một TLB miss. Có hai cách có trang 2 MiB và miner nói rõ nó
@@ -75,6 +75,19 @@ trên coin mà nó đào được.
 máy test, hai thread trên hai vCPU cho 808–817 H/s, một thread 408 H/s, và bốn
 thread trên hai core 798–801 H/s — chia quá số core không được gì. SMT thường
 thêm 5–15 % hashrate với 30–40 % điện hơn, nên profile `watt` bỏ nó.
+
+**Preset MSR.** Tắt bộ dò trước phần cứng của CPU chỉ tốn một lần ghi thanh ghi,
+và đây là đòn bẩy duy nhất không miễn phí: cần root và module `msr`. RandomX đi
+trong dataset một cách ngẫu nhiên, nên bộ dò đoán sai và đốt băng thông bộ nhớ cho
+những dòng không ai cần. Mức tăng được công bố là **5–15 %** trên Zen và ít hơn
+trên Intel; nó **chưa được đo trên máy này**, và con VM 4 lõi dùng để viết tài
+liệu này không có MSR passthrough.
+
+Từ 6.48 nó **bật mặc định** (`auto`): miner tự dò, áp preset khi máy chịu được, và
+in đúng một dòng — trong log và trong `--check`. `--no-msr` là cách giữ
+`/dev/cpu/*` không bị đụng tới, chế độ `safe` luôn làm vậy, còn máy đã cài ZMRIG OS
+thì đã có root sẵn, nên preset đơn giản là được áp. Giá trị gốc được lưu và trả
+lại khi thoát.
 
 ## Hai thứ không có tác dụng
 

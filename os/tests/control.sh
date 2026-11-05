@@ -87,6 +87,22 @@ contains "-u $WALLET" "$ARGS" && ok "args carries the wallet" || bad "args carri
 contains "--donate-level 3" "$ARGS" && ok "args keeps the 3 % fee visible" || bad "args keeps the 3 % fee visible"
 contains "--profile free" "$ARGS" && ok "max mode asks for the free profile" || bad "max mode asks for the free profile"
 contains "--msr" "$ARGS" && bad "msr is enabled without hardware (sandbox has no /dev/cpu/0/msr)" || ok "msr stays off where it cannot work"
+# `MSR=auto` is the default and it says nothing either way: the miner's probe
+# knows whether this CPU has a preset, which a presence test on a path cannot.
+contains "--no-msr" "$ARGS" && bad "auto decides for the miner instead of letting it decide" ||
+    ok "auto leaves the MSR decision to the miner"
+
+# ...unless the mode is safe, which never writes a register in any setting.
+old_msr=$(sed -n 's/^MSR="\(.*\)"$/\1/p' "$ROOTDIR/etc/zmrig/os.conf" | tail -1)
+sed -i 's/^MSR=.*/MSR="on"/' "$ROOTDIR/etc/zmrig/os.conf"
+"$TOOL" mode max >/dev/null 2>&1
+expect_ok "args with MSR=on" "$TOOL" args
+contains "--msr" "$CHECK_MSG" && ok "MSR=on asks for the preset" || bad "MSR=on asks for the preset"
+"$TOOL" mode safe >/dev/null 2>&1
+expect_ok "args with MSR=on in safe mode" "$TOOL" args
+contains "--no-msr" "$CHECK_MSG" && ok "safe overrides MSR=on" || bad "safe overrides MSR=on"
+sed -i "s/^MSR=.*/MSR=\"${old_msr:-auto}\"/" "$ROOTDIR/etc/zmrig/os.conf"
+"$TOOL" mode max >/dev/null 2>&1
 contains "--log-file" "$ARGS" && ok "args keeps a log file" || bad "args keeps a log file"
 
 "$TOOL" mode eco >/dev/null 2>&1

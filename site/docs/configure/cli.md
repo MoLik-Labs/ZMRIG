@@ -181,8 +181,14 @@ config ok
   mode    auto, huge pages on, jit on
   memory  rx/0 maps 2336 MB, 1168 pages of 2 MiB: no pages reserved; transparent huge pages collapse the mapping instead
   thp     madvise (default): the hint this miner sets is honoured, so no root step is needed
-  msr     intel preset; reading /dev/cpu/0/msr needs root (off: --msr is worth 5-15% on Zen 3/4 …)
+  msr     intel preset; reading /dev/cpu/0/msr needs root (auto: the preset is skipped here; --msr tries anyway)
 ```
+
+The `msr` line is the answer, not a nag: the prefetcher-off preset is worth
+**5–15 %** on bare metal, and since 6.48 it is applied **by itself** when the
+machine can take it (`auto`). What the parentheses say is which of three states
+this run is in — `auto: …` (decided by the probe), `on: --msr` (asked for),
+`off: --no-msr` (refused, which a config with `"msr": false` also does).
 
 The `memory` line is the coin's own size — `panthera maps 192 MB, 96 pages` —
 and the `thp` line answers the question it raises: `madvise` and `always` mean

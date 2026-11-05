@@ -16,6 +16,11 @@ THREADS="auto"
 # is a setting, not a rule: 0 turns it off, 1 to 10 are all accepted, and
 # `zmrig-os doctor` prints the value this machine will actually run with.
 DONATE="3"
+
+# The RandomX MSR preset: prefetchers off, worth 5-15 % on bare metal and nothing
+# in a virtual machine. auto = the miner decides (it knows whether this CPU has a
+# preset and whether /dev/cpu/0/msr answers), on = always ask, off = never open
+# /dev/cpu. `safe` mode never writes these registers whatever this says.
 MSR="auto"
 API_PORT="0"
 API_HOST="127.0.0.1"

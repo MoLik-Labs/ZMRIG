@@ -65,6 +65,31 @@ it. The automatic path now uses `verify_sha_required` and says so in one line;
 the interactive paths keep the optional behaviour, where an operator is present
 to decide.
 
+## The MSR preset is no longer opt-in
+
+Disabling the CPU's hardware prefetchers is worth 5-15 % on bare metal, and it
+was behind a flag almost nobody passed: `--msr` had to be typed, `oneclick.sh`
+wrote `wrmsr: true` and an appliance user got it only if `MSR=on`. The default is
+now `auto`, which probes the machine the way `--check` always did — is there a
+preset for this CPU, does `/dev/cpu/0/msr` answer, can it be written — and then
+applies the preset or prints one line saying why not. Nothing is written on a
+machine that cannot take it, and the old values are still restored on exit.
+
+`--no-msr`, `"msr": false` and `MSR="off"` all still mean what they said; `safe`
+mode never touches a register whatever the setting is. `oneclick.sh` and
+`config/performance.json` now write `"msr": "auto"` instead of `"wrmsr": true`,
+so a config file copied between a laptop and a VPS stops promising a register
+write to whichever machine cannot do it.
+
+## Two settings the image was missing
+
+`scripts/tune-linux.sh` has set `kernel.numa_balancing=0` and
+`transparent_hugepage/defrag=defer` since 6.30. The appliance did neither: an
+installed rig was the one place NUMA balancing stayed on, migrating pages of a
+dataset that is walked uniformly at random, and khugepaged was free to start
+direct compaction against the threads building it. The sysctl file declares the
+first and the initramfs sets the second, before the dataset exists.
+
 ## Also
 
 - The site's own title and footer said "1 % developer fee" a release after the

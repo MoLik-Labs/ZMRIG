@@ -409,13 +409,31 @@ your electricity price, instead of with this table.
 
 ## 3. MSR mod ("HASHRATE WILL BE LOW")
 
-`randomx.rdmsr` / `randomx.wrmsr` are already `true`. What is missing on most
-systems is permission to use them:
+Since 6.48 the preset is no longer opt-in: the default is `auto`. Before doing
+anything the miner probes the machine — does this CPU have a preset, does
+`/dev/cpu/0/msr` answer, and can it be written — and then either applies it or
+prints one line saying why not. `--check` prints the same line, so the answer is
+available before a mining session starts:
+
+```
+  msr     intel preset; reading /dev/cpu/0/msr needs root (auto: the preset is skipped here; --msr tries anyway)
+```
+
+| Setting | What happens |
+| --- | --- |
+| *(nothing)* | `auto`: applied when the machine can take it, one log line either way |
+| `--msr` | try anyway; a VM without passthrough gets a warning and keeps mining |
+| `--no-msr` | never open `/dev/cpu/*` — for containers and for a host that must stay untouched |
+| `"msr": false` in the config | the same as `--no-msr`; a config is an instruction, not a default |
+| `MSR="off"` in `os.conf` (appliance) | the same, and `safe` mode does it regardless of the setting |
+
+What is still missing on most systems is permission, which an appliance has and a
+desktop usually does not:
 
 ```bash
 sudo modprobe msr
 ls -l /dev/cpu/0/msr           # must exist
-sudo ./build/xmrig …           # start as root, or grant CAP_SYS_RAWIO
+sudo ./zmrig …                 # or grant CAP_SYS_RAWIO
 ```
 
 Intel preset: `MSR 0x1a4 = 0xf` (disable L2/L1 prefetchers).
@@ -571,7 +589,7 @@ good compromise on a single rig, `0` lets the pool switch as fast as it wants.
   "randomx": {
     "mode": "auto",
     "rdmsr": true,
-    "wrmsr": true,
+    "msr": "auto",
     "numa": true,
     "scratchpad_prefetch_mode": 1
   },

@@ -175,8 +175,14 @@ config ok
   mode    auto, huge pages on, jit on
   memory  rx/0 maps 2336 MB, 1168 pages of 2 MiB: no pages reserved; transparent huge pages collapse the mapping instead
   thp     madvise (default): the hint this miner sets is honoured, so no root step is needed
-  msr     intel preset; reading /dev/cpu/0/msr needs root (off: --msr is worth 5-15% on Zen 3/4 …)
+  msr     intel preset; reading /dev/cpu/0/msr needs root (auto: the preset is skipped here; --msr tries anyway)
 ```
+
+Dòng `msr` là câu trả lời, không phải lời nhắc: preset tắt prefetcher đáng
+**5–15 %** trên máy thật, và từ 6.48 nó được áp **tự động** khi máy chịu được
+(`auto`). Phần trong ngoặc cho biết lần chạy này đang ở trạng thái nào —
+`auto: …` (do bước dò quyết định), `on: --msr` (bạn yêu cầu), `off: --no-msr`
+(bị từ chối, và config có `"msr": false` cũng vậy).
 
 Dòng `memory` là cỡ của chính coin đó — `panthera maps 192 MB, 96 pages` — và
 dòng `thp` trả lời câu hỏi mà nó đặt ra: `madvise` và `always` nghĩa là kernel

@@ -331,10 +331,28 @@ tune_thp() {
     local policy="$1" file=/sys/kernel/mm/transparent_hugepage/enabled
     [ -w "$file" ] || return 0
     case "$(cat "$file" 2>/dev/null)" in
-        *"[$policy]"*) return 0 ;;
+        *"[$policy]"*) : ;;
+        *)
+            printf '%s' "$policy" > "$file" 2>/dev/null || true
+            log "transparent huge pages: ${policy}"
+            ;;
     esac
-    printf '%s' "$policy" > "$file" 2>/dev/null || true
-    log "transparent huge pages: ${policy}"
+
+    # Defragmentation is the half nobody remembers, and it is set here rather
+    # than left to `zmrig-os tune` because the miner's 2.3 GiB dataset is built
+    # on the first start: with `always`, khugepaged and direct compaction run
+    # whenever a page could be merged, which is work taken from the seeding
+    # threads at the exact moment they need the memory. `defer` keeps the
+    # merging without the stalls. Absent on older kernels, so not fatal.
+    if [ -w /sys/kernel/mm/transparent_hugepage/defrag ]; then
+        case "$(cat /sys/kernel/mm/transparent_hugepage/defrag 2>/dev/null)" in
+            *"[defer]"*) : ;;
+            *)
+                printf 'defer' > /sys/kernel/mm/transparent_hugepage/defrag 2>/dev/null &&
+                    log "transparent huge pages: defrag deferred (no compaction stalls while the dataset is built)"
+                ;;
+        esac
+    fi
 }
 
 reserve_pages() {

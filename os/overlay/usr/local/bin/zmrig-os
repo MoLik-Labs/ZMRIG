@@ -645,10 +645,22 @@ build_args() {
         [ -n "${API_TOKEN:-}" ] && args="$args --http-access-token $API_TOKEN"
     fi
 
+    # The MSR preset (prefetchers off) is worth 5-15 % on bare metal and nothing
+    # in a VM. Three settings, and `auto` is the default:
+    #
+    #   on     ask for it; a machine that cannot take it logs one warning
+    #   off    never, for a host where /dev/cpu must not be opened at all
+    #   auto   say nothing and let the miner's own probe decide: it knows
+    #          whether this CPU *has* a preset as well as whether the device
+    #          answers, which is more than `msr_usable` can tell from a path.
+    #
+    # `safe` never writes a hardware register in any of the three: a mode whose
+    # job is "leave the machine as you found it" cannot change CPU behaviour
+    # behind a thermal governor that measures the result.
     case "$MSR" in
         on)  [ "$MODE" = "safe" ] && args="$args --no-msr" || args="$args --msr" ;;
         off) args="$args --no-msr" ;;
-        auto) msr_usable && args="$args --msr" || args="$args --no-msr" ;;
+        auto) [ "$MODE" = "safe" ] && args="$args --no-msr" || : ;;
     esac
 
     # Pinning also protects the thread count chosen above: without it the

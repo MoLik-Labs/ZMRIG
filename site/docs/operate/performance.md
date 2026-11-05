@@ -9,7 +9,7 @@ image: https://molik-labs.github.io/ZMRIG/img/og-en.png
 RandomX is a memory-bound proof of work: the hash loop reads a dataset in a
 random order. Almost everything that matters follows from that one sentence.
 
-## The three levers that matter
+## The four levers that matter
 
 **Huge pages.** The largest and most obvious gain. A 4 KiB page size makes the
 dataset walk a TLB miss every few accesses. There are two ways to get 2 MiB
@@ -76,6 +76,19 @@ dataset is how a 512 MB VPS ends up refusing to start on a coin it can mine.
 host, two threads on two vCPUs gave 808–817 H/s, one thread 408 H/s, and four
 threads on two cores 798–801 H/s — oversubscribing buys nothing. SMT usually adds
 5–15 % hashrate for 30–40 % more power, which is why the `watt` profile drops it.
+
+**The MSR preset.** Disabling the CPU's hardware prefetchers costs one register
+write and is the one lever that is not free: it needs root and the `msr` module.
+RandomX walks its dataset at random, so the prefetchers guess wrong and burn
+memory bandwidth on lines nobody asked for. The published gain is **5–15 %** on
+Zen and a smaller number on Intel; it was not measured on this host, and the
+4-core VM this documentation was built on has no MSR passthrough at all.
+
+Since 6.48 it is **on by default** (`auto`): the miner probes, applies the preset
+when the machine can take it, and prints one line either way — in the log and in
+`--check`. `--no-msr` is the way to keep `/dev/cpu/*` untouched, `safe` mode does
+it regardless, and an appliance has root already, so on an installed rig the
+preset is simply applied. Original values are saved and restored on exit.
 
 ## The two that do not
 

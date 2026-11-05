@@ -1222,7 +1222,25 @@ fn mergeOptions(allocator: std.mem.Allocator, base: *options.Options, extra: *op
 /// Applies the RandomX MSR preset when the user asked for it. Returns true when
 /// the values were written (so the caller knows there is something to restore).
 fn applyMsr(opts: *const options.Options, logger: *log.Logger) bool {
-    if (!opts.msr) return false;
+    switch (opts.msr) {
+        .off => return false,
+        .on => {},
+        .auto => {
+            // Nothing to decide unless the machine can actually take it. The
+            // probe reads one register and reports why not, which is the same
+            // sentence a user needs when they ask `--check`; doing it here
+            // means `auto` never logs a scary warning on a container host.
+            var probe_buf: [192]u8 = undefined;
+            @memset(&probe_buf, 0);
+            const probe_rc = api.xmo_msr_probe(&probe_buf, probe_buf.len);
+            const probe_text = probe_buf[0..std.mem.indexOfScalar(u8, &probe_buf, 0) orelse probe_buf.len];
+            if (probe_rc != 0) {
+                logger.info("msr: not applying the preset by itself ({s}); --msr tries anyway", .{probe_text});
+                return false;
+            }
+            logger.info("msr: {s}", .{probe_text});
+        },
+    }
 
     var report_buf: [192]u8 = undefined;
     @memset(&report_buf, 0);
@@ -1423,10 +1441,17 @@ fn printConfigSummary(opts: *const options.Options) !void {
 
     // MSR is read-only here: probe the first CPU, never write during --check.
     var msr_buf: [192]u8 = undefined;
-    _ = api.xmo_msr_probe(&msr_buf, msr_buf.len);
+    const msr_rc = api.xmo_msr_probe(&msr_buf, msr_buf.len);
     try out.print("  msr     {s} ({s})\n", .{
         msr_buf[0..std.mem.indexOfScalar(u8, &msr_buf, 0) orelse msr_buf.len],
-        if (opts.msr) "on" else "off: --msr is worth 5-15% on Zen 3/4 (measured elsewhere, not on this host)",
+        switch (opts.msr) {
+            .off => "off: --no-msr, or 'msr: false' in the config",
+            .on => "on: --msr",
+            .auto => if (msr_rc == 0)
+                "auto: this machine can take it, so the preset is applied"
+            else
+                "auto: the preset is skipped here; --msr tries anyway",
+        },
     });
 }
 

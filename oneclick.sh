@@ -1024,9 +1024,13 @@ write_config() {
     local http_token="null"
     [ -n "$NET_HTTP_TOKEN" ] && http_token="\"${NET_HTTP_TOKEN}\""
 
-    # zmrig keys (the C++ engine ignores them). MSR is on by default here: the
-    # service runs as root and the miner restores the old values on exit.
-    local msr_flag="true"
+    # zmrig keys (the C++ engine ignores them). The MSR preset is worth 5-15 % on
+    # bare metal and nothing in a container, so the default is the string
+    # "auto": the miner probes this machine and decides, and the old register
+    # values are restored on exit either way. `--msr` writes true (try anyway),
+    # `--no-msr` writes false.
+    local msr_flag='"auto"'
+    [ "$MSR_MODE" = "on" ] && msr_flag="true"
     [ "$MSR_MODE" = "off" ] && msr_flag="false"
 
     local nicehash_flag="false"
@@ -1174,7 +1178,7 @@ write_config() {
         "init-avx2": -1,
         "mode": "auto",
         "rdmsr": true,
-        "wrmsr": ${msr_flag},
+        "msr": ${msr_flag},
         "cache_qos": false,
         "numa": true,
         "scratchpad_prefetch_mode": 1

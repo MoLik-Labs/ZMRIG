@@ -34,7 +34,7 @@ it did; see the changelog.)
   "randomx": {
     "mode": "auto",
     "rdmsr": true,
-    "wrmsr": true,
+    "msr": "auto",
     "numa": true,
     "scratchpad_prefetch_mode": 1
   },
@@ -96,6 +96,7 @@ for both.
 | `http.port` / `http.host` | number / string | 18080 / 127.0.0.1 | |
 | `http.access-token` | string | null | require a Bearer token |
 | `randomx.mode` | `auto`/`fast`/`light` | auto | `fast` builds the 2 GiB dataset |
+| `randomx.msr` | `"auto"` / true / false | `"auto"` | the prefetcher-off preset: `auto` asks the machine first, worth 5-15 % on bare metal; `wrmsr` with a bool is the same key |
 | `cpu.threads` | number or array | cache-aware | an array is one entry per thread |
 | `cpu.huge-pages` | bool | true | |
 | `cpu.huge-pages-jit` | bool | true | |

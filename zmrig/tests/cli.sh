@@ -101,6 +101,37 @@ else
     record FAIL "--check does not touch nr_hugepages" "$before -> $after"
 fi
 
+# -- the MSR preset applies itself, and --no-msr really stops it ----------
+# Prefetchers off is worth 5-15 % on bare metal, so it is not opt-in any more:
+# by default the miner probes the machine and says what it decided. `--no-msr`
+# is the instruction, and it has to be obeyed even on a host that could take it
+# (a container passing /dev/cpu through, or a user who wants the CPU untouched).
+msr_auto=$("$BIN" -o pool.example.com:3333 -u "$WALLET" --check 2>/dev/null | grep -E '^  msr ' | head -1)
+case "$msr_auto" in
+    *"auto:"*) record PASS "the MSR preset decides by itself by default" "$msr_auto" ;;
+    *)         record FAIL "the MSR preset decides by itself by default" "got: ${msr_auto:-nothing}" ;;
+esac
+
+msr_off=$("$BIN" -o pool.example.com:3333 -u "$WALLET" --no-msr --check 2>/dev/null | grep -E '^  msr ' | head -1)
+case "$msr_off" in
+    *"off: --no-msr"*) record PASS "--no-msr is reported as an instruction" "$msr_off" ;;
+    *)                 record FAIL "--no-msr is reported as an instruction" "got: ${msr_off:-nothing}" ;;
+esac
+
+msr_on=$("$BIN" -o pool.example.com:3333 -u "$WALLET" --msr --check 2>/dev/null | grep -E '^  msr ' | head -1)
+case "$msr_on" in
+    *"on: --msr"*) record PASS "--msr is reported as an instruction" "$msr_on" ;;
+    *)             record FAIL "--msr is reported as an instruction" "got: ${msr_on:-nothing}" ;;
+esac
+
+# XMRig's own spelling still selects the same thing: a script that passes
+# --randomx-wrmsr must not end up with the automatic decision instead.
+wrmsr=$("$BIN" -o pool.example.com:3333 -u "$WALLET" --randomx-wrmsr --check 2>/dev/null | grep -E '^  msr ' | head -1)
+case "$wrmsr" in
+    *"on: --msr"*) record PASS "--randomx-wrmsr means the same as --msr" "$wrmsr" ;;
+    *)             record FAIL "--randomx-wrmsr means the same as --msr" "got: ${wrmsr:-nothing}" ;;
+esac
+
 # -- the memory --check reports must belong to the coin -------------------
 # Both engines hash seven coins and the coins are not the same size. Reporting
 # Monero's 2336 MB for a Panthera run is how a 512 MB VPS is told it cannot do

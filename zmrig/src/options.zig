@@ -165,6 +165,12 @@ pub const ProfileSetting = enum {
     }
 };
 
+/// What to do about the RandomX MSR preset: prefetchers off is worth 5-15% on
+/// Zen and Intel bare metal, and exactly nothing in a VM that does not pass the
+/// registers through. `auto` is the default, so the win is not left on the table
+/// by somebody who did not read the help; `--no-msr` is how you stop it.
+pub const MsrMode = enum { auto, on, off };
+
 pub const Options = struct {
     pools: std.ArrayListUnmanaged(Pool) = .{},
     seen: Seen = .{},
@@ -237,9 +243,11 @@ pub const Options = struct {
     autotune_seconds: u32 = 8,
     /// Use the AVX2 dataset initialiser (faster seeding, identical hashes).
     optimized_init: bool = true,
-    /// Apply the RandomX MSR preset (prefetchers off). Needs root; off by
-    /// default because it writes to hardware registers.
-    msr: bool = false,
+    /// Apply the RandomX MSR preset (prefetchers off). `auto`, the default,
+    /// does it when the machine can take it: root, bare metal, and an MSR
+    /// device the kernel answers on. Anything else is a logged no-op, because
+    /// writing nobody's registers is the only safe thing to do in a container.
+    msr: MsrMode = .auto,
     /// Put the old MSR values back on exit.
     msr_restore: bool = true,
     /// `--donate-level=N`: percent of Monero mining time spent on the
@@ -697,10 +705,10 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseEr
             opts.auto_hugepages = false;
             opts.seen.auto_hugepages = true;
         } else if (std.mem.eql(u8, name, "--msr")) {
-            opts.msr = true;
+            opts.msr = .on;
             opts.seen.msr = true;
         } else if (std.mem.eql(u8, name, "--no-msr")) {
-            opts.msr = false;
+            opts.msr = .off;
             opts.seen.msr = true;
         } else if (std.mem.eql(u8, name, "--no-msr-restore")) {
             opts.msr_restore = false;
@@ -769,11 +777,11 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseEr
             if (inline_value) |v| {
                 if (!std.mem.eql(u8, v, "1")) return error.UnknownOption;
             }
-            opts.msr = true;
+            opts.msr = .on;
         } else if (std.mem.eql(u8, name, "--randomx-no-rdmsr") or std.mem.eql(u8, name, "--no-rdmsr")) {
             opts.msr_restore = false;
         } else if (std.mem.eql(u8, name, "--no-wrmsr")) {
-            opts.msr = false;
+            opts.msr = .off;
         } else if (std.mem.eql(u8, name, "--donate-level")) {
             // Same spelling and meaning as XMRig: percent of mining time that
             // goes to the developer. 0 turns it off entirely.
@@ -1280,13 +1288,27 @@ pub fn parseConfigFile(allocator: std.mem.Allocator, opts: *Options, path: []con
                 if (std.mem.eql(u8, mode, "auto")) opts.mode = .auto;
             }
             if (jsonInt(usize, rx, "init")) |v| opts.init_threads = v;
-            if (jsonBool(rx, "msr")) |v| opts.msr = v;
+            // `true`/`false` is XMRig's spelling and means on/off. The string
+            // form exists so a generated config can say what the CLI says:
+            // "auto" leaves the decision to the probe, which is the default and
+            // the only honest answer for a file that may be copied to another
+            // machine.
+            switch (rx.get("msr") orelse .null) {
+                .bool => |v| opts.msr = if (v) .on else .off,
+                .string => |v| opts.msr = if (std.mem.eql(u8, v, "auto"))
+                    .auto
+                else if (std.mem.eql(u8, v, "off") or std.mem.eql(u8, v, "false"))
+                    .off
+                else
+                    .on,
+                else => {},
+            }
             if (jsonBool(rx, "rdmsr")) |v| opts.msr_restore = v;
             // `wrmsr` is a bool or an explicit register array in XMRig. We only
             // support the built-in presets, so an array means "use the preset".
             switch (rx.get("wrmsr") orelse .null) {
-                .bool => |v| opts.msr = v,
-                .array => opts.msr = true,
+                .bool => |v| opts.msr = if (v) .on else .off,
+                .array => opts.msr = .on,
                 else => {},
             }
             if (jsonInt(i32, rx, "scratchpad_prefetch_mode")) |v| opts.scratchpad_prefetch = v;
@@ -1431,7 +1453,7 @@ test "XMRig-compatible flags are accepted and reach options" {
     try testing.expectEqualStrings("xmrig/6.26.0", opts.user_agent.?);
     // The XMRig flag sets the real fee, it is not decoration.
     try testing.expectEqual(@as(u32, 1), opts.donate_percent);
-    try testing.expect(opts.msr);
+    try testing.expectEqual(MsrMode.on, opts.msr);
     try testing.expect(!opts.msr_restore);
 
     // `--donate-level=11` is a typo, not a generous user.
@@ -1484,7 +1506,10 @@ test "an xmrig config.json is read with the keys it uses" {
     try testing.expectEqual(@as(usize, 1), opts.init_threads);
     try testing.expectEqual(@as(i32, 2), opts.scratchpad_prefetch);
     try testing.expect(!opts.optimized_init);
-    try testing.expect(!opts.msr);
+    // `"msr": false` in the config is an instruction, not the default: the
+    // default is `auto`, and a config that says false must not be upgraded back
+    // to `auto` behind the user's back.
+    try testing.expectEqual(MsrMode.off, opts.msr);
     try testing.expect(!opts.msr_restore);
     try testing.expectEqual(@as(usize, 1), opts.pools.items.len);
     try testing.expectEqualStrings("wallet", opts.pools.items[0].user);
