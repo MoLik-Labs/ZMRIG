@@ -51,9 +51,10 @@ sudo zmrig-os hugepages off        # thôi đặt trước
 
 Trên phần lớn máy ảo, pool không tạo được — ghi `nr_hugepages` dưới
 `hugepages-1048576kB` báo thành công mà vẫn để 0 — và đó không phải lỗi: fallback
-về trang 2 MiB là tự động, và phần lợi ích lớn (4 KiB lên 2 MiB) đã có sẵn. Phần
-thêm 1-3 % thì **chưa được đo trong môi trường kiểm thử của dự án này**, vì ở đó
-không đặt được trang 1 GiB nào.
+về trang 2 MiB là tự động, và phần lợi ích lớn (4 KiB lên 2 MiB) đã có sẵn — đo
+trên máy kiểm thử ngày 2026-11-05, `--bench=2000`: **678,1 H/s trên trang 4 KiB so
+với 913,2 H/s khi đã đặt pool 2 MiB (+34,7 %)**. Phần thêm 1-3 % thì **chưa đo được
+trong môi trường đó**, vì ghi vào `nr_hugepages` báo thành công mà pool vẫn 0.
 
 :::warning Đo khi không có huge pages
 Khi đã đặt 1234 trang, RAM thường chỉ còn khoảng 1.2 GB. Chạy `--no-huge-pages`

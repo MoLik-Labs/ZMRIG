@@ -172,10 +172,21 @@ than replacing it. `zmrig --check` prints the pool and what this run would take
 from it, and `doctor` reports it as information, never as a failure.
 
 The gain on top of 2 MiB is small — published RandomX figures are 1–3 %, and it
-has **not been measured in this environment**: no 1 GiB page can be reserved on
-this sandbox, so the code path that uses one has never run here. What has been
-verified is the fallback: with the pool at 0 the mapper falls through to 2 MiB and
-`--check` says so in one line.
+has **not been measured in this environment**: on this sandbox
+`echo 3 > /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages` returns
+success and the pool stays at 0, so the code path that uses a gigantic page has
+never executed here. What has been verified is the fallback and the step below
+it, 2026-11-05, same host, `--bench=2000`, one run each:
+
+| Pages | Startup line | H/s |
+|---|---|---:|
+| none, `--no-huge-pages` | `huge pages off` | 678.1 |
+| 1200 × 2 MiB reserved | `huge pages 2336 MB (explicit, 2 MiB pages)` | **913.2** (+34.7 %) |
+| 1 GiB pool | `… (explicit, 1 GiB pages)` | not measurable here |
+
+The gigantic attempt runs first on every one of those rows and falls through to
+the 2 MiB pool, which is what the `explicit, 2 MiB pages` label proves: the label
+is the page size that *won*, not the one that was asked for.
 
 ### The 2026-11 round: what "THP fallback" actually costs
 

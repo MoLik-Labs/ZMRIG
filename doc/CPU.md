@@ -131,7 +131,13 @@ Enable (`true`) or disable (`false`) CPU backend, by default `true`.
 Enable (`true`) or disable (`false`) huge pages support, by default `true`.
 
 #### `huge-pages-jit`
-Enable (`true`) or disable (`false`) huge pages support for RandomX JIT code, by default `false`. It gives a very small boost on Ryzen CPUs, but hashrate is unstable between launches. Use with caution.
+Huge pages for the RandomX JIT code region, by default **`true`** here — XMRig
+ships it `false` and calls it unstable, which is why the difference is spelled
+out. The JIT writes a few hundred MB of generated code and the interpreter walks
+it in a tight loop; on a rig the region is written once at startup and then only
+read, so the "hashes differ between launches" reputation is about measurement
+noise, not about wrong results. `--no-huge-pages-jit` turns it off. The measured
+effect is inside noise on the test host (`doc/PERFORMANCE.md`, §4).
 
 #### `hw-aes`
 Force enable (`true`) or disable (`false`) hardware AES support. Default value `null` means miner autodetect this feature. Usually don't need change this option, this option useful for some rare cases when miner can't detect hardware AES, but it available. If you force enable this option, but your hardware not support it, miner will crash.

@@ -119,6 +119,11 @@ next deploy that lands the wrong build says so in a JSON field instead of in a
 screenshot. Building with `SITE_BASE_URL=/` still produces a build with nothing
 to rewrite.
 
+A test now follows every link in the committed build (`host/tests/site.test.js`,
+61 pages, 73 distinct same-origin references) and fails on a single 404. It is the
+test that was missing: the build's own links were never fetched by anything, which
+is why a site with no stylesheet passed every check in the repository.
+
 Two smaller things found while measuring it. The warm queue — the files
 compressed in the background after the socket opens — was `every page, then every
 asset`, sliced to 24; the site has 61 pages, so it never contained an asset, and

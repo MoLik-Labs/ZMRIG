@@ -52,9 +52,10 @@ sudo zmrig-os hugepages off        # stop reserving it
 On most virtual machines the pool cannot be made at all — writing
 `nr_hugepages` under `hugepages-1048576kB` reports success and leaves it at 0 —
 and that is not a fault: the fallback to 2 MiB pages is automatic and the gain
-that matters (4 KiB to 2 MiB) is already there. The extra 1-3 % has not been
-measured in this project's test environment, because no 1 GiB page can be
-reserved there.
+that matters (4 KiB to 2 MiB) is already there — measured on the test host on
+2026-11-05, `--bench=2000`, **678.1 H/s on 4 KiB pages against 913.2 H/s with a
+reserved 2 MiB pool (+34.7 %)**. The extra 1-3 % has not been measured in that
+environment: the write to `nr_hugepages` reports success and the pool stays at 0.
 
 :::warning Measuring without huge pages
 Once 1234 pages are reserved, only about 1.2 GB of ordinary RAM is left. Running
