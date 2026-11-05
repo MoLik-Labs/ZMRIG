@@ -173,7 +173,8 @@ config ok
   threads 2 (default would be 2)
   cpus    [0,1] on 2 cpu(s), 2 physical core(s)
   mode    auto, huge pages on, jit on
-  memory  rx/0 maps 2336 MB, 1168 pages of 2 MiB: no pages reserved; transparent huge pages collapse the mapping instead
+  memory  rx/0 maps 2336 MB, 1168 pages of 2 MiB (or 3 of 1 GiB): no pages reserved; transparent huge pages collapse the mapping instead
+  1g      no pool: this mode would need 3 page(s) of 1 GiB, and the mapping uses 2 MiB pages instead (doc/PERFORMANCE.md has the one-line reservation)
   thp     madvise (default): the hint this miner sets is honoured, so no root step is needed
   msr     intel preset; reading /dev/cpu/0/msr needs root (auto: the preset is skipped here; --msr tries anyway)
 ```
@@ -183,6 +184,11 @@ Dòng `msr` là câu trả lời, không phải lời nhắc: preset tắt prefe
 (`auto`). Phần trong ngoặc cho biết lần chạy này đang ở trạng thái nào —
 `auto: …` (do bước dò quyết định), `on: --msr` (bạn yêu cầu), `off: --no-msr`
 (bị từ chối, và config có `"msr": false` cũng vậy).
+
+Dòng `1g` là pool không thể tạo lúc chạy: nó cho biết các trang 1 GiB mà bộ cấp
+phát muốn dùng có tồn tại không, và `zmrig-os hugepages 1g 3` sẽ đặt chúng ở lần
+boot sau. Không có là câu trả lời bình thường trên máy ảo và không mất gì — gần
+như toàn bộ lợi ích nằm ở trang 2 MiB.
 
 Dòng `memory` là cỡ của chính coin đó — `panthera maps 192 MB, 96 pages` — và
 dòng `thp` trả lời câu hỏi mà nó đặt ra: `madvise` và `always` nghĩa là kernel

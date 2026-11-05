@@ -179,7 +179,8 @@ config ok
   threads 2 (default would be 2)
   cpus    [0,1] on 2 cpu(s), 2 physical core(s)
   mode    auto, huge pages on, jit on
-  memory  rx/0 maps 2336 MB, 1168 pages of 2 MiB: no pages reserved; transparent huge pages collapse the mapping instead
+  memory  rx/0 maps 2336 MB, 1168 pages of 2 MiB (or 3 of 1 GiB): no pages reserved; transparent huge pages collapse the mapping instead
+  1g      no pool: this mode would need 3 page(s) of 1 GiB, and the mapping uses 2 MiB pages instead (doc/PERFORMANCE.md has the one-line reservation)
   thp     madvise (default): the hint this miner sets is honoured, so no root step is needed
   msr     intel preset; reading /dev/cpu/0/msr needs root (auto: the preset is skipped here; --msr tries anyway)
 ```
@@ -189,6 +190,11 @@ The `msr` line is the answer, not a nag: the prefetcher-off preset is worth
 machine can take it (`auto`). What the parentheses say is which of three states
 this run is in — `auto: …` (decided by the probe), `on: --msr` (asked for),
 `off: --no-msr` (refused, which a config with `"msr": false` also does).
+
+The `1g` line is the pool that cannot be made at runtime: it says whether the
+1 GiB pages the mapper would rather use exist, and `zmrig-os hugepages 1g 3`
+reserves them at the next boot. Empty is the normal answer on a virtual machine
+and costs nothing — 2 MiB pages are where almost all of the gain is.
 
 The `memory` line is the coin's own size — `panthera maps 192 MB, 96 pages` —
 and the `thp` line answers the question it raises: `madvise` and `always` mean
