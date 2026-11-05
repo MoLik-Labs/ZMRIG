@@ -85,10 +85,14 @@ test('the compression level follows the size of the file', () => {
   // The ratio of brotli's cost to its gain flattens out; a 300 KB bundle at
   // quality 11 is seconds of one visitor's afternoon and a few percent.
   assert.equal(assets.quality(4 * 1024), 11);
-  assert.equal(assets.quality(32 * 1024), 11);
-  assert.equal(assets.quality(33 * 1024), 9);
+  assert.equal(assets.quality(8 * 1024), 11);
+  assert.equal(assets.quality(9 * 1024), 10);
+  assert.equal(assets.quality(32 * 1024), 10, 'a page is not worth quality 11');
+  assert.equal(assets.quality(64 * 1024), 10);
+  assert.equal(assets.quality(65 * 1024), 9);
   assert.equal(assets.quality(256 * 1024), 9);
-  assert.equal(assets.quality(1024 * 1024), 6);
+  assert.equal(assets.quality(1024 * 1024), 9);
+  assert.equal(assets.quality(1024 * 1024 + 1), 6);
 });
 
 test('a sidecar written at build time is used instead of compressing again', () => {

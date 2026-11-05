@@ -98,6 +98,16 @@ The extra 1-3 % is **not measured here** — no 1 GiB page can be reserved in th
 environment, so that path has never run on it. The fallback path has, and so has
 the composition of the kernel parameters.
 
+## Brotli was spending the wrong resource
+
+The quality policy charged the scarce resource — a tenth of a CPU on a free
+instance — to save bytes nobody is short of. Measured on the same three shapes
+(three runs, best of three): a 32 KB page at quality 11 takes 43 ms and saves
+0.1 KB against quality 10 at 14 ms; the 488 KB bundle at 11 takes 948 ms and
+saves 11 KB against 9 at 44 ms. The policy is now 11 below 8 KB, 10 to 64 KB, 9
+to 1 MB and 6 above, which compresses the whole 175-file site in 1.9 s instead of
+2.2 s and costs 2.7 % more bytes on a page — the trade a 0.1 CPU host wants.
+
 ## The hosted site came back unstyled
 
 The committed `web/` is the GitHub Pages build, and in it every internal

@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.16a901d8.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/runtime~main.811282b0.js" defer="defer"></script>
 <script src="/ZMRIG/vi/assets/js/main.c62143c8.js" defer="defer"></script>
 </head>
 <body>
@@ -97,8 +97,10 @@ request là một lần tra Map và một lần <code>end()</code>.</p>
 động — nén cả một site bằng brotli trên một phần mười CPU mà instance free có
 chính là thứ biến một lần deploy thành một health check thất bại. Trình duyệt
 nhận Brotli thì không hề sinh ra bản gzip nào;</li>
-<li class="">mức nén theo dung lượng (11 tới 32 KB, 9 tới 256 KB, 6 ở trên), vì chi phí của
-brotli tăng nhanh hơn nhiều so với lợi ích;</li>
+<li class="">mức nén theo chi phí đã đo, không theo cảm tính: 11 dưới 8 KB, 10 tới 64 KB,
+9 tới 1 MB, 6 ở trên. Với trang 32 KB, mức 11 tốn 43 ms và tiết kiệm 0,1 KB so
+với mức 10 tốn 14 ms; với bundle 488 KB, mức 11 tốn 948 ms và tiết kiệm 11 KB so
+với mức 9 tốn 44 ms. Một phần mười CPU khiến đó thành câu hỏi duy nhất;</li>
 <li class="">những trang dễ được mở đầu tiên được nén ngay sau khi socket mở, mỗi lượt một
 file, giữa các request;</li>
 <li class=""><code>ETag</code> trên mọi response, và request có điều kiện được trả <code>304</code> trước khi chạm

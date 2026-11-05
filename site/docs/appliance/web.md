@@ -152,8 +152,10 @@ After that a request is a Map lookup and one `end()`.
   compressing a whole site with brotli on the tenth of a CPU a free instance gets
   is what turns a deploy into a failed health check. A browser that accepts Brotli
   never causes a gzip copy to exist at all;
-- the quality follows the size (11 up to 32 KB, 9 up to 256 KB, 6 above), because
-  brotli's cost grows far faster than its gain;
+- the quality follows the measured cost, not a hunch: 11 below 8 KB, 10 up to
+  64 KB, 9 up to 1 MB, 6 above. On a 32 KB page quality 11 costs 43 ms and saves
+  0.1 KB over quality 10 at 14 ms; on the 488 KB bundle 11 costs 948 ms and saves
+  11 KB over 9 at 44 ms. A tenth of a CPU makes that the only question;
 - the pages most likely to be opened first are compressed just after the socket
   opens, one per tick, between requests;
 - `ETag` on every response, and a conditional request is answered with `304`

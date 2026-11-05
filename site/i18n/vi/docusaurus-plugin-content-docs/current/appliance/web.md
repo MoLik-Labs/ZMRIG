@@ -149,8 +149,10 @@ request là một lần tra Map và một lần `end()`.
   động — nén cả một site bằng brotli trên một phần mười CPU mà instance free có
   chính là thứ biến một lần deploy thành một health check thất bại. Trình duyệt
   nhận Brotli thì không hề sinh ra bản gzip nào;
-- mức nén theo dung lượng (11 tới 32 KB, 9 tới 256 KB, 6 ở trên), vì chi phí của
-  brotli tăng nhanh hơn nhiều so với lợi ích;
+- mức nén theo chi phí đã đo, không theo cảm tính: 11 dưới 8 KB, 10 tới 64 KB,
+  9 tới 1 MB, 6 ở trên. Với trang 32 KB, mức 11 tốn 43 ms và tiết kiệm 0,1 KB so
+  với mức 10 tốn 14 ms; với bundle 488 KB, mức 11 tốn 948 ms và tiết kiệm 11 KB so
+  với mức 9 tốn 44 ms. Một phần mười CPU khiến đó thành câu hỏi duy nhất;
 - những trang dễ được mở đầu tiên được nén ngay sau khi socket mở, mỗi lượt một
   file, giữa các request;
 - `ETag` trên mọi response, và request có điều kiện được trả `304` trước khi chạm

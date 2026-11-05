@@ -58,14 +58,23 @@ const COMPRESSIBLE = new Set(['.html', '.js', '.mjs', '.css', '.json', '.svg', '
 // response already carries the headers that make it worth sending.
 const MIN_COMPRESS = 1024;
 
-// Brotli's cost grows far faster than its gain. Against a 2 vCPU sandbox, a
-// 300 KB bundle at quality 11 takes over a second and saves a low single-digit
-// percentage over quality 9; on a free instance that is half a minute of one
-// visitor's afternoon. The thresholds are where the two curves cross: small
-// pages are cheap enough at 11 to be worth the best ratio, bundles are not.
+// Brotli's cost grows far faster than its gain, and the free instance this runs
+// on has a tenth of a CPU, which makes the ratio the whole question. Measured
+// here on the three sizes that matter (three runs each, best of three):
+//
+//   16 KB page   q9 6 ms / 4.3 KB    q10 8 ms / 3.9 KB    q11 20 ms / 3.8 KB
+//   26 KB page   q9 8 ms / 6.6 KB    q10 12 ms / 6.1 KB   q11 33 ms / 5.9 KB
+//   32 KB page   q9 10 ms / 7.5 KB   q10 14 ms / 6.8 KB   q11 43 ms / 6.7 KB
+//   488 KB bundle q9 44 ms / 142 KB  q11 948 ms / 131 KB
+//
+// So: quality 11 only where it is a few milliseconds anyway, quality 10 up to
+// 64 KB (three times the CPU of 11 for 1.5 % fewer bytes is the wrong trade on
+// this machine), quality 9 to a megabyte, and 6 above that — which is where the
+// 488 KB bundle lands, at 20 ms instead of a second.
 function quality(size) {
-  if (size <= 32 * 1024) return 11;
-  if (size <= 256 * 1024) return 9;
+  if (size <= 8 * 1024) return 11;
+  if (size <= 64 * 1024) return 10;
+  if (size <= 1024 * 1024) return 9;
   return 6;
 }
 
