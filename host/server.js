@@ -151,7 +151,14 @@ function createServer(env = process.env, overrides = {}) {
           discord: Boolean(built.app.platform.discord),
         },
         fleet: { rigs: enrolled, known: devices.length },
-        site: { root: built.siteRoot, files: built.site.table.count },
+        site: {
+          root: built.siteRoot,
+          files: built.site.table.count,
+          // Non-empty means the served build was made for a subdirectory and
+          // had its internal links rewritten to this origin's root. Empty is
+          // the normal case only if the build was made with SITE_BASE_URL=/.
+          rebased_from: built.site.basePath || null,
+        },
         uptime_s: Math.round((Date.now() - started) / 1000),
         rss_mb: Math.round(process.memoryUsage().rss / 1048576),
       });
@@ -173,8 +180,16 @@ function createServer(env = process.env, overrides = {}) {
     });
   });
 
+  // Behind Render's proxy every request arrives on a connection the proxy opened
+  // on the client's behalf, and Node closes an idle socket after 5 s by default.
+  // The proxy keeps it for 60 s, so a documentation page with thirty assets can
+  // hand Node a socket Node has already dropped: the request is retried, the
+  // retry costs a round trip, and nothing in the log says so. Node's own guidance
+  // is to stay a little above the proxy's idle timeout.
   server.keepAliveTimeout = 65_000;
   server.headersTimeout = 66_000;
+  // A request that never finishes must not hold a socket for ever on a 512 MB
+  // instance shared with two bots.
   server.requestTimeout = 30_000;
 
   return { server, ...built };

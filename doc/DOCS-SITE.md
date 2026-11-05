@@ -52,6 +52,24 @@ npm test             # unit tests for the builders, calculators and i18n
 `onBrokenMarkdownLinks` are both `throw`, so a page that was renamed without
 updating its links fails the build rather than shipping a 404.
 
+### Measuring the host, not guessing about it
+
+```bash
+npm run bench:host                        # 8 clients, 3 s per path
+npm run bench:host -- --conc 32 --seconds 10
+npm run bench:host -- --root web          # the committed site
+```
+
+`host/bench.js` starts the same `createServer` the deploy uses, over a real
+socket, and prints requests per second, p50/p99 and bytes on the wire with
+brotli/gzip offered. The three paths it asks for are the three a visitor takes:
+a page, a prose page, and the release feed. It discovered one thing worth
+knowing when it was first run: the CSS and JS bundles were being compressed on
+first request rather than shipped compressed, which is fine at 9-12 k req/s on
+this sandbox and is a visible cost on the tenth of a CPU a free Render instance
+gets — the answer is `serve/scripts/precompress.js` at publish time, not a
+compressor in the request path.
+
 ### The build is compiled by Rust, not by Babel and webpack
 
 `future.faster` in `docusaurus.config.js` (and `@docusaurus/faster` in

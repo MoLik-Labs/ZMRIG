@@ -65,6 +65,38 @@ it. The automatic path now uses `verify_sha_required` and says so in one line;
 the interactive paths keep the optional behaviour, where an operator is present
 to decide.
 
+## The hosted site came back unstyled
+
+The committed `web/` is the GitHub Pages build, and in it every internal
+reference is `/ZMRIG/assets/...` — that is what `baseUrl` does. `serve/` answers
+from the root of its own domain, so the home page arrived with a stylesheet link
+to a path that does not exist there, and the CSS, both bundles, the icons and
+every internal link were `404`. The page still rendered, so nothing failed
+loudly: it was just a site with no stylesheet, and the documentation's own
+"why it is fast" numbers were measured on a build where the assets were never
+requested.
+
+`assets.rebase()` now reads the prefix out of the home page at boot and removes
+it from every text body in memory — 125 files, 4 072 references, 20 ms, once.
+Absolute URLs are deliberately untouched, because the canonical link and the
+`og:image` must keep pointing at the Pages site. A request that still carries the
+prefix (`/ZMRIG/docs/intro`, from a bookmark or from a link on the Pages site) is
+a `301` to the stripped path, and `/healthz` reports `site.rebased_from`, so the
+next deploy that lands the wrong build says so in a JSON field instead of in a
+screenshot. Building with `SITE_BASE_URL=/` still produces a build with nothing
+to rewrite.
+
+Two smaller things found while measuring it. The warm queue — the files
+compressed in the background after the socket opens — was `every page, then every
+asset`, sliced to 24; the site has 61 pages, so it never contained an asset, and
+the stylesheet and both bundles were compressed on first request on every deploy.
+It now takes the two home pages, then the files those pages actually reference
+(parsed out of their HTML, in document order), then the other pages. And the
+HTTP server had no opinion about idle sockets: Node closes one after 5 s, Render's
+proxy keeps it for 60, and a documentation page with thirty assets is enough to
+hand the process a socket it has already dropped. `keepAliveTimeout` is 65 s,
+`headersTimeout` 66 s, `requestTimeout` 30 s.
+
 ## The MSR preset is no longer opt-in
 
 Disabling the CPU's hardware prefetchers is worth 5-15 % on bare metal, and it

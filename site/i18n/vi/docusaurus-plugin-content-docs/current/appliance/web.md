@@ -121,10 +121,28 @@ Không có gì trong đó là bí mật, trừ những giá trị Render hỏi m
 hạn. Có đội máy báo danh mỗi phút thì service không bao giờ ngủ; với đội máy rỗng,
 trỏ một uptime monitor miễn phí vào `/healthz` mỗi năm phút.
 
+## Bản build dành cho GitHub Pages, còn host này phục vụ từ gốc
+
+`web/` trong repo là bản build cho GitHub Pages, nên mọi thứ trong đó trỏ tới
+`/ZMRIG/assets/...` và `/ZMRIG/docs/...`. Phục vụ nó từ gốc một tên miền thì đó
+là một trang không có CSS, không có điều hướng, không có font — trang vẫn hiện
+ra, nên không có lỗi nào được ném, và dấu hiệu duy nhất là nó trông sai.
+
+Lúc khởi động, prefix được tìm thấy trong trang chủ và bị bỏ đi ngay trong bộ
+nhớ: 125 file, khoảng 4 000 tham chiếu, 20 ms, một lần. URL tuyệt đối được giữ
+nguyên, vì `rel="canonical"` trỏ tới `https://molik-labs.github.io/ZMRIG/` thì
+phải tiếp tục trỏ tới đó. Request vẫn mang prefix — bookmark cũ, link copy từ
+site Pages — nhận `301` về đúng đường dẫn không có prefix, và `/healthz` báo
+`site.rebased_from` để kiểm tra một lần deploy từ bên ngoài.
+
+Build với `SITE_BASE_URL=/` cho ra bản không có prefix để bỏ, và đó vẫn là cách
+sạch hơn khi bạn kiểm soát được lúc build.
+
 ## Vì sao nó nhanh
 
-Mọi thứ site phục vụ được đọc vào bộ nhớ một lần, lúc khởi động: 244 route,
-6,84 MB, trong 17 ms. Sau đó một request là một lần tra Map và một lần `end()`.
+Mọi thứ site phục vụ được đọc vào bộ nhớ một lần, lúc khởi động: **238 route,
+6,73 MB, trong 14 ms** (con số đổi theo bản build; đây là site 6.48). Sau đó một
+request là một lần tra Map và một lần `end()`.
 
 - không `stat`, không `open`, không `readdir` cho từng request;
 - Brotli và gzip được tạo **ở lần đầu có người hỏi file đó**, không phải lúc khởi
@@ -158,6 +176,21 @@ Hai trang do tiến trình này tự dựng (`/download` và feed JSON) mang
 Request đầu tiên cho một trang trả giá cho việc nén nó; mọi request sau là 0,3 ms.
 Brotli đưa trang chủ từ 16 KB xuống 3,9 KB. Instance Render có CPU khác và có mạng
 thật phía trước; chưa có số nào được đo trên đó.
+
+Đẩy tải tới hạn, trên cùng sandbox 2 vCPU (`npm run bench:host`, 8 client, 3 giây
+mỗi đường dẫn, `Accept-Encoding: br, gzip`):
+
+| đường dẫn | req/s | p50 | p99 | trên đường truyền |
+| --- | ---: | ---: | ---: | ---: |
+| `/` | 8 195 | 0,74 ms | 2,89 ms | 3 909 B (brotli) |
+| `/docs/intro` | 10 991 | 0,64 ms | 1,83 ms | 6 034 B (brotli) |
+| `/api/releases.json` | 12 431 | 0,60 ms | 1,38 ms | 256 B |
+| `/assets/css/styles.<hash>.css` | 9 115 | 0,74 ms | 2,91 ms | 18 090 B (brotli, từ 25 KB) |
+
+`npm run bench:host` nhận `--conc`, `--seconds` và `--root`, và nó đo chính đối
+tượng server thật — cùng `createServer` mà bản deploy dùng, qua socket thật.
+Giao thức thiết bị cố ý không đo: đó là đường của rig chạy theo hẹn giờ, đo tải
+trên nó là đo chính bài test.
 
 ## Khi GitHub sập
 

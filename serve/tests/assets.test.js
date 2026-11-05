@@ -209,3 +209,58 @@ test('q=0 is a refusal, not a preference', () => {
     removeSite(root);
   }
 });
+
+test('a build made for a subdirectory is rebased to the root', () => {
+  // The committed `web/` is the GitHub Pages build: every internal reference is
+  // written `/ZMRIG/...`. Served from a host's root it was a page with no
+  // stylesheet and no navigation, and nothing failed loudly.
+  const root = makeSite({
+    'index.html': '<!doctype html><html lang="en"><head><link rel="stylesheet" href="/ZMRIG/assets/css/main.abc123.css"><link rel="canonical" href="https://molik-labs.github.io/ZMRIG/"><meta property="og:image" content="https://molik-labs.github.io/ZMRIG/img/og-en.png"></head><body><a href="/ZMRIG/docs/intro">Intro</a><script src="/ZMRIG/assets/js/main.def456.js"></script>' + '<!-- ' + 'x'.repeat(1200) + ' --></body></html>',
+    'docs/intro.html': '<!doctype html><html lang="en"><body><a href="/ZMRIG/docs/intro">self</a></body></html>',
+    'search-index.json': JSON.stringify({ docs: [{ t: 'Introduction', u: '/ZMRIG/docs/intro' }] }),
+  });
+  try {
+    const table = assets.load(root);
+    assert.equal(assets.rebase(table), '/ZMRIG', 'the prefix is detected from the build itself');
+
+    const home = table.files.get('/').body.toString();
+    assert.match(home, /href="\/assets\/css\/main\.abc123\.css"/);
+    assert.match(home, /href="\/docs\/intro"/);
+    assert.ok(!/["'(]\/ZMRIG\//.test(home), 'no root-relative prefixed reference is left');
+    // An absolute URL into GitHub Pages is a canonical link, not a route: it
+    // must survive untouched or the two hosts disagree about what the page is.
+    assert.match(home, /rel="canonical" href="https:\/\/molik-labs\.github\.io\/ZMRIG\/"/);
+    assert.match(home, /content="https:\/\/molik-labs\.github\.io\/ZMRIG\/img\/og-en\.png"/);
+
+    // Search results too, or the local index links into a 404.
+    assert.match(table.files.get('/search-index.json').body.toString(), /"u":"\/docs\/intro"/);
+
+    // A rebased body is not the file on disk, so the file's sidecar is not its
+    // compressed form any more.
+    const entry = table.files.get('/');
+    assert.equal(entry.rebased, true);
+    assert.match(entry.etag, /-r[0-9a-f]+"$/, 'the ETag marks bytes that came from a rewrite');
+
+    // The sidecar on disk still holds the pre-rewrite HTML, so packing must not
+    // use it: the page would carry `/ZMRIG/` links under an ETag for the page
+    // that does not.
+    require('node:fs').writeFileSync(require('node:path').join(root, 'index.html.br'),
+      require('node:zlib').brotliCompressSync(Buffer.from('<!doctype html><html><head><link href="/ZMRIG/assets/css/main.abc123.css"></head></html>')));
+    const packed = assets.load(root);
+    assets.rebase(packed);
+    const packedHome = packed.files.get('/');
+    assets.pack(packedHome, 'br');
+    const decoded = require('node:zlib').brotliDecompressSync(packedHome.br).toString();
+    assert.match(decoded, /href="\/assets\/css\/main\.abc123\.css"/, 'compressed from the rebased body');
+
+    // A build that already targets the root is left alone.
+    const plain = makeSite();
+    try {
+      assert.equal(assets.rebase(assets.load(plain)), '', 'nothing to do');
+    } finally {
+      removeSite(plain);
+    }
+  } finally {
+    removeSite(root);
+  }
+});

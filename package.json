@@ -21,7 +21,8 @@
     "build:site": "cd site && npm run build",
     "publish:site": "bash scripts/publish-site.sh",
     "test:site": "cd site && npm test",
-    "test:identity": "bash tests/docs/identity.sh"
+    "test:identity": "bash tests/docs/identity.sh",
+    "bench:host": "node host/bench.js"
   },
   "repository": {
     "type": "git",

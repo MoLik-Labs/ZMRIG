@@ -124,10 +124,28 @@ most, well inside the limit. With a fleet reporting every minute the service
 never sleeps; with an empty fleet, point any free uptime monitor at `/healthz`
 every five minutes.
 
+## The build is for GitHub Pages; this serves it from the root
+
+The committed `web/` is the GitHub Pages build, so everything in it links to
+`/ZMRIG/assets/...` and `/ZMRIG/docs/...`. Served from the root of a domain that
+is a page with no stylesheet, no navigation and no fonts — it renders, so nothing
+errors, and the only evidence is that it looks wrong.
+
+At boot the prefix is found in the home page and removed in memory: 125 files,
+about 4 000 references, 20 ms, one time. Absolute URLs are left alone, because a
+`rel="canonical"` pointing at `https://molik-labs.github.io/ZMRIG/` has to keep
+pointing there. A request that still arrives with the prefix — an old bookmark, a
+link copied out of the Pages site — is a `301` to the same path without it, and
+`/healthz` reports `site.rebased_from` so a deploy can be checked from outside.
+
+`SITE_BASE_URL=/` at build time produces a build with no prefix to remove, and
+that is still the cleaner answer when you control the build.
+
 ## Why it is fast
 
-Everything the site serves is read into memory once, at boot: 244 routes,
-6.84 MB, in 17 ms. After that a request is a Map lookup and one `end()`.
+Everything the site serves is read into memory once, at boot: **238 routes,
+6.73 MB, in 14 ms** (the numbers move with the build; this is the 6.48 site).
+After that a request is a Map lookup and one `end()`.
 
 - no `stat`, no `open`, no `readdir` per request;
 - Brotli and gzip are made **the first time a file is asked for**, not at boot —
@@ -163,6 +181,21 @@ The first request for a page pays for its compression; every one after it is
 0.3 ms. Brotli takes the home page from 16 KB to 3.9 KB. A Render instance has
 different CPU and a real network in front of it; nothing here has been measured
 there.
+
+Properly saturated, on the same 2 vCPU sandbox (`npm run bench:host`, 8 clients,
+3 s per path, `Accept-Encoding: br, gzip`):
+
+| path | req/s | p50 | p99 | on the wire |
+| --- | ---: | ---: | ---: | ---: |
+| `/` | 8 195 | 0.74 ms | 2.89 ms | 3 909 B (brotli) |
+| `/docs/intro` | 10 991 | 0.64 ms | 1.83 ms | 6 034 B (brotli) |
+| `/api/releases.json` | 12 431 | 0.60 ms | 1.38 ms | 256 B |
+| `/assets/css/styles.<hash>.css` | 9 115 | 0.74 ms | 2.91 ms | 18 090 B (brotli, from 25 KB) |
+
+`npm run bench:host` takes `--conc`, `--seconds` and `--root`, and it is a
+benchmark of the real server object, not of a mock: the same `createServer` the
+deploy uses, over a real socket. The device protocol is deliberately left out —
+it is a rig's path on a timer, and a load test on it measures the test.
 
 ## When GitHub is down
 

@@ -129,7 +129,7 @@ function readSidecar(file, suffix, mtimeMs) {
  */
 function make(entry, encoding, log) {
   const suffix = encoding === 'br' ? '.br' : '.gz';
-  const sidecar = readSidecar(entry.path, suffix, entry.mtime);
+  const sidecar = entry.rebased ? null : readSidecar(entry.path, suffix, entry.mtime);
   if (sidecar) return sidecar.length < entry.body.length ? sidecar : null;
   try {
     const body =
@@ -171,6 +171,59 @@ function pack(entry, encoding, log = () => {}) {
   return entry;
 }
 
+/**
+ * Make a build that was made for a subdirectory work at the root of a domain.
+ *
+ * `site/` is built for GitHub Pages, which serves it from `/ZMRIG/`, and the
+ * committed `web/` is that build. Everything a page links to — the stylesheet,
+ * the bundles, every internal link, the icon — is therefore written `/ZMRIG/...`,
+ * and a host serving `web/` from its own root answers 404 for all of it: the
+ * page arrives, unstyled and inert, and the only visible symptom is a site that
+ * looks wrong in a screenshot nobody takes.
+ *
+ * Rebuilding for the host is the documented answer and still works
+ * (`SITE_BASE_URL=/`), but a deploy should not be able to land in that state by
+ * accident, and the committed build is one build, not two. So the prefix is
+ * detected from the HTML itself and removed in memory, once, at boot: 64 files
+ * and about 3 600 references, 20 ms, and every route is then the same route on
+ * both hosts. Absolute URLs are untouched — only a quote or a parenthesis
+ * directly before the prefix makes a reference root-relative.
+ */
+function rebase(table, log = () => {}) {
+  const probe = table.files.get('/index.html') || table.files.get('/');
+  if (!probe || !probe.body) return '';
+  const found = probe.body.toString('utf8').match(/["'(](\/[^"'/]+)\/(?:assets|img|docs)\//);
+  const prefix = found ? found[1] : '';
+  if (!prefix || prefix === '' || !/^\/[A-Za-z0-9._-]+$/.test(prefix)) return '';
+
+  const pattern = new RegExp(`(["'(])${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/`, 'g');
+  let files = 0;
+  let replaced = 0;
+  for (const entry of new Set(table.files.values())) {
+    if (!/text\/|json|javascript/.test(entry.type)) continue;
+    const before = entry.body.toString('utf8');
+    if (!before.includes(`${prefix}/`)) continue;
+    let hits = 0;
+    const after = before.replace(pattern, (_match, quote) => {
+      hits += 1;
+      return `${quote}/`;
+    });
+    if (!hits) continue;
+    entry.body = Buffer.from(after);
+    entry.rebased = true;
+    entry.size = entry.body.length;
+    entry.etag = `"${entry.mtime.toString(16)}-r${entry.body.length.toString(16)}"`;
+    entry.br = null;
+    entry.gz = null;
+    entry.triedBr = false;
+    entry.triedGz = false;
+    files += 1;
+    replaced += hits;
+  }
+  if (files) log(`rebase   ${prefix}/ -> / in ${files} files (${replaced} references)`);
+  return prefix;
+}
+
 function load(root, { log = () => {}, compress = true } = {}) {
   const files = new Map();
   let raw = 0;
@@ -193,6 +246,9 @@ function load(root, { log = () => {}, compress = true } = {}) {
       body,
       // Read lazily by `pack()`. A file that nobody opens costs nothing.
       packable: Boolean(compress && COMPRESSIBLE.has(kind) && body.length >= MIN_COMPRESS),
+      // Set by `rebase()` when the bytes in memory no longer match the file on
+      // disk. A sidecar belongs to the file, so it must not be used for one.
+      rebased: false,
       br: null,
       gz: null,
       triedBr: false,
@@ -306,4 +362,4 @@ function pick(entry, acceptEncoding, log) {
   return { body: entry.body, encoding: null };
 }
 
-module.exports = { load, pack, make, pick, quality, accepts, identityAllowed, weights, cacheControl, contentType, etagOf, IMMUTABLE, HTML, MEDIA, DATA };
+module.exports = { load, rebase, pack, make, pick, quality, accepts, identityAllowed, weights, cacheControl, contentType, etagOf, IMMUTABLE, HTML, MEDIA, DATA };

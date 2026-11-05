@@ -93,6 +93,10 @@ function createApp({
   version = '',
 } = {}) {
   const table = cache || assets.load(root, { log });
+  // One committed build, two hosts: the Pages build carries `/ZMRIG/` in every
+  // internal reference and this process serves from its own root. Rewriting it
+  // here is what keeps a deploy from landing unstyled; see `assets.rebase`.
+  const basePath = assets.rebase(table, log);
   const started = Date.now();
 
   // Rendered once per successful fetch of the release feed.
@@ -203,6 +207,17 @@ function createApp({
       return;
     }
 
+    // A link copied from GitHub Pages, or from this host before it became the
+    // host, arrives with the build's old base in it. The content is here under
+    // the stripped path, so say where it went instead of showing a 404 that
+    // looks like a broken deploy.
+    if (basePath && (url === basePath || url.startsWith(`${basePath}/`))) {
+      const target = url.slice(basePath.length) || '/';
+      res.writeHead(301, { ...BASE_HEADERS, Location: target + (url.endsWith('/') && target !== '/' ? '/' : '') , 'Cache-Control': 'public, max-age=86400', 'Content-Length': 0 });
+      res.end();
+      return;
+    }
+
     if (url === '/releases') {
       // The old name for the same page, and the one people type.
       res.writeHead(301, { ...BASE_HEADERS, Location: '/download', 'Cache-Control': 'public, max-age=86400', 'Content-Length': 0 });
@@ -263,21 +278,58 @@ function createApp({
   }
 
   /**
-   * Compress the pages a visitor is most likely to open first, one per tick.
+   * Compress, in the background, what the next visitor will almost certainly ask
+   * for, one file per tick, cheapest first.
    *
    * Nothing waits for this: the socket is already listening and each file is
    * handled between requests, so a cold start answers immediately and the warm
-   * copy is there by the time somebody clicks a link. Pages first, because a
-   * page is what a visitor asks for; the bundles they load happen in parallel
-   * from the browser and are cached by the client anyway.
+   * copy is there by the time somebody clicks a link.
+   *
+   * The order matters more than the count, and getting it wrong is silent: this
+   * site has 61 pages, so a queue of "every page, then every asset" sliced to 24
+   * contains no asset at all — the stylesheet, the two main bundles and the two
+   * search indexes were compressed on first request on every deploy, which is
+   * the exact thing a tenth of a CPU cannot afford. So: the two home pages, then
+   * the bundles every page loads, then the rest of the pages, then the big
+   * files. Cheapest first inside each group, so the count buys the most files.
    */
-  function warm({ limit = 24 } = {}) {
+  const FIRST = ['/', '/vi/'];
+  // What the home page itself asks the browser to load, in the order it asks:
+  // the stylesheet, then the bundles. Reading this out of the HTML is the only
+  // honest answer — guessing by size picked the wrong files, and guessing by
+  // extension put forty one-kilobyte route chunks ahead of the stylesheet every
+  // page needs.
+  const HOME_ASSETS = (() => {
+    const routes = [];
+    for (const page of FIRST) {
+      const entry = table.files.get(page);
+      if (!entry || !entry.body) continue;
+      const html = entry.body.toString('utf8');
+      for (const match of html.matchAll(/(?:href|src)="(\/[^"]+?\.(?:css|js))"/g)) {
+        if (!routes.includes(match[1])) routes.push(match[1]);
+      }
+    }
+    return routes;
+  })();
+
+  function warm({ limit = 40 } = {}) {
     const unique = [...new Set(table.files.values())];
-    const pages = unique.filter((entry) => entry.type.startsWith('text/html'));
-    const others = unique
-      .filter((entry) => !entry.type.startsWith('text/html'))
-      .sort((a, b) => b.size - a.size);
-    const queue = [...pages, ...others].slice(0, limit);
+    const pathOf = new Map();
+    for (const [route, entry] of table.files) if (!pathOf.has(entry)) pathOf.set(entry, route);
+    const homeAssets = new Set(HOME_ASSETS);
+    const rank = (entry) => {
+      const route = pathOf.get(entry) || '';
+      if (FIRST.includes(route)) return 0;
+      if (homeAssets.has(route)) return 1;
+      if (entry.type.startsWith('text/html')) return 2;
+      if (route.endsWith('.json')) return 3;
+      if (/\.(css|js)$/.test(route)) return 4;
+      return 5;
+    };
+    const order = (entry) => (rank(entry) === 1 ? HOME_ASSETS.indexOf(pathOf.get(entry)) : 0);
+    const queue = unique
+      .sort((a, b) => rank(a) - rank(b) || order(a) - order(b) || a.size - b.size)
+      .slice(0, limit);
     let index = 0;
     const step = () => {
       if (index >= queue.length) return;
@@ -309,6 +361,7 @@ function createApp({
     },
     warm,
     table,
+    basePath,
     arches: ARCHES,
   };
 }

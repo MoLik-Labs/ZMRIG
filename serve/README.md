@@ -36,8 +36,19 @@ deploy into a failed health check. A sidecar older than its file is ignored
 either way, so a stale one cannot serve last build's HTML under this build's
 `ETag`.
 
-The site is built for GitHub Pages under `/ZMRIG/`. This host serves from the
-root of its own domain, so build it with the base URL overridden:
+The committed `web/` is the GitHub Pages build, and every internal reference in
+it is written `/ZMRIG/...`. This host serves from the root of its own domain, so
+at boot the prefix is detected from the HTML and removed in memory (`rebase()` in
+`src/assets.js`): 125 files and about 4 000 references, 20 ms, once. A page, its
+stylesheet and every link in it are then the same URL on both hosts, and a
+`/ZMRIG/...` request is answered with a `301` to the same path without the prefix
+— which is what a link copied out of the Pages site does.
+
+`/healthz` reports what was rewritten in `site.rebased_from`, so a deploy serving
+the wrong build says so there instead of in a screenshot.
+
+Building for the root instead still works and is what you want if you want the
+build to be free of the prefix at the source:
 
 ```bash
 cd ../site && SITE_BASE_URL=/ SITE_URL=https://zmrig.example.com \
