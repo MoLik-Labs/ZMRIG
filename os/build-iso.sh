@@ -288,6 +288,19 @@ if [ "$SELF_CHECK" = "1" ]; then
         fail=1
     fi
 
+    # Three files carry the version and one release bump forgot one of them: the
+    # control tool said 6.47.0 while the miner it supervised said 6.48.0, and the
+    # thing that noticed was a 40-second CI job. Compared here, from the sources,
+    # so `--self-check` catches it before the image is built.
+    tool_version=$(sed -n 's/^VERSION="\(.*\)"$/\1/p' "${HERE}/overlay/usr/local/bin/zmrig-os" | head -1)
+    miner_version=$(sed -n 's/^pub const version = "\(.*\)";$/\1/p' "${HERE}/../zmrig/src/main.zig" | head -1)
+    if [ -n "$tool_version" ] && [ "$tool_version" = "$miner_version" ]; then
+        printf '  ok    the control tool and the miner agree on %s\n' "$tool_version"
+    else
+        printf '  BAD   zmrig-os says %s, the miner says %s\n' "${tool_version:-?}" "${miner_version:-?}"
+        fail=1
+    fi
+
     # PID 1 cannot be run in a test, so the two invariants that fail silently are
     # asserted against its source. Both were broken once and cost a rig its
     # configuration: the environment block has to be built by the merge in

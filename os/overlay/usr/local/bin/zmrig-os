@@ -45,7 +45,7 @@
 
 set -eu
 
-VERSION="6.47.0"
+VERSION="6.48.0"
 MANIFEST_URL="https://github.com/MoLik-Labs/ZMRIG/releases/latest/download"
 # The rolling beta is a pre-release, and `releases/latest` never points at one:
 # `CHANNEL="beta"` has to name the tag instead of following the newest stable.
