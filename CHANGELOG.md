@@ -65,6 +65,39 @@ it. The automatic path now uses `verify_sha_required` and says so in one line;
 the interactive paths keep the optional behaviour, where an operator is present
 to decide.
 
+## 1 GiB pages are asked for, and the answer is reported
+
+RandomX reads a 2080 MB dataset in random 64-byte stripes. At 4 KiB that is a TLB
+miss per few accesses and about 28 % of the hashrate; at 2 MiB it is 1 040 entries
+spread over a TLB that holds roughly that many; at 1 GiB it is two. The mapper
+always tried 2 MiB. It now tries 1 GiB first, then the 2 MiB pool, then anonymous
+memory with `MADV_HUGEPAGE`, and the startup line says which one answered —
+`huge pages 2336 MB (explicit, 1 GiB pages)` against `(explicit, 2 MiB pages)`
+or `0 MB (THP fallback)`. The claim in the old output was "explicit", which was
+true of both and told nobody anything.
+
+What it cannot do is create the pool. Gigantic pages are contiguous physical
+memory carved out before the machine fragments, so this is a kernel parameter and
+a reboot, not a sysctl — on the validation host, with 3.9 GiB free and nothing
+else running, writing `nr_hugepages` under `hugepages-1048576kB` returns success
+and leaves the pool at 0. The new `zmrig-os hugepages` command makes it a
+decision: `zmrig-os hugepages` prints both pools and what the current algorithm
+needs, `zmrig-os hugepages 1g 3` writes `default_hugepagesz=1G hugepagesz=1G
+hugepages=3` into the GRUB environment block the next boot reads, and `zmrig-os
+hugepages off` removes it.
+
+That block also carries `isolcpus=`, and the writer is now one function
+(`write_boot_params`) that composes both settings, because reserving pages and
+then isolating CPUs used to be two writers to one value — the same class of bug
+that cost every isolated rig its `isolcpus=` in 6.48.0. `zmrig --check` prints
+the pool and how many pages this run would take from it, and `doctor` reports it
+as information rather than a failure: not having a 1 GiB pool is normal, and the
+fallback to 2 MiB pages is where most of the gain already is.
+
+The extra 1-3 % is **not measured here** — no 1 GiB page can be reserved in this
+environment, so that path has never run on it. The fallback path has, and so has
+the composition of the kernel parameters.
+
 ## The hosted site came back unstyled
 
 The committed `web/` is the GitHub Pages build, and in it every internal

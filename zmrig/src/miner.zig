@@ -339,10 +339,21 @@ pub const Engine = struct {
         // Say what the kernel actually gave us. "huge pages 2336 MB" while
         // running on 4 KiB pages is worse than no report at all: it hides a
         // measured 24% hashrate loss on the validation host.
+        // A 1 GiB mapping and a 2 MiB mapping both report "explicit", and they
+        // are not the same thing: 2080 MB of dataset is 1 040 TLB entries at
+        // 2 MiB and one at 1 GiB. The page size is the useful half of the line.
+        const page_kb = wrapped.hugePageKb();
+        const huge_kind = if (page_kb >= 1024 * 1024)
+            "explicit, 1 GiB pages"
+        else if (page_kb != 0)
+            "explicit, 2 MiB pages"
+        else
+            "explicit";
+
         const huge_text = if (huge_total == 0)
             std.fmt.bufPrint(&huge_buf, "off", .{}) catch "off"
         else if (huge_explicit == huge_total)
-            std.fmt.bufPrint(&huge_buf, "{d} MB (explicit)", .{huge_explicit / (1024 * 1024)}) catch "?"
+            std.fmt.bufPrint(&huge_buf, "{d} MB ({s})", .{ huge_explicit / (1024 * 1024), huge_kind }) catch "?"
         else if (huge_explicit == 0)
             std.fmt.bufPrint(&huge_buf, "0 MB (THP fallback)", .{}) catch "?"
         else

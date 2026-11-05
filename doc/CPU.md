@@ -89,7 +89,16 @@ Use AVX2 for dataset initialization. Faster on some CPUs. Auto-detect (`-1`), di
 RandomX mining mode: `auto`, `fast` (2 GB memory), `light` (256 MB memory).
 
 #### `1gb-pages`
-Use 1GB hugepages for RandomX dataset (Linux only). Enabled (`true`) or disabled (`false`). It gives 1-3% speedup.
+Kept for config compatibility with XMRig, and there is nothing to set: this miner
+asks for a 1 GiB mapping **first** whenever huge pages are in use, then the 2 MiB
+pool, then anonymous memory with `MADV_HUGEPAGE`, and prints which one won
+(`huge pages 2336 MB (explicit, 1 GiB pages)`). It cannot be a flag because it
+cannot be granted at runtime: a gigantic pool has to be reserved before the
+machine fragments, so it is a kernel parameter and the tool that writes it is
+`zmrig-os hugepages 1g N` (`zmrig-os hugepages` shows what is reserved). On a
+host with no 1 GiB pool — most virtual machines, including the one this release
+was tested on — the fallback to 2 MiB pages is automatic. The published gain on
+top of 2 MiB is 1-3 %; it is not measured here for that reason.
 
 #### `msr` (XMRig spelling: `wrmsr`)
 [MSR mod](https://xmrig.com/docs/miner/randomx-optimization-guide/msr). `"auto"`

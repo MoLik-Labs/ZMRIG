@@ -32,9 +32,29 @@ sizes its own reservation per algorithm and `zmrig-tune --algo=` writes the same
 number, so `sudo zmrig-tune --algo panthera` reserves 192 MB and not 2.3 GB.
 
 To check the miner got them: the startup log prints how many bytes really came
-from explicit huge pages (`huge pages 2336 MB (explicit)`), and the API reports
-`"hugepages": [granted, needed]` — `[1168, 1168]` for `rx/0`, `[96, 96]` for
-`panthera`.
+from explicit huge pages (`huge pages 2336 MB (explicit, 2 MiB pages)`), and the
+API reports `"hugepages": [granted, needed]` — `[1168, 1168]` for `rx/0`,
+`[96, 96]` for `panthera`.
+
+**If a 1 GiB pool exists, it is used first.** A 2080 MB dataset is 1 040 TLB
+entries at 2 MiB and two at 1 GiB, so the mapper asks for gigantic pages, then
+the 2 MiB pool, then anonymous memory with the THP hint — and the log says which
+one answered (`explicit, 1 GiB pages` against `explicit, 2 MiB pages`). It cannot
+be a runtime setting: the pool is contiguous physical memory and has to be
+carved out early in boot, so it is a kernel parameter.
+
+```bash
+sudo zmrig-os hugepages            # what is reserved, and what this run needs
+sudo zmrig-os hugepages 1g 3       # a Monero dataset is 3 pages; next boot
+sudo zmrig-os hugepages off        # stop reserving it
+```
+
+On most virtual machines the pool cannot be made at all — writing
+`nr_hugepages` under `hugepages-1048576kB` reports success and leaves it at 0 —
+and that is not a fault: the fallback to 2 MiB pages is automatic and the gain
+that matters (4 KiB to 2 MiB) is already there. The extra 1-3 % has not been
+measured in this project's test environment, because no 1 GiB page can be
+reserved there.
 
 :::warning Measuring without huge pages
 Once 1234 pages are reserved, only about 1.2 GB of ordinary RAM is left. Running

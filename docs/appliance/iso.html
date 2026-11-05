@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/assets/js/runtime~main.92eca9a7.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/runtime~main.af3c9b93.js" defer="defer"></script>
 <script src="/ZMRIG/assets/js/main.ec0ef4b9.js" defer="defer"></script>
 </head>
 <body>
@@ -73,7 +73,9 @@ prints the exact set it took instead of pretending it took what was asked.</p>
 <li class="">the boot parameters <code>isolcpus=</code>, <code>nohz_full=</code> and <code>rcu_nocbs=</code> — merged into
 the GRUB environment block on an installed disk and read by every installed
 menu entry (<code>${zmrig_extra}</code>), so they take effect on the next boot; printed
-for you to type on a read-only stick;</li>
+for you to type on a read-only stick. That block holds one value and is written
+by one function, so isolating CPUs after reserving 1 GiB pages keeps both, and
+<code>zmrig-os hugepages off</code> does not hand the CPUs back;</li>
 <li class=""><code>--cpu-affinity</code> for the miner, plus the IRQ masks moved to the remaining CPUs
 every time the supervisor starts.</li>
 </ul>

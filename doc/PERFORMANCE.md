@@ -110,7 +110,7 @@ donation switch).
 | Page size | Typical RandomX gain vs 4 KiB |
 |---|---|
 | 2 MiB explicit (`huge-pages: true`) | +5 % … +20 % |
-| 1 GiB explicit (`1gb-pages: auto`) | +1 % … +3 % on top of 2 MiB |
+| 1 GiB explicit (`hugepages 1g N`, used automatically when reserved) | +1 % … +3 % on top of 2 MiB |
 | Transparent huge pages (fallback) | +2 % … +8 %, less predictable |
 
 `tune-linux.sh` reserves exactly what the algorithm being mined needs, and that
@@ -140,6 +140,42 @@ Measured on the container used for this release (2 vCPU Xeon 2.6 GHz, 3.9 GiB,
 
 That is the whole story of this engine on a small box: page size and thread
 count decide the hashrate, everything else is noise.
+
+### 1 GiB pages: reserved at boot or not at all
+
+A 2080 MB dataset is 1 040 TLB entries at 2 MiB and two at 1 GiB, so the mapper
+asks for gigantic pages **first**, then the 2 MiB pool, then anonymous memory with
+`MADV_HUGEPAGE` — three attempts, no configuration, and the page size that won is
+printed (`huge pages 2336 MB (explicit, 1 GiB pages)`).
+
+It asks; the kernel decides. A gigantic pool is contiguous physical memory and
+can only be carved out early in boot, so it cannot be a sysctl — on this
+validation host, with 3.9 GiB free and nothing else running, writing
+`/sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages` returns success and
+leaves the pool at 0. That is the normal answer from a virtualised host and it is
+why the fallback is silent rather than a warning: **the rig is not misconfigured
+when there is no 1 GiB pool, it is on 2 MiB pages, which is where the +28 % lives
+anyway.**
+
+Where the pool does exist, it is a kernel parameter:
+
+```bash
+sudo zmrig-os hugepages 1g 3     # Monero dataset: 2080 MB, so 3 pages
+sudo reboot                      # the pool is made from unfragmented memory
+sudo zmrig-os hugepages          # what is reserved, and what this run needs
+sudo zmrig-os hugepages off      # stop reserving it (next boot)
+```
+
+`zmrig-os hugepages` writes `default_hugepagesz=1G hugepagesz=1G hugepages=3`
+into the same GRUB environment block `isolate` uses, composing with it rather
+than replacing it. `zmrig --check` prints the pool and what this run would take
+from it, and `doctor` reports it as information, never as a failure.
+
+The gain on top of 2 MiB is small — published RandomX figures are 1–3 %, and it
+has **not been measured in this environment**: no 1 GiB page can be reserved on
+this sandbox, so the code path that uses one has never run here. What has been
+verified is the fallback: with the pool at 0 the mapper falls through to 2 MiB and
+`--check` says so in one line.
 
 ### The 2026-11 round: what "THP fallback" actually costs
 

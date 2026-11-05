@@ -1410,10 +1410,16 @@ fn printConfigSummary(opts: *const options.Options) !void {
         var mem_buf: [160]u8 = undefined;
 
         try out.print("  memory  {s}\n", .{
-            std.fmt.bufPrint(&mem_buf, "{s} maps {d} MB, {d} pages of 2 MiB: {s}", .{
-                algo.label(), need_mb, (need_mb + 1) / 2, hugePageStatus(opts),
+            std.fmt.bufPrint(&mem_buf, "{s} maps {d} MB, {d} pages of 2 MiB (or {d} of 1 GiB): {s}", .{
+                algo.label(), need_mb, (need_mb + 1) / 2, (need_mb + 1023) / 1024, hugePageStatus(opts),
             }) catch "cannot describe the memory this mode needs",
         });
+
+        // 1 GiB pages cannot be reserved after the machine has fragmented, so
+        // the pool either exists at boot or never will. Saying whether the
+        // mapper's first choice is available turns a silent fallback into a
+        // decision the operator can take.
+        try out.print("  1g      {s}\n", .{giganticStatus(need_mb)});
 
         // Reserved pages are one way to get 2 MiB pages; transparent huge pages
         // are the other, and on most hosts it is the only one an unprivileged
@@ -1720,6 +1726,33 @@ fn hugePageStatus(opts: *const options.Options) []const u8 {
     }
 
     return "fewer pages reserved than this mode needs; see --help";
+}
+
+/// Static buffer for `giganticStatus`, which has to return a slice.
+var gigantic_summary_buf: [224]u8 = undefined;
+
+/// One line for `--check`: does the mapper's first choice exist?
+///
+/// RandomX asks for 1 GiB pages before 2 MiB ones, and the pool for them can
+/// only be created early in boot — `echo 3 > /sys/kernel/mm/hugepages/\
+/// hugepages-1048576kB/nr_hugepages` on a machine that has been up for days
+/// either fails or compacts memory for minutes and then fails. So this is
+/// information, not a warning: on a fresh install it says which of the two the
+/// mapping will use, and how many of them the current mode needs.
+fn giganticStatus(need_mb: u64) []const u8 {
+    const buf = &gigantic_summary_buf;
+    const pages = (need_mb + 1023) / 1024;
+    const have = hugepages_mod.giganticMb();
+
+    if (have == 0) {
+        return std.fmt.bufPrint(buf, "no pool: this mode would need {d} page(s) of 1 GiB, and the mapping uses 2 MiB pages instead (doc/PERFORMANCE.md has the one-line reservation)", .{pages}) catch "no 1 GiB pool";
+    }
+
+    if (have < need_mb) {
+        return std.fmt.bufPrint(buf, "{d} MB reserved in 1 GiB pages, {d} MB needed: short by {d} page(s), so the mapping uses 2 MiB pages", .{ have, need_mb, pages - have / 1024 }) catch "1 GiB pool too small";
+    }
+
+    return std.fmt.bufPrint(buf, "{d} MB reserved in 1 GiB pages: this mode takes {d} of them and RandomX reads its dataset through 1 GiB pages", .{ have, pages }) catch "1 GiB pool present";
 }
 
 /// One line for `--check`: whether the governor is armed, and the number it

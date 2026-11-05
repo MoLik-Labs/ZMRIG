@@ -101,7 +101,9 @@ Cả hai nửa đều được ghi, vì chỉ một nửa thì không mua đư�
 * tham số khởi động `isolcpus=`, `nohz_full=` và `rcu_nocbs=` — gộp vào GRUB
   environment block trên ổ đã cài và được mọi menu entry đã cài đọc
   (`${zmrig_extra}`), nên có hiệu lực từ lần boot sau; trên USB chỉ đọc thì in ra
-  để bạn tự gõ;
+  để bạn tự gõ. Block đó chỉ giữ một giá trị và được ghi bởi một hàm duy nhất, nên
+  tách CPU sau khi đã đặt trang 1 GiB thì cả hai đều còn, và
+  `zmrig-os hugepages off` không trả CPU lại cho nhân;
 * `--cpu-affinity` cho miner, và mặt nạ ngắt được dời sang các CPU còn lại mỗi
   lần supervisor khởi động.
 

@@ -17,6 +17,10 @@
 #   zmrig-os mode safe 70        # ... and keep the hottest CPU sensor at 70 C
 #   zmrig-os isolate 4           # keep 4 CPUs for mining (whole cores), pin the
 #                                # miner to them and move IRQs off them
+#   zmrig-os hugepages           # the page size the miner reads its dataset
+#                                # through, and how much of it is reserved
+#   zmrig-os hugepages 1g 3      # reserve 3 x 1 GiB pages at boot (a Monero
+#                                # dataset is 3, and they cannot be made later)
 #   zmrig-os doctor --json       # every check, machine readable
 #   zmrig-os install --disk /dev/nvme0n1   # write this image onto a disk
 #   zmrig-os install             # explain the two forms (live, installed)
@@ -276,6 +280,12 @@ load_conf() {
     # 0 turns the reservation off entirely; empty means "decide from the
     # algorithm". The boot sets it, the config can override it.
     HUGEPAGES=$(conf_default HUGEPAGES "")
+    # Gigantic pages, as a count to reserve at boot. Empty is "none", which is
+    # the honest default: the pool can only be created before the machine
+    # fragments, and a rig that has already been mining for a week cannot get
+    # one. The miner uses it when it exists and falls back to 2 MiB pages when
+    # it does not, so an empty value costs nothing but the option.
+    HUGEPAGES_1G=$(conf_default HUGEPAGES_1G "")
     ISOLATED_CPUS=""
     case "$ISOLATE" in
         ''|0|*[!0-9]*) ;;
@@ -295,7 +305,8 @@ load_conf() {
         v=$(_kc "$kc" SAFE_TEMP); [ -z "$v" ] || SAFE_TEMP="$v"
         v=$(_kc "$kc" ALGO);      [ -z "$v" ] || ALGO="$v"
         v=$(_kc "$kc" ISOLATE);   [ -z "$v" ] || ISOLATE="$v"
-        v=$(_kc "$kc" HUGEPAGES); [ -z "$v" ] || HUGEPAGES="$v"
+        v=$(_kc "$kc" HUGEPAGES);    [ -z "$v" ] || HUGEPAGES="$v"
+        v=$(_kc "$kc" HUGEPAGES_1G); [ -z "$v" ] || HUGEPAGES_1G="$v"
         v=$(_kc "$kc" FLEET);     [ -z "$v" ] || FLEET_URL="$v"
         v=$(_kc "$kc" INSTALL);   [ -z "$v" ] || INSTALL="$v"
     fi
@@ -337,6 +348,7 @@ TUNED_AT="${TUNED_AT:-}"
 CHANNEL="${CHANNEL}"
 ISOLATE="${ISOLATE:-0}"
 HUGEPAGES="${HUGEPAGES:-}"
+HUGEPAGES_1G="${HUGEPAGES_1G:-}"
 EXTRA_ARGS="${EXTRA_ARGS}"
 FLEET_URL="${FLEET_URL}"
 FLEET_INTERVAL="${FLEET_INTERVAL:-$FLEET_INTERVAL_DEFAULT}"
@@ -583,17 +595,26 @@ steer_irqs() {
 # and rcu_nocbs are parsed before the scheduler exists. An installed rig carries
 # a GRUB environment block the initramfs already writes to, so the parameters go
 # there and take effect on the next boot - one mechanism, no grub.cfg editing.
-write_iso_boot_params() {
-    local cpus extra
+# One writer for the whole block, because `zmrig_extra` is a single value:
+# isolating CPUs after reserving gigantic pages used to overwrite the
+# reservation, which is exactly the silent loss this file was already fixed for
+# once (see doc/ARCHITECTURE.md on plan_grubenv_block).
+write_boot_params() {
+    local cpus extra=""
     cpus=$(iso_list)
-    if [ -z "$cpus" ]; then
-        write_grubenv zmrig_extra "" 2>/dev/null || return 1
-        say "next boot: no isolated CPUs"
-        return 0
+    if [ -n "$cpus" ]; then
+        extra="isolcpus=${cpus} nohz_full=${cpus} rcu_nocbs=${cpus}"
     fi
-    extra="isolcpus=${cpus} nohz_full=${cpus} rcu_nocbs=${cpus}"
+    case "${HUGEPAGES_1G:-}" in
+        ''|0|*[!0-9]*) ;;
+        *)
+            # default_hugepagesz is what makes 1 GiB the default for the pool
+            # that follows; hugepages= then counts pages of that size.
+            extra="${extra:+$extra }default_hugepagesz=1G hugepagesz=1G hugepages=${HUGEPAGES_1G}"
+            ;;
+    esac
     write_grubenv zmrig_extra "$extra" || return 1
-    say "next boot: ${extra}"
+    say "next boot: ${extra:-no kernel parameters set}"
 }
 
 # The flags handed to the miner. Printed by `zmrig-os args` so the exact command
@@ -1173,7 +1194,7 @@ cmd_isolate() {
 
     # Kernel-side, next boot, when there is somewhere to write it.
     if is_installed; then
-        if write_iso_boot_params; then
+        if write_boot_params; then
             say "reboot once to put the kernel side in place (isolcpus, nohz_full, rcu_nocbs)"
         else
             warn "could not write the GRUB environment block; add these by hand instead:"
@@ -1188,6 +1209,88 @@ cmd_isolate() {
     if running; then
         say "restarting the miner so the new affinity applies"
         cmd_restart
+    fi
+}
+
+# The page the miner reads its dataset through.
+#
+# 2 MiB pages are the difference between 855 and 1033 H/s on a two-core box, so
+# the reservation is a performance setting, not a detail. 1 GiB pages go further:
+# a 2080 MB dataset is 1 040 TLB entries at 2 MiB and two at 1 GiB. The catch is
+# that the gigantic pool can only be made early in boot, from unfragmented
+# memory, so it is a kernel parameter and not a sysctl - which is why this
+# command writes the boot block instead of poking /proc.
+cmd_hugepages() {
+    local want="${1:-show}" count="${2:-}" pages_2m page_kb need_mb have_1g giga_file
+
+    load_conf
+    giga_file="$SYS/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages"
+
+    show_pools() {
+        pages_2m=$(awk '/^HugePages_Total:/ { print $2 }' /proc/meminfo 2>/dev/null || echo 0)
+        page_kb=$(awk '/^Hugepagesize:/ { print $2 }' /proc/meminfo 2>/dev/null || echo 0)
+        need_mb=$(plan_need_mb "$ALGO" "$MODE" "$(thread_count)" 2>/dev/null || echo 0)
+        [ "${HUGEPAGES:-}" = "0" ] && need_mb=0
+        have_1g=$(cat "$giga_file" 2>/dev/null || echo 0)
+        case "${have_1g:-x}" in ''|*[!0-9]*) have_1g=0 ;; esac
+
+        say "2 MiB    ${pages_2m:-0} page(s) reserved of ${page_kb:-0} KB"
+        if [ -r "$giga_file" ]; then
+            say "1 GiB    ${have_1g} page(s) reserved"
+        else
+            say "1 GiB    this kernel has no 1 GiB pool"
+        fi
+        say "this run ${need_mb} MB: $(((need_mb + 1) / 2)) page(s) of 2 MiB, or $(((need_mb + 1023) / 1024)) of 1 GiB"
+        if [ -n "${HUGEPAGES_1G:-}" ] && [ "${HUGEPAGES_1G}" != "0" ]; then
+            say "boot     reserves ${HUGEPAGES_1G} x 1 GiB; 'zmrig-os hugepages off' removes that"
+        fi
+    }
+
+    case "$want" in
+        show|"")
+            show_pools
+            return 0
+            ;;
+        off|none|no|0)
+            HUGEPAGES_1G=""
+            ;;
+        1g|1G|gigantic)
+            case "${count:-}" in
+                ''|*[!0-9]*) die "usage: zmrig-os hugepages 1g N (N pages of 1 GiB), or 'hugepages off'" ;;
+            esac
+            HUGEPAGES_1G="$count"
+            [ "$count" = "0" ] && HUGEPAGES_1G=""
+            ;;
+        *[!0-9]*)
+            die "usage: zmrig-os hugepages [1g N | off]"
+            ;;
+        *)
+            # A bare number is a 1 GiB count too: it is the only thing this
+            # command reserves, because the 2 MiB pool is already handled by the
+            # initramfs from HUGEPAGES and the algorithm.
+            HUGEPAGES_1G="$want"
+            [ "$want" = "0" ] && HUGEPAGES_1G=""
+            ;;
+    esac
+
+    save_conf
+
+    if [ -z "${HUGEPAGES_1G:-}" ]; then
+        say "1 GiB pages off: the mapping uses 2 MiB pages"
+    else
+        say "1 GiB pages: ${HUGEPAGES_1G} page(s), $((HUGEPAGES_1G * 1024)) MB, reserved at the next boot"
+    fi
+
+    if is_installed; then
+        if write_boot_params; then
+            say "reboot once: the gigantic pool cannot be created after the machine has fragmented"
+        else
+            warn "could not write the GRUB environment block; add this to the kernel line by hand:"
+            say "  default_hugepagesz=1G hugepagesz=1G hugepages=${HUGEPAGES_1G:-0}"
+        fi
+    else
+        say "live stick: the boot entry is read-only - press 'e' in GRUB and add:"
+        say "  default_hugepagesz=1G hugepagesz=1G hugepages=${HUGEPAGES_1G:-0}"
     fi
 }
 
@@ -1462,7 +1565,7 @@ cmd_status() {
     printf '%-14s %s\n' "updates"  "$( if [ "${AUTO_UPDATE:-1}" = "1" ]; then printf 'daily, automatically'; [ "${AUTO_IMAGE:-0}" = "1" ] && printf ' (including the OS image, with rollback)'; else printf 'off (AUTO_UPDATE=0)'; fi )"
     # Huge pages and where the threads are allowed to run: the two numbers a
     # "why is it slower than yesterday" question usually turns into.
-    printf '%-14s %s\n' "hugepages" "$(awk '/^HugePages_Total:/ { print $2 " x " $3 }' /proc/meminfo 2>/dev/null || echo '?')$( [ -n "${HUGEPAGES:-}" ] && printf ' (HUGEPAGES=%s)' "$HUGEPAGES" )"
+    printf '%-14s %s\n' "hugepages" "$(awk '/^HugePages_Total:/ { print $2 " x " $3 }' /proc/meminfo 2>/dev/null || echo '?')$( [ -n "${HUGEPAGES:-}" ] && printf ' (HUGEPAGES=%s)' "$HUGEPAGES" )$( [ -n "${HUGEPAGES_1G:-}" ] && [ "${HUGEPAGES_1G}" != "0" ] && printf ' + %s x 1G at boot' "$HUGEPAGES_1G" )"
     printf '%-14s %s\n' "cpus"     "$( if [ -n "${ISOLATED_CPUS:-}" ]; then printf 'mining on %s, kernel on %s' "$(iso_list)" "$(housekeeping_list)"; else printf 'shared (zmrig-os isolate N keeps some for mining)'; fi )"
     printf '%-14s %s\n' "thermal"  "$(thermal_now)"
     printf '%-14s %s\n' "fee"      "${DONATE}% of Monero time (--donate-level=0 to turn off)"
@@ -1907,6 +2010,16 @@ cmd_doctor() {
     else
         check warn hugepages "none reserved: the miner runs on THP (~20% slower than a reserved pool)"
     fi
+
+    # 1 GiB pages: never a warning, because not having them is not a fault — the
+    # pool has to be reserved before the machine fragments, so it is a decision
+    # taken at install time, and the miner falls back to 2 MiB pages by itself.
+    giga_have=$(cat "$SYS/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages" 2>/dev/null || echo "")
+    case "${giga_have:-x}" in
+        ''|*[!0-9]*) check ok gigantic "no 1 GiB pool on this kernel: the miner uses 2 MiB pages" ;;
+        0)  check ok gigantic "no 1 GiB pages reserved (zmrig-os hugepages 1g $(( (need_mb + 1023) / 1024 )) reserves them at boot)" ;;
+        *)  check ok gigantic "${giga_have} x 1 GiB reserved: the ${need_mb} MB mapping takes $(( (need_mb + 1023) / 1024 ))" ;;
+    esac
 
     thp=$(cat /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null | sed 's/.*\[\(.*\)\].*/\1/' || echo unknown)
     case "$thp" in
@@ -3446,6 +3559,7 @@ main() {
         setup)    cmd_setup "$@" ;;
         mode)     cmd_mode "$@" ;;
         isolate)  cmd_isolate "$@" ;;
+        hugepages|huge) cmd_hugepages "$@" ;;
         quickstart|quick) cmd_quickstart "$@" ;;
         boot)     cmd_boot "$@" ;;
         tune)     cmd_tune "$@" ;;

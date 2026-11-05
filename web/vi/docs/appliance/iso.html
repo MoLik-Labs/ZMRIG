@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.6dcaebfb.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/runtime~main.16a901d8.js" defer="defer"></script>
 <script src="/ZMRIG/vi/assets/js/main.c62143c8.js" defer="defer"></script>
 </head>
 <body>
@@ -73,7 +73,9 @@ nó lấy được, không giả vờ lấy đúng như bạn xin.</p>
 <li class="">tham số khởi động <code>isolcpus=</code>, <code>nohz_full=</code> và <code>rcu_nocbs=</code> — gộp vào GRUB
 environment block trên ổ đã cài và được mọi menu entry đã cài đọc
 (<code>${zmrig_extra}</code>), nên có hiệu lực từ lần boot sau; trên USB chỉ đọc thì in ra
-để bạn tự gõ;</li>
+để bạn tự gõ. Block đó chỉ giữ một giá trị và được ghi bởi một hàm duy nhất, nên
+tách CPU sau khi đã đặt trang 1 GiB thì cả hai đều còn, và
+<code>zmrig-os hugepages off</code> không trả CPU lại cho nhân;</li>
 <li class=""><code>--cpu-affinity</code> cho miner, và mặt nạ ngắt được dời sang các CPU còn lại mỗi
 lần supervisor khởi động.</li>
 </ul>

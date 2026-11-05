@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/assets/js/runtime~main.92eca9a7.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/runtime~main.af3c9b93.js" defer="defer"></script>
 <script src="/ZMRIG/assets/js/main.ec0ef4b9.js" defer="defer"></script>
 </head>
 <body>
@@ -45,8 +45,17 @@ machine that has been sliding for a week rather than the one that fell over
 just now;</li>
 <li class="">every command result, including refusals.</li>
 </ul>
-<p>Each kind has a cooldown per rig, so a hot machine does not shout every minute.
-The second hashrate rule is the slow one, and it says what it compared:</p>
+<p>Each kind has a cooldown per rig, so a hot machine does not shout every minute
+(<code>FLEET_ALERT_COOLDOWN</code>, seconds, default 1800). The threshold is
+<code>FLEET_ALERT_TEMP</code> (default 85 °C) and the hashrate rule is
+<code>FLEET_ALERT_HASHRATE_DROP</code> (default 0.5, meaning &quot;half&quot;).</p>
+<p>The temperature is the hottest reading the rig can find, not the first one:
+<code>coretemp</code>, <code>k10temp</code> or <code>x86_pkg_temp</code> before the board&#x27;s Super I/O chip, and
+<code>acpitz</code> — which reports a southbridge estimate 10–20 °C below the die — only
+when nothing else exists. A rig whose number is 0 has no sensor at all, and
+<code>zmrig-os doctor</code> says so in one line; the alert cannot fire on a machine that
+cannot measure itself, which is why it is worth looking at.</p>
+<p>The second hashrate rule is the slow one, and it says what it compared:</p>
 <div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token plain">🐌 rig-2 is at </span><span class="token number" style="color:rgb(247, 140, 108)">640.0</span><span class="token plain"> H/s, </span><span class="token number" style="color:rgb(247, 140, 108)">45</span><span class="token plain">% of the </span><span class="token number" style="color:rgb(247, 140, 108)">1.4</span><span class="token plain"> kH/s it measured itself</span><br></div></code></pre></div></div>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="hosting-it">Hosting it<a href="#hosting-it" class="hash-link" aria-label="Direct link to Hosting it" title="Direct link to Hosting it" translate="no">​</a></h2>
 <p>One Node process, <strong>no dependencies</strong>, one JSON file of state.</p>

@@ -115,6 +115,8 @@ pub extern fn xmo_engine_cache_size(engine: *const Engine) usize;
 pub extern fn xmo_engine_seed(engine: *Engine, seed: [*]const u8, seed_len: usize, threads: c_int, err: [*]u8, errlen: usize) c_int;
 pub extern fn xmo_engine_huge_pages(engine: *const Engine) usize;
 pub extern fn xmo_engine_huge_pages_total(engine: *const Engine) usize;
+
+pub extern fn xmo_engine_huge_page_kb(engine: *const Engine) usize;
 pub extern fn xmo_engine_total_memory(engine: *const Engine) usize;
 pub extern fn xmo_vm_new(engine: *Engine, flags: c_int, numa_node: u32, err: [*]u8, errlen: usize) ?*Vm;
 pub extern fn xmo_vm_free(vm: ?*Vm) void;
@@ -188,6 +190,14 @@ pub const Wrapped = struct {
     /// Bytes that asked for huge pages, granted or not.
     pub fn hugePageBytesTotal(self: *const Wrapped) usize {
         return xmo_engine_huge_pages_total(self.handle);
+    }
+
+    /// The page size behind the mapping in KiB: 0 for ordinary 4 KiB pages,
+    /// 2048 for 2 MiB pages, 1048576 when the mapping came out of a reserved
+    /// 1 GiB pool. Two mappings of the same size do not perform the same, so
+    /// this is the number worth printing next to the byte count.
+    pub fn hugePageKb(self: *const Wrapped) usize {
+        return xmo_engine_huge_page_kb(self.handle);
     }
 
     pub fn totalMemory(self: *const Wrapped) usize {

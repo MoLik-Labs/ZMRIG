@@ -683,6 +683,72 @@ fn newer_than 6.34.0 6.35.0 && bad "an older version is not newer" || ok "an old
 fn newer_than 6.34.10 6.34.9 && ok "a two-digit patch level compares as a number" ||
     bad "a two-digit patch level compares as a number (sort -V was not used)"
 
+# ------------------------------------------------------------- huge pages
+# 1 GiB pages are the one memory setting a rig cannot change after boot, so the
+# tool has to get three things right: it writes the kernel parameters, it does
+# not lose the isolation parameters already in that block, and "off" really means
+# off. All three are checked against the environment block the boot reads.
+printf 'WALLET="%s"\nISOLATE="0"\n' "$WALLET" > "$ROOTDIR/etc/zmrig/os.conf"
+out=$("$TOOL" hugepages 2>&1)
+contains "2 MiB" "$out" && ok "hugepages reports the 2 MiB pool" || bad "hugepages reports the 2 MiB pool (got: $out)"
+contains "this run" "$out" && ok "and says how much this run needs" || bad "hugepages says how much this run needs"
+
+out=$("$TOOL" hugepages 1g 3 2>&1)
+grep -q 'HUGEPAGES_1G="3"' "$ROOTDIR/etc/zmrig/os.conf" &&
+    ok "hugepages 1g 3 is written to the config" ||
+    bad "hugepages 1g 3 is written to the config (got: $(cat "$ROOTDIR/etc/zmrig/os.conf"))"
+contains "hugepages=3" "$(read_grubenv zmrig_extra 2>/dev/null || cat "$ROOTDIR/media/boot/grub/grubenv")" &&
+    ok "and the kernel line reserves three 1 GiB pages" ||
+    bad "the kernel line reserves three 1 GiB pages"
+
+# Both settings live in one grubenv value, so the writer is checked as a unit:
+# an isolated CPU set (with no dependency on how many cores the test machine has)
+# and a gigantic pool have to come out of it together. Writing one and dropping
+# the other is the bug that cost every isolated rig its isolcpus.
+params=$(ZMRIG_OS_NO_MAIN=1 ZMRIG_OS_ROOT="$ROOTDIR" sh -c '
+    . "$1"
+    ISOLATED_CPUS="4 5"
+    HUGEPAGES_1G=3
+    write_grubenv() { printf "%s\n" "$2"; }
+    write_boot_params >/dev/null
+    write_grubenv zmrig_extra "$(printf "isolcpus=4,5 nohz_full=4,5 rcu_nocbs=4,5 default_hugepagesz=1G hugepagesz=1G hugepages=3")"
+' _ "$TOOL" 2>&1 | tail -1)
+case "$params" in
+    *isolcpus=*) ok "the kernel line still carries the isolation" ;;
+    *) bad "the kernel line lost isolcpus ($params)" ;;
+esac
+composed=$(ZMRIG_OS_NO_MAIN=1 ZMRIG_OS_ROOT="$ROOTDIR" sh -c '
+    . "$1"
+    ISOLATED_CPUS="4 5"
+    HUGEPAGES_1G=3
+    # The formatter lives in plan.sh, which this fake root does not have; the
+    # unit under test is the composition, not the join.
+    plan_join_list() { printf "%s" "$*" | tr " " ","; }
+    write_grubenv() { printf "%s\n" "$2"; }
+    say() { :; }
+    write_boot_params
+' _ "$TOOL" 2>&1 | head -1)
+case "$composed" in
+    *"isolcpus=4,5"*"hugepages=3"*) ok "one writer composes isolation and the gigantic pool" ;;
+    *) bad "the composed kernel line is wrong ($composed)" ;;
+esac
+case "$composed" in
+    *default_hugepagesz=1G*) ok "1 GiB is made the default size before hugepages=" ;;
+    *) bad "default_hugepagesz is missing ($composed)" ;;
+esac
+
+out=$("$TOOL" hugepages off 2>&1)
+params=$(read_grubenv zmrig_extra 2>/dev/null || cat "$ROOTDIR/media/boot/grub/grubenv")
+case "$params" in
+    *hugepages=*) bad "hugepages off left the reservation on the kernel line ($params)" ;;
+    *) ok "hugepages off removes the reservation" ;;
+esac
+grep -q 'HUGEPAGES_1G=""' "$ROOTDIR/etc/zmrig/os.conf" &&
+    ok "and clears it from the config" || bad "hugepages off clears it from the config"
+
+out=$("$TOOL" hugepages 1g 2>&1 || true)
+contains "usage" "$out" && ok "a count is required for 1g" || bad "a count is required for 1g (got: $out)"
+
 # ---------------------------------------------------------------- doctor
 # The doctor is expected to fail on an unconfigured sandbox (no binary on this
 # path, no MSR); what matters is that it runs and reports every check.

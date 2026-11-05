@@ -101,7 +101,9 @@ Both halves are written, because either one alone buys nothing:
 * the boot parameters `isolcpus=`, `nohz_full=` and `rcu_nocbs=` — merged into
   the GRUB environment block on an installed disk and read by every installed
   menu entry (`${zmrig_extra}`), so they take effect on the next boot; printed
-  for you to type on a read-only stick;
+  for you to type on a read-only stick. That block holds one value and is written
+  by one function, so isolating CPUs after reserving 1 GiB pages keeps both, and
+  `zmrig-os hugepages off` does not hand the CPUs back;
 * `--cpu-affinity` for the miner, plus the IRQ masks moved to the remaining CPUs
   every time the supervisor starts.
 

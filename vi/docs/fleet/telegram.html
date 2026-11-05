@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.6dcaebfb.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/runtime~main.16a901d8.js" defer="defer"></script>
 <script src="/ZMRIG/vi/assets/js/main.c62143c8.js" defer="defer"></script>
 </head>
 <body>
@@ -44,7 +44,15 @@ tụt dần cả tuần, chứ không phải cái vừa ngã trong một phút;<
 <li class="">mọi kết quả lệnh, kể cả bị từ chối.</li>
 </ul>
 <p>Mỗi loại có thời gian chờ riêng cho từng rig, nên máy nóng không hét lên mỗi
-phút. Luật hashrate thứ hai là luật chậm, và nó nói rõ nó so với cái gì:</p>
+phút (<code>FLEET_ALERT_COOLDOWN</code>, giây, mặc định 1800). Ngưỡng là <code>FLEET_ALERT_TEMP</code>
+(mặc định 85 °C), còn luật hashrate là <code>FLEET_ALERT_HASHRATE_DROP</code> (mặc định 0.5,
+tức &quot;một nửa&quot;).</p>
+<p>Nhiệt độ là chỉ số nóng nhất mà rig tìm được, không phải chỉ số đầu tiên:
+<code>coretemp</code>, <code>k10temp</code> hay <code>x86_pkg_temp</code> trước, rồi mới tới chip Super I/O của
+bo mạch, và <code>acpitz</code> — vốn báo ước lượng từ chip cầu nam, thấp hơn lõi 10–20 °C —
+chỉ khi không còn gì khác. Rig báo 0 là rig không có cảm biến, và <code>zmrig-os doctor</code> nói đúng một dòng về việc đó; cảnh báo không thể bắn trên một cái máy
+không tự đo được, nên con số 0 đáng để ý.</p>
+<p>Luật hashrate thứ hai là luật chậm, và nó nói rõ nó so với cái gì:</p>
 <div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token plain">🐌 rig-2 is at </span><span class="token number" style="color:rgb(247, 140, 108)">640.0</span><span class="token plain"> H/s, </span><span class="token number" style="color:rgb(247, 140, 108)">45</span><span class="token plain">% of the </span><span class="token number" style="color:rgb(247, 140, 108)">1.4</span><span class="token plain"> kH/s it measured itself</span><br></div></code></pre></div></div>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="tự-host">Tự host<a href="#tự-host" class="hash-link" aria-label="Đường dẫn trực tiếp đến Tự host" title="Đường dẫn trực tiếp đến Tự host" translate="no">​</a></h2>
 <p>Một tiến trình Node, <strong>không phụ thuộc gì</strong>, trạng thái là một file JSON.</p>

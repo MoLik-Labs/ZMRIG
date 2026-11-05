@@ -32,9 +32,28 @@ theo từng thuật toán, và `zmrig-tune --algo=` ghi đúng con số đó, n�
 `sudo zmrig-tune --algo panthera` chỉ đặt 192 MB chứ không phải 2.3 GB.
 
 Kiểm tra miner có lấy được: log khởi động in số byte thật sự đến từ huge pages
-tường minh (`huge pages 2336 MB (explicit)`), API trả
+tường minh (`huge pages 2336 MB (explicit, 2 MiB pages)`), API trả
 `"hugepages": [được cấp, cần]` — `[1168, 1168]` với `rx/0`, `[96, 96]` với
 `panthera`.
+
+**Có pool 1 GiB thì nó được dùng trước.** Dataset 2080 MB là 1 040 mục TLB ở
+2 MiB và hai mục ở 1 GiB, nên bộ cấp phát hỏi trang gigantic trước, rồi tới pool
+2 MiB, rồi tới bộ nhớ thường kèm gợi ý THP — và log nói cái nào đã trả lời
+(`explicit, 1 GiB pages` so với `explicit, 2 MiB pages`). Đây không thể là thiết
+lập lúc chạy: pool là bộ nhớ vật lý liền mạch và phải được lấy sớm lúc boot, nên
+nó là tham số kernel.
+
+```bash
+sudo zmrig-os hugepages            # đang đặt bao nhiêu, lần chạy này cần bao nhiêu
+sudo zmrig-os hugepages 1g 3       # dataset Monero là 3 trang; áp dụng lần boot sau
+sudo zmrig-os hugepages off        # thôi đặt trước
+```
+
+Trên phần lớn máy ảo, pool không tạo được — ghi `nr_hugepages` dưới
+`hugepages-1048576kB` báo thành công mà vẫn để 0 — và đó không phải lỗi: fallback
+về trang 2 MiB là tự động, và phần lợi ích lớn (4 KiB lên 2 MiB) đã có sẵn. Phần
+thêm 1-3 % thì **chưa được đo trong môi trường kiểm thử của dự án này**, vì ở đó
+không đặt được trang 1 GiB nào.
 
 :::warning Đo khi không có huge pages
 Khi đã đặt 1234 trang, RAM thường chỉ còn khoảng 1.2 GB. Chạy `--no-huge-pages`
