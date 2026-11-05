@@ -29,14 +29,18 @@
 namespace {
 
 constexpr size_t kHugePageSize = 2 * 1024 * 1024;
+#ifndef _WIN32
 /* x86-64's gigantic page, and the encoding that asks for it. MAP_HUGE_SHIFT is
  * 26 on Linux for every architecture that has MAP_HUGETLB; the size given to
- * mmap must be a multiple of 1 GiB or the call is EINVAL. */
+ * mmap must be a multiple of 1 GiB or the call is EINVAL. Guarded because the
+ * Windows build has neither mmap nor these names, and an unused constant there
+ * is a warning at best. */
 constexpr size_t kGiganticPageSize = 1024ULL * 1024 * 1024;
 #ifndef MAP_HUGE_SHIFT
 #define MAP_HUGE_SHIFT 26
 #endif
 constexpr int kGiganticShift = 30;
+#endif
 constexpr size_t kScratchpad   = RANDOMX_SCRATCHPAD_L3_MAX_SIZE;
 
 /* One mapping. `mmap` returns zeroed pages for free, so the 2 GiB fallback no
