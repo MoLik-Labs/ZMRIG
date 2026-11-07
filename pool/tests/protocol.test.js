@@ -46,6 +46,27 @@ test('config validation refuses settings that would take money for nothing', () 
   assert.deepStrictEqual(bad({ operator_address: 'not-an-address' }), []);
 });
 
+test('the pool refuses a fee address no wallet can spend', () => {
+  const bad = (overrides) => validateConfig(loadConfig(null, { payout_mode: 'ledger', ...overrides }));
+  // One character off, same length, same alphabet: the case a shape check calls
+  // valid and a wallet calls "not mine". The fee address never logs in, so
+  // nothing else in the pool would ever have noticed.
+  const typo = `${OPERATOR.slice(0, -1)}f`;
+  assert.notStrictEqual(typo, OPERATOR);
+
+  const ledger = bad({ operator_address: typo }).join();
+  assert.match(ledger, /operator_address cannot be paid/);
+  assert.match(ledger, /checksum does not match/);
+  // Real money moving or not, a typo is a typo: the address is published and
+  // people send to it by hand.
+  assert.match(bad({ payout_mode: 'wallet', operator_address: typo }).join(), /cannot be paid/);
+
+  // A real address on another chain has a valid checksum and a different
+  // network byte, so it is not address-shaped here and stays a shape problem.
+  const mainnet = loadConfig(null, { payout_mode: 'ledger' });
+  assert.deepStrictEqual(validateConfig(mainnet), []);
+});
+
 test('the environment overrides the file, the way a PaaS injects secrets', () => {
   const before = { ...process.env };
   process.env.OPERATOR_ADDRESS = OPERATOR;

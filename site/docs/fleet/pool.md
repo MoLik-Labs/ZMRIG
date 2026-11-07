@@ -112,14 +112,20 @@ zmrig -o pool.example.com:3333 -u 4YourMoneroAddress.rig1 -t 4
   arrives from `monerod`.
 - The audit log is append-only — rotate it with `logrotate`, never edit it.
 - Change the fee wallet with `OPERATOR_ADDRESS`; the default lives in
-  `pool/src/operator.js`.
+  `pool/src/operator.js`. The address is decoded at startup (base58, network
+  byte, Keccak-256 checksum), not shape-matched: one wrong character still looks
+  like an address, and the fee wallet never logs in, so nothing else would
+  notice.
 - `--check` refuses configurations that cannot pay correctly: a fee outside
-  0–10 %, an unknown mode, a PPLNS window that is too short.
+  0–10 %, an unknown mode, a PPLNS window that is too short, a fee address that
+  does not decode.
 - Every share is re-hashed by the pool before it is paid (`verify_shares`), one
   long-lived `zmrig --verify-share` per core so the 256 MB cache is built once
-  per round. Measured on 2 vCPU with two verifiers: 530 ms for the first share
-  and 103 shares/s after that — a rig at 1 kH/s on difficulty 300 submits about
-  one share every 0.3 s.
+  per round. `pool/tests/bench-verify.mjs` measures it on your machine; on a
+  2 vCPU test box with two verifiers and 200 shares per round the first share
+  costs 0.85 s (cache build) and the steady state is 43 shares/s — a rig at
+  1 kH/s on difficulty 300 submits about 3.3 shares/s, so that box verifies
+  roughly a dozen of them.
 - `/stratum` faces the internet, so its framing is bounded: a frame over 1 MiB
   closes the connection, a **message** over 256 KiB closes it too (a per-frame
   limit alone leaves a client free to send continuation frames for ever), and a

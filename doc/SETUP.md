@@ -348,7 +348,11 @@ one value marked `sync: false`:
 DAEMON = https://your-node.example:18081
 ```
 
-Leave `OPERATOR_ADDRESS` empty to use the wallet in `pool/src/operator.js`, or
+The address is decoded when the pool starts - base58, network byte and the
+Keccak-256 checksum - and the pool refuses to start if it does not decode: a
+single wrong character still looks like an address, the fee wallet never logs
+in, and nothing else would ever notice. Leave `OPERATOR_ADDRESS` empty to use the
+wallet in `pool/src/operator.js`, or
 set your own (the fee goes to whoever is listed at `/api/config`). `POOL_FEE_PERCENT=1`
 is already in the blueprint.
 

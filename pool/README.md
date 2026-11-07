@@ -109,9 +109,13 @@ Environment names are the upper-case equivalents: `POOL_FEE_PERCENT`,
 the rest of the table above.
 
 `--check` prints the effective configuration and exits non-zero on anything that
-would let the pool take a fee it cannot justify (fee out of range, unknown mode,
-a PPLNS window so short that payouts are a lottery, a non-Monero operator
-address in `wallet` mode).
+would let the pool take a fee it cannot justify: a fee out of range, an unknown
+mode, a PPLNS window so short that payouts are a lottery, or an operator address
+that no wallet can spend. The last one is checked by decoding the address -
+base58, network byte, Keccak-256 checksum - not by matching its shape, because a
+single wrong character in a 95-character string still looks like an address and
+would send every fee payment to a key nobody holds. The fee address never logs
+in, so nothing else in the pool would ever have noticed.
 
 ## Shares, PPLNS and the audit log
 
@@ -137,10 +141,13 @@ address in `wallet` mode).
 `zmrig --verify-share` is a line protocol: one JSON object in, one out, and
 **its log goes to stderr** — `stdout` belongs to the protocol. The pool keeps one
 verifier per core alive and re-uses it, so the 256 MB RandomX cache is built
-once per round rather than once per share. Measured on 2 vCPU with two
-verifiers: the first share costs 530 ms (cache build) and the next 200 run at
-**103 shares per second**. A rig at 1 kH/s on difficulty 300 submits about one
-share every 0.3 s, so the verifier is idle at the scale this pool is for.
+once per round rather than once per share. `pool/tests/bench-verify.mjs`
+measures the three numbers that matter, on whatever machine you run it on; on a
+2 vCPU test box with two verifiers and 200 shares per round: the first share of
+a round costs **0.85 s** (the cache build), every share after that takes about
+**23 ms** of wall time, and the steady state is **43 shares per second**. A rig
+at 1 kH/s on difficulty 300 submits about 3.3 shares a second, so that box
+verifies roughly a dozen of them.
 
 Shares queued behind a busy verifier are dispatched as each one frees, not when
 the next share happens to arrive; a share that cannot be verified within
