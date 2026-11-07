@@ -781,3 +781,37 @@ test('the dashboard marks a rig that cannot be paid, before the chat is read', a
     await app.close();
   }
 });
+
+test('the wallet mark costs one decode per address, not one per rig', async () => {
+  const app = await fleet();
+  try {
+    // 120 rigs, one wallet: the shape of every real farm, and the shape the
+    // first version of this mark got wrong - it decoded the same address 120
+    // times per render, which turned a 1 ms page into a 70 ms page.
+    const rigs = [];
+    for (let index = 0; index < 120; index += 1) {
+      const record = app.store.claim(crypto.randomBytes(32).toString('hex'));
+      record.owner = 'tg:1';
+      record.label = `rig-${index}`;
+      record.last_seen = Date.now();
+      record.status = { state: 'mining', hashrate: 900, temp: 60, wallet: WALLET, coin: 'xmr' };
+      rigs.push(record);
+    }
+
+    await app.signIn();
+    await (await app.request('/rigs')).text();
+
+    // With the verdict cached by address, a second render is string work only.
+    const started = process.hrtime.bigint();
+    const body = await (await app.request('/rigs')).text();
+    const elapsed = Number(process.hrtime.bigint() - started) / 1e6;
+
+    assert.match(body, /rig-119/);
+    // 120 decodes would be ~24 ms of BigInt Keccak on top of the render; the
+    // budget below is loose enough for a shared CI runner and tight enough to
+    // fail if the cache stops working.
+    assert.ok(elapsed < 25, `rigs page took ${elapsed.toFixed(1)} ms for 120 rigs`);
+  } finally {
+    await app.close();
+  }
+});

@@ -34,6 +34,26 @@ function dot(state) {
  * somebody reads the chat is a dashboard that hides the one thing that costs
  * money, so every list that shows a rig shows this too.
  */
+// A decode is about 0.2 ms of BigInt Keccak, and a farm is one address repeated
+// per rig: 200 rigs on one wallet would be 200 identical decodes on every
+// render. The cache is by address, so a farm pays for one; the size cap means a
+// store full of junk logins cannot grow it without bound - it is emptied rather
+// than tracked, because an address that is checked twice a day does not need an
+// eviction policy.
+const VERDICT_CACHE = new Map();
+const VERDICT_CACHE_MAX = 512;
+
+function walletVerdict(wallet) {
+  const cached = VERDICT_CACHE.get(wallet);
+  if (cached) return cached;
+
+  const verdict = address.check(wallet);
+  if (VERDICT_CACHE.size >= VERDICT_CACHE_MAX) VERDICT_CACHE.clear();
+  VERDICT_CACHE.set(wallet, verdict);
+
+  return verdict;
+}
+
 function walletTag(record) {
   const wallet = String((record.status && record.status.wallet) || '');
   const coin = String((record.status && record.status.coin) || 'xmr').toLowerCase();
@@ -42,7 +62,7 @@ function walletTag(record) {
   // whose login is a name rather than an address.
   if (!wallet || (wallet.length !== 95 && wallet.length !== 106)) return null;
   if (coin !== 'xmr' && coin !== 'monero') return null;
-  const verdict = address.check(wallet);
+  const verdict = walletVerdict(wallet);
   if (verdict.ok && verdict.net === 'mainnet') return null;
 
   return verdict.ok
@@ -83,9 +103,10 @@ function rigTable(devices, config, now) {
     <tbody>${devices
       .map((record) => {
         const state = stateOf(record, config, now);
+        const tag = walletTag(record);
         return `<tr>
           <td>${dot(state)}<a href="/rig/${encodeURIComponent(record.id)}">${escape(record.label || record.id)}</a>${
-            walletTag(record) ? ` ${walletTag(record)}` : ''
+            tag ? ` ${tag}` : ''
           }
             <div class="muted small">${escape(record.id)}</div></td>
           <td>${escape(state)}</td>
@@ -217,9 +238,9 @@ function rig({ record, config, now, csrf, flash, flashBad, roster = null }) {
     }${
       walletTag(record)
         ? `<div class="muted small">${escape(
-            address.check(String(status.wallet || '')).ok
+            walletVerdict(String(status.wallet || '')).ok
               ? 'a stagenet or testnet address - a mainnet pool cannot pay it'
-              : `this address fails its checksum: ${address.check(String(status.wallet || '')).reason}. The rig will not start under rx/0.`,
+              : `this address fails its checksum: ${walletVerdict(String(status.wallet || '')).reason}. The rig will not start under rx/0.`,
           )}</div>`
         : ''
     }</dd>
