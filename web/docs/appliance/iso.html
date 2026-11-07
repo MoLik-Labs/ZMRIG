@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/assets/js/runtime~main.8dc1df66.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/runtime~main.91c4bd91.js" defer="defer"></script>
 <script src="/ZMRIG/assets/js/main.ec0ef4b9.js" defer="defer"></script>
 </head>
 <body>
@@ -210,8 +210,10 @@ configured.</li>
 <li class=""><strong>An update with no checksum is refused.</strong> The manifest names a sha256 for the
 binary and for the image; without one there is no way to tell a truncated
 download or a captive-portal page from the real file, and installing that as
-the miner is worse than staying a version behind. <code>zmrig-os auto</code> says so in
-one line and exits 0, so the daily job stays quiet.</li>
+the miner is worse than staying a version behind. The rule is the same for
+<code>zmrig-os update --apply</code> and for the daily job: they download the same bytes,
+so they cannot have different rules about verifying them. <code>zmrig-os auto</code> says
+so in one line and exits 0, so the daily job stays quiet.</li>
 <li class=""><code>AUTO_UPDATE=0</code> turns the whole thing off. No manifest reachable means
 &quot;offline&quot;, which is not an error: the rig keeps mining and the job exits 0.</li>
 </ul>

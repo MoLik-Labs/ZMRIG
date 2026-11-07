@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.cb8b2cad.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/runtime~main.e69a44d4.js" defer="defer"></script>
 <script src="/ZMRIG/vi/assets/js/main.c62143c8.js" defer="defer"></script>
 </head>
 <body>
@@ -198,8 +198,10 @@ kia vẫn về đúng cấu hình của nó.</li>
 <li class=""><strong>Bản cập nhật không có checksum thì bị từ chối.</strong> Manifest ghi sha256 cho
 binary và cho ảnh; không có thì không cách nào phân biệt một file tải dở hay
 một trang captive portal với file thật, và cài đúng thứ đó làm miner thì tệ hơn
-là chậm một phiên bản. <code>zmrig-os auto</code> nói đúng một dòng rồi thoát 0, nên job
-hằng ngày vẫn im lặng.</li>
+là chậm một phiên bản. Quy tắc này giống nhau cho <code>zmrig-os update --apply</code> và
+cho job hằng ngày: cả hai tải đúng cùng một loại byte, nên không thể có hai quy
+tắc khác nhau về việc kiểm chúng. <code>zmrig-os auto</code> nói đúng một dòng rồi thoát 0,
+nên job hằng ngày vẫn im lặng.</li>
 <li class=""><code>AUTO_UPDATE=0</code> tắt toàn bộ. Không với tới được manifest nghĩa là &quot;đang offline&quot;,
 không phải lỗi: rig vẫn đào và job thoát 0.</li>
 </ul>

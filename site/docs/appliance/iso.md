@@ -335,8 +335,10 @@ zmrig-os auto --apply    # do it now instead of at 03:00
 - **An update with no checksum is refused.** The manifest names a sha256 for the
   binary and for the image; without one there is no way to tell a truncated
   download or a captive-portal page from the real file, and installing that as
-  the miner is worse than staying a version behind. `zmrig-os auto` says so in
-  one line and exits 0, so the daily job stays quiet.
+  the miner is worse than staying a version behind. The rule is the same for
+  `zmrig-os update --apply` and for the daily job: they download the same bytes,
+  so they cannot have different rules about verifying them. `zmrig-os auto` says
+  so in one line and exits 0, so the daily job stays quiet.
 - `AUTO_UPDATE=0` turns the whole thing off. No manifest reachable means
   "offline", which is not an error: the rig keeps mining and the job exits 0.
 

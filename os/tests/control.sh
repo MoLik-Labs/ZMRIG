@@ -260,6 +260,13 @@ expect_fail "a bad checksum is refused" "$TOOL" update --apply
 contains "tampered" "$("$ROOTDIR/usr/local/bin/zmrig" --version 2>/dev/null)" &&
     bad "a refused update must not overwrite the binary" || ok "a refused update does not overwrite the binary"
 
+# A manifest without a checksum: the unattended path always refused it, the
+# manual one did not, and the download it accepts is the same download.
+printf '#!/bin/sh\necho zmrig 9.9.9\nexit 0\n' > "$ROOTDIR/bucket/zmrig-new"
+manifest "9.9.9" ""
+expect_fail "a manifest with no checksum is refused" "$TOOL" update --apply
+contains "binary_sha256" "$CHECK_MSG" && ok "the refusal says what is missing" || bad "the refusal names the missing checksum"
+
 manifest "0.0.1" "$NEW_SHA"
 expect_ok "an older manifest is still readable" "$TOOL" update --check
 contains "available  0.0.1" "$CHECK_MSG" && ok "an older version is reported as available, not as an upgrade" || bad "an older version is reported as available"

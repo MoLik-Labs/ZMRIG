@@ -323,8 +323,10 @@ zmrig-os auto --apply    # làm ngay thay vì đợi 03:00
 - **Bản cập nhật không có checksum thì bị từ chối.** Manifest ghi sha256 cho
   binary và cho ảnh; không có thì không cách nào phân biệt một file tải dở hay
   một trang captive portal với file thật, và cài đúng thứ đó làm miner thì tệ hơn
-  là chậm một phiên bản. `zmrig-os auto` nói đúng một dòng rồi thoát 0, nên job
-  hằng ngày vẫn im lặng.
+  là chậm một phiên bản. Quy tắc này giống nhau cho `zmrig-os update --apply` và
+  cho job hằng ngày: cả hai tải đúng cùng một loại byte, nên không thể có hai quy
+  tắc khác nhau về việc kiểm chúng. `zmrig-os auto` nói đúng một dòng rồi thoát 0,
+  nên job hằng ngày vẫn im lặng.
 - `AUTO_UPDATE=0` tắt toàn bộ. Không với tới được manifest nghĩa là "đang offline",
   không phải lỗi: rig vẫn đào và job thoát 0.
 

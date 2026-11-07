@@ -284,11 +284,12 @@ supervisor read it.
 
 Installed rigs run `/etc/periodic/daily/zmrig-auto` from busybox `crond`:
 
-An update is refused when the manifest carries no sha256 for the file: an
-unwatched update that cannot be verified is a truncated download or a captive
-portal page installed as the miner. `verify_sha` (interactive paths, checksum
-optional) and `verify_sha_required` (the automatic path, checksum mandatory) are
-two functions so the difference is a decision and not an oversight.
+An update is refused when the manifest carries no sha256 for the file: a
+download that cannot be verified is a truncated file or a captive portal page
+installed as the miner. Both paths refuse it — `zmrig-os update --apply` as well
+as the daily job. They used to differ, on the theory that an operator watching
+the screen could tell; the operator is exactly who cannot tell, and the
+download is byte-for-byte the same one.
 
 | What | Where it goes | Rollback |
 | --- | --- | --- |

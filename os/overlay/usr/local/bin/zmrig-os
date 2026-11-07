@@ -2723,6 +2723,12 @@ cmd_update() {
             mkdir -p "$RUN"
             say "downloading $url"
             fetch "$url" > "$tmp" || die "download failed"
+            # A manifest with no checksum cannot be verified, and the manual
+            # path used to accept that while the unattended one refused it -
+            # the same download, a weaker rule because a person was watching.
+            # The person watching is the one who cannot tell a truncated
+            # download or a captive-portal page from a binary.
+            [ -n "$sha" ] || die "the manifest has no binary_sha256: refusing to install something it cannot verify"
             verify_sha "$tmp" "$sha" || die "checksum mismatch: refusing to install"
             chmod +x "$tmp"
             # Same install path as the automatic one: on an installed disk the
@@ -2741,6 +2747,7 @@ cmd_update() {
         mkdir -p "$(dirname "$target")"
         say "downloading $url"
         fetch "$url" > "$target" || die "download failed"
+        [ -n "$sha" ] || die "the manifest has no iso_sha256: refusing to write an image it cannot verify"
         verify_sha "$target" "$sha" || die "checksum mismatch: refusing to write"
 
         # Writing the stick you booted from turns a running rig into a brick.
