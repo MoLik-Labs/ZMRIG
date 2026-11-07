@@ -407,6 +407,14 @@ test('one typo on a shared wallet is one message, not one per rig', async () => 
     assert.equal(wallet.length, 2, 'one per cooldown, not one per rig');
     assert.match(wallet[1].text, /5 rigs/);
     assert.match(wallet[1].text, /checksum does not match/);
+
+    // Suppressing the repeated wallet warning must not swallow the rest of that
+    // check-in: a rig on a farm with a bad address still has a hashrate.
+    fleet.advance(CONFIG.interval * 1000 + 1000);
+    await hello(fleet, { status: { state: 'mining', hashrate: 1000, temp: 60, wallet: typo } }, { key: keys[1] });
+    fleet.advance(CONFIG.interval * 1000 + 1000);
+    await hello(fleet, { status: { state: 'mining', hashrate: 100, temp: 60, wallet: typo } }, { key: keys[1] });
+    assert.equal(fleet.events.filter((event) => event.kind === 'hashrate').length, 1);
   } finally {
     await fleet.close();
   }

@@ -99,20 +99,23 @@ function onHello(record, config, now, before, store) {
       // typo - and a chat that cries wolf eleven times is a chat people mute.
       // The rig is still marked, so it will not alert again on its own later;
       // what it does not do is repeat what another rig just said.
+      // Skipping the message must not skip the rest of the check-in: a rig
+      // whose wallet warning was already sent by its neighbour still gets to
+      // report that its hashrate halved.
       const farm = farmOn(store, wallet, config, now, record.id);
-      if (farm.others > 0) return out;
-
-      const plural = farm.count > 1;
-      const who = plural ? `${farm.count} rigs` : name(record);
-      out.push({
-        kind: 'wallet',
-        level: 'warn',
-        text: verdict.ok
-          ? `💸 **${who}** ${plural ? 'mine' : 'mines'} to a ${verdict.net} address: a mainnet pool cannot pay it`
-          : plural
-            ? `💸 **${who}** all mine to an address that cannot be paid - ${verdict.reason}. Nothing mined to it can be paid.`
-            : `💸 **${who}** has an invalid wallet address - ${verdict.reason}. Nothing mined to it can be paid.`,
-      });
+      if (farm.others === 0) {
+        const plural = farm.count > 1;
+        const who = plural ? `${farm.count} rigs` : name(record);
+        out.push({
+          kind: 'wallet',
+          level: 'warn',
+          text: verdict.ok
+            ? `💸 **${who}** ${plural ? 'mine' : 'mines'} to a ${verdict.net} address: a mainnet pool cannot pay it`
+            : plural
+              ? `💸 **${who}** all mine to an address that cannot be paid - ${verdict.reason}. Nothing mined to it can be paid.`
+              : `💸 **${who}** has an invalid wallet address - ${verdict.reason}. Nothing mined to it can be paid.`,
+        });
+      }
     }
   }
 
