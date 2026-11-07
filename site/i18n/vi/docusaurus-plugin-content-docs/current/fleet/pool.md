@@ -111,6 +111,10 @@ zmrig -o pool.example.com:3333 -u 4YourMoneroAddress.rig1 -t 4
 - Đổi ví phí bằng `OPERATOR_ADDRESS`; mặc định nằm trong `pool/src/operator.js`.
 - `--check` từ chối cấu hình không thể trả đúng: phí ngoài 0–10 %, mode lạ, cửa
   sổ PPLNS quá ngắn.
+- Mỗi share đều được pool băm lại trước khi trả (`verify_shares`), dùng một tiến
+  trình `zmrig --verify-share` sống lâu cho mỗi core để cache 256 MB chỉ dựng một
+  lần mỗi round. Đo trên 2 vCPU với hai verifier: share đầu 530 ms, sau đó
+  **103 share/giây** — một rig 1 kH/s ở độ khó 300 gửi khoảng một share mỗi 0,3 s.
 - `/stratum` là mặt tiếp xúc internet, nên khung truyền có giới hạn: khung quá
   1 MiB thì đóng kết nối, **tin nhắn** quá 256 KiB cũng vậy (chỉ giới hạn từng
   khung thì client vẫn gửi khung nối tiếp mãi được), và một khung dữ liệu thứ hai

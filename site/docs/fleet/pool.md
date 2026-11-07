@@ -115,6 +115,11 @@ zmrig -o pool.example.com:3333 -u 4YourMoneroAddress.rig1 -t 4
   `pool/src/operator.js`.
 - `--check` refuses configurations that cannot pay correctly: a fee outside
   0–10 %, an unknown mode, a PPLNS window that is too short.
+- Every share is re-hashed by the pool before it is paid (`verify_shares`), one
+  long-lived `zmrig --verify-share` per core so the 256 MB cache is built once
+  per round. Measured on 2 vCPU with two verifiers: 530 ms for the first share
+  and 103 shares/s after that — a rig at 1 kH/s on difficulty 300 submits about
+  one share every 0.3 s.
 - `/stratum` faces the internet, so its framing is bounded: a frame over 1 MiB
   closes the connection, a **message** over 256 KiB closes it too (a per-frame
   limit alone leaves a client free to send continuation frames for ever), and a
