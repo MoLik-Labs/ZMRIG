@@ -815,3 +815,50 @@ test('the wallet mark costs one decode per address, not one per rig', async () =
     await app.close();
   }
 });
+
+test('the by-wallet table marks the group, not just the rigs in it', async () => {
+  const app = await fleet();
+  try {
+    // Three rigs, one shared typo: the dashboard knows every rig cannot be
+    // paid, but the aggregation view is the one an operator reads first, and
+    // "hashrate 3 kH/s, 100 % share" next to a dead address is a lie of
+    // omission. One mark on the group says it once instead of three times.
+    const typo = substitute(WALLET, 20);
+    const rigs = [];
+    for (const name of ['shed-1', 'shed-2', 'shed-3']) {
+      const record = app.store.claim(crypto.randomBytes(32).toString('hex'));
+      record.owner = 'tg:1';
+      record.label = name;
+      record.status = { state: 'mining', hashrate: 1000, temp: 61, wallet: typo, coin: 'xmr' };
+      record.last_seen = Date.now();
+      rigs.push(record);
+    }
+    // A second wallet that is fine, so the table has something to compare to.
+    const good = app.store.claim(crypto.randomBytes(32).toString('hex'));
+    good.owner = 'tg:1';
+    good.label = 'attic';
+    good.status = { state: 'mining', hashrate: 500, temp: 55, wallet: WALLET, coin: 'xmr' };
+    good.last_seen = Date.now();
+    app.store.touch();
+
+    await app.signIn();
+    const html = await (await app.request('/')).text();
+    const table = html.slice(html.indexOf('By wallet'), html.indexOf('<h2>Rigs</h2>'));
+    assert.match(table, /wallet ✗/, 'the group row carries the mark');
+    assert.match(table, /fails its checksum|checksum does not match/, 'with the reason on hover');
+
+    // Exactly one mark in the table: one per wallet, not one per rig.
+    assert.strictEqual(table.split('wallet ✗').length - 1, 1);
+
+    // And the healthy wallet is not marked. Both rows print the same
+    // abbreviated prefix (`46SQLW...`), so the hashrate is what tells them
+    // apart: 3 kH/s is the typo group, 500 H/s is the wallet that works.
+    const rows = table.split('<tr>');
+    assert.strictEqual(rows.length - 2, 2, 'one row per wallet');
+    const healthy = rows.find((row) => row.includes('500 H/s'));
+    assert.ok(healthy, 'the healthy wallet has a row');
+    assert.doesNotMatch(healthy, /wallet ✗/);
+  } finally {
+    await app.close();
+  }
+});

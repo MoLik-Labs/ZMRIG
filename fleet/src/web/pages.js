@@ -54,20 +54,24 @@ function walletVerdict(wallet) {
   return verdict;
 }
 
-function walletTag(record) {
-  const wallet = String((record.status && record.status.wallet) || '');
-  const coin = String((record.status && record.status.coin) || 'xmr').toLowerCase();
+function walletMark(wallet, coin) {
+  const text = String(wallet || '');
+  const ticker = String(coin || 'xmr').toLowerCase();
   // Only something shaped like an address is judged: a test rig logs in with
   // `rig-1`, and calling that a bad wallet would put a red mark on every rig
   // whose login is a name rather than an address.
-  if (!wallet || (wallet.length !== 95 && wallet.length !== 106)) return null;
-  if (coin !== 'xmr' && coin !== 'monero') return null;
-  const verdict = walletVerdict(wallet);
+  if (!text || (text.length !== 95 && text.length !== 106)) return null;
+  if (ticker !== 'xmr' && ticker !== 'monero') return null;
+  const verdict = walletVerdict(text);
   if (verdict.ok && verdict.net === 'mainnet') return null;
 
   return verdict.ok
     ? `<span class="tag bad" title="${escape(verdict.net)} address: a mainnet pool cannot pay it">${escape(verdict.net)}</span>`
     : `<span class="tag bad" title="${escape(verdict.reason)}">wallet ✗</span>`;
+}
+
+function walletTag(record) {
+  return walletMark(record.status && record.status.wallet, record.status && record.status.coin);
 }
 
 function csrfField(csrf) {
@@ -156,8 +160,12 @@ function dashboard({ store, config, now, csrf }) {
           <tbody>${groups
             .map((entry) => {
               const share = rate > 0 ? Math.round((entry.rate / rate) * 100) : 0;
+              // The group is where "all of it is unpaid" is one fact instead of
+              // twelve identical red marks: the wallet is the unit the pool pays
+              // in, so it is the unit the mark belongs to as well.
+              const mark = walletMark(entry.wallet, entry.coin);
               return `<tr>
-                <td><code>${escape(entry.label)}</code></td>
+                <td><code>${escape(entry.label)}</code>${mark ? ` ${mark}` : ''}</td>
                 <td class="num">${escape(format.hashrate(entry.rate))}</td>
                 <td class="num">${share}%</td>
                 <td class="num">${entry.rigs}</td>
