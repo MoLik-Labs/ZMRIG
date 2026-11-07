@@ -96,6 +96,13 @@ services:
         value: /tmp/fleet.json
       - key: FLEET_INTERVAL
         value: 60
+      # Render terminates TLS and proxies every request, so the dashboard may
+      # believe its X-Forwarded-For / -Proto: the login throttle counts the
+      # address Render appended, and the session cookie is marked Secure. The
+      # code defaults to this when it sees Render's own environment variables;
+      # it is written down here so the decision is visible rather than inferred.
+      - key: FLEET_TRUST_PROXY
+        value: "1"
       - key: FLEET_ALERT_TEMP
         value: 85
       # Where the pages come from. Relative to the repository root; overriding it

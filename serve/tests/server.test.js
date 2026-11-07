@@ -93,3 +93,43 @@ test('it refuses to start without a site to serve', async () => {
   const code = await new Promise((resolve) => child.on('exit', resolve));
   assert.equal(code, 2);
 });
+
+test('the Pages build is served from the root, and its old paths redirect', async () => {
+  // The build in `web/` was made for GitHub Pages under `/ZMRIG/`. Started as
+  // Render starts it — a child process, the committed build, no rebuild — this
+  // is the case that used to answer 404 for the stylesheet the home page asks
+  // for, which is a page that renders but does nothing.
+  const root = makeSite({
+    'index.html': '<!doctype html><html lang="en"><head><link rel="stylesheet" href="/ZMRIG/assets/css/main.abc123.css"></head><body><a href="/ZMRIG/docs/intro">Docs</a></body></html>',
+  });
+  const server = boot(root);
+  try {
+    const port = await server.port;
+    const home = await fetch(`http://127.0.0.1:${port}/`);
+    assert.equal(home.status, 200);
+    const html = await home.text();
+    assert.match(html, /href="\/assets\/css\/main\.abc123\.css"/, 'the stylesheet link is root-relative');
+
+    const css = await fetch(`http://127.0.0.1:${port}/assets/css/main.abc123.css`);
+    assert.equal(css.status, 200, 'and the file it names is served');
+    assert.match(css.headers.get('content-type') || '', /text\/css/);
+
+    const docs = await fetch(`http://127.0.0.1:${port}/docs/intro`);
+    assert.equal(docs.status, 200, 'the link in the body resolves too');
+
+    // A link copied out of the Pages site, or out of this host before the
+    // rewrite, lands on the page instead of a 404.
+    const old = await fetch(`http://127.0.0.1:${port}/ZMRIG/docs/intro`, { redirect: 'manual' });
+    assert.equal(old.status, 301);
+    assert.equal(old.headers.get('location'), '/docs/intro');
+    const root301 = await fetch(`http://127.0.0.1:${port}/ZMRIG/`, { redirect: 'manual' });
+    assert.equal(root301.headers.get('location'), '/');
+
+    assert.match(server.output(), /rebase\s+\/ZMRIG\/ -> \//);
+  } finally {
+    const exited = new Promise((resolve) => server.child.once('exit', (code) => resolve(code)));
+    server.child.kill('SIGTERM');
+    await exited;
+    removeSite(root);
+  }
+});

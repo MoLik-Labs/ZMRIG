@@ -7,9 +7,9 @@
 <link rel="icon" type="image/png" sizes="32x32" href="/ZMRIG/img/favicon-32.png">
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.e1cb14c0.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.ba71088d.js" defer="defer"></script>
-<script src="/ZMRIG/vi/assets/js/main.defc2876.js" defer="defer"></script>
+<meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.c6cca0d9.css">
+<script src="/ZMRIG/vi/assets/js/runtime~main.67d59003.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/main.6ebd84ff.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -45,10 +45,11 @@ trong chat — rồi truyền dạng <code>host:port</code>. Nếu pool công b�
 <code>--tls</code>; nếu mạng chỉ cho ra 443, <code>--cloudflare=host:port</code> cho bạn WebSocket qua
 TLS trên engine Zig.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="cái-gì-được-kiểm-cái-gì-không">Cái gì được kiểm, cái gì không<a href="#cái-gì-được-kiểm-cái-gì-không" class="hash-link" aria-label="Đường dẫn trực tiếp đến Cái gì được kiểm, cái gì không" title="Đường dẫn trực tiếp đến Cái gì được kiểm, cái gì không" translate="no">​</a></h2>
-<p>Bộ dựng lệnh kiểm địa chỉ Monero chính xác: 95 ký tự, 106 với địa chỉ tích hợp,
-chỉ bảng chữ base58. Với sáu đồng còn lại nó kiểm bảng chữ và độ dài hợp lý, cảnh
-báo khi prefix không phải cái nó biết — nó không nhận là đã kiểm checksum mà nó
-không tính. Pool làm việc đó, và chỉ pool mới làm được.</p>
+<p>Bộ dựng lệnh <strong>giải mã</strong> địa chỉ Monero: 95 ký tự, 106 với địa chỉ tích hợp, bảng
+chữ base58, byte mạng, và checksum Keccak-256. Chỉ một ký tự sai là bị từ chối,
+kèm lý do. Với sáu đồng còn lại nó kiểm bảng chữ và độ dài hợp lý, cảnh báo khi
+prefix không phải cái nó biết — nó không nhận là đã kiểm checksum mà nó không
+tính.</p>
 <p>Sai địa chỉ là đào cho người khác, và không trang web nào chứng minh được địa chỉ
 là của bạn. Sao chép từ ví của bạn, dán vào, rồi đối chiếu sáu ký tự đầu và cuối
 với màn hình ví.</p>

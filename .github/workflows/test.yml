@@ -107,6 +107,13 @@ jobs:
       - name: Thermal governor against a real process
         run: ./zmrig/tests/thermal.sh
 
+      # The fee audit, with the binary: the rate, the one wallet inside it, the
+      # switch that turns it off, and the prose that states it. The constants
+      # are checked in the `pool` job as well, without a toolchain - this is the
+      # half that can only run where a miner was built.
+      - name: The developer fee, in the source and in the binary
+        run: ./scripts/verify-fee.sh
+
   # The installer and the tuner: the two things a person runs on a machine they
   # own, before any image exists. They were only ever run by hand, which is how
   # `oneclick.sh update` managed to silently do nothing on a shallow clone for
@@ -123,17 +130,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      # `-S error` only: these are POSIX sh on purpose, and shellcheck's notes
-      # about `local` are not worth failing a build over.
+      # Warnings fail the job too, and each script is read in the dialect it was
+      # written in: `oneclick.sh` and the setup scripts are bash, `latest-iso.sh`
+      # is POSIX sh because it runs on somebody's busybox.
       - name: Shellcheck
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends shellcheck
-          shellcheck -s sh -S error \
+          shellcheck -s bash -S warning \
             oneclick.sh \
             scripts/tune-linux.sh \
-            scripts/latest-iso.sh \
             scripts/publish-site.sh
+          shellcheck -s sh -S warning scripts/latest-iso.sh
 
       # plan, config, governor, tuner targets, purge.
       - name: The installer's decisions
@@ -148,6 +156,11 @@ jobs:
       # recorded GitHub reply: no network, no rate limit.
       - name: How an image is found
         run: bash tests/releases/latest-iso.test.sh
+
+      # Four files carry the release number. Two of them drifted in consecutive
+      # releases and a fourth was wrong for four of them.
+      - name: One version, in every file that carries it
+        run: bash tests/releases/version-consistency.test.sh
 
   # The control plane. Zero dependencies, so this is `node --test` and nothing
   # to install; the agent half runs against the same server in os/tests/fleet.sh.
@@ -174,6 +187,32 @@ jobs:
 
       - name: The download helper
         run: bash tests/releases/latest-iso.test.sh
+
+  # The pool: share accounting, the address decoder that decides who can be paid,
+  # and the stratum protocol. These were the only tests in the repository that CI
+  # did not run, which meant a change to the payout path - the address check,
+  # the ledger, the share verifier - could break one and merge green.
+  pool:
+    name: pool (ledger, protocol, addresses)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Node
+        run: node --version
+
+      - name: Unit, protocol and address tests
+        run: node --test pool/tests/*.test.js
+
+      # --source-only: this job has no Zig toolchain and no miner binary. The
+      # check that matters here is the one that needs no build - the constant,
+      # the prose, the appliance default and the single wallet - and the binary
+      # half runs in the `zmrig engine` job, which does build one.
+      - name: The fee is 3 % and every document agrees
+        run: bash scripts/verify-fee.sh --source-only
 
   # The one service Render runs: bots, rigs and the documentation on one port.
   # The two halves are tested in their own jobs; what is tested here is that they
@@ -243,6 +282,24 @@ jobs:
         run: |
           docker run --rm --entrypoint /usr/local/bin/zmrig ocean-pool:ci --version
           docker run --rm --entrypoint /usr/local/bin/zmrig ocean-pool:ci --self-test=light
+
+      # Every `require` the pool makes at startup has to resolve *inside the
+      # image*. `pool/src/address.js` re-exports `lib/address.js`, and for a
+      # while the Dockerfile did not copy `lib/`: the image built, started and
+      # answered /api/config, and the first miner to log in crashed it. This
+      # asserts the decoder is there, decodes a real address, and refuses a typo.
+      - name: The address decoder inside the image
+        run: |
+          docker run --rm --entrypoint node ocean-pool:ci -e '
+            const { check } = require("./pool/src/address");
+            const good = "46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ";
+            const typo = good.slice(0, -1) + "f";
+            const ok = check(good);
+            if (!ok.ok || ok.net !== "mainnet") { console.error("the image cannot decode a real address", ok); process.exit(1); }
+            const bad = check(typo);
+            if (bad.ok) { console.error("the image accepted a typo"); process.exit(1); }
+            console.log("decoder in the image: %s ok, typo refused (%s)", ok.net, bad.reason);
+          '
 
       - name: The pool answers, with nothing mounted
         run: |

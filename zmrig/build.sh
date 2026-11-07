@@ -287,7 +287,8 @@ compile_one() {
 # kills a compiler for memory prints nothing at all.
 compile_bg() {
     local src="$1" obj="$2"
-    local err="${OBJ}/$(basename -- "${obj%.o}").err"
+    local err
+    err="${OBJ}/$(basename -- "${obj%.o}").err"
     if ! compile_one "$src" "$obj" 2>"$err"; then
         # Every failure is recorded, not just the last one to finish: when the
         # toolchain itself is missing something (a header, a crt object) every

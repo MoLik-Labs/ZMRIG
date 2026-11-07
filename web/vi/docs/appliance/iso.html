@@ -7,9 +7,9 @@
 <link rel="icon" type="image/png" sizes="32x32" href="/ZMRIG/img/favicon-32.png">
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.e1cb14c0.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.ba71088d.js" defer="defer"></script>
-<script src="/ZMRIG/vi/assets/js/main.defc2876.js" defer="defer"></script>
+<meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.c6cca0d9.css">
+<script src="/ZMRIG/vi/assets/js/runtime~main.67d59003.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/main.6ebd84ff.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -35,9 +35,14 @@ mức lệnh, và trình cập nhật không bao giờ đưa nhầm bản kia.</
 <li class="">Console hiện banner ZMRIG và hỏi địa chỉ Monero.</li>
 <li class="">Dán ví, Enter, và dòng hashrate bắt đầu sau vài giây.</li>
 </ol>
-<p>Địa chỉ được kiểm trước khi dùng: 95 hoặc 106 ký tự, bảng chữ base58, bắt đầu
-bằng <code>4</code> hoặc <code>8</code>. Ví gõ nhầm chữ <code>0</code> hay <code>l</code> — đúng hai ký tự mà base58 loại bỏ
-vì dễ đọc sai — sẽ bị từ chối thay vì đào vào hư không.</p>
+<p>Địa chỉ được <strong>giải mã</strong> trước khi dùng, không phải chỉ đếm ký tự: độ dài, bảng
+chữ base58, byte mạng, và checksum Keccak-256 bốn byte mà địa chỉ mang theo. Ví
+gõ nhầm <code>0</code> hay <code>l</code> bị từ chối, và ví bị đổi <strong>một</strong> ký tự sang một ký tự base58
+hợp lệ khác cũng bị từ chối — đúng kiểu gõ nhầm mà phép đếm ký tự không thấy và
+một lần trả thưởng không thể cứu. Câu từ chối nói rõ sai ở đâu:</p>
+<div class="language-console codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-console codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token plain">zmrig-os: that is not a valid Monero address: checksum does not match: at least</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">one character is wrong</span><br></div></code></pre></div></div>
+<p><code>zmrig --check-wallet 4...</code> cho cùng kết luận mà không cần đụng vào cấu hình máy:
+in ra loại địa chỉ, mạng, cùng khóa spend và view.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="không-bàn-phím-và-cả-fleet">Không bàn phím, và cả fleet<a href="#không-bàn-phím-và-cả-fleet" class="hash-link" aria-label="Đường dẫn trực tiếp đến Không bàn phím, và cả fleet" title="Đường dẫn trực tiếp đến Không bàn phím, và cả fleet" translate="no">​</a></h2>
 <p>Dàn máy không có bàn phím thì cấu hình bằng dòng lệnh nhân. Nhấn <code>e</code> ở mục GRUB,
 hoặc sửa <code>grub.cfg</code> trên ảnh của fleet:</p>
@@ -71,7 +76,11 @@ nó lấy được, không giả vờ lấy đúng như bạn xin.</p>
 <p>Cả hai nửa đều được ghi, vì chỉ một nửa thì không mua được gì:</p>
 <ul>
 <li class="">tham số khởi động <code>isolcpus=</code>, <code>nohz_full=</code> và <code>rcu_nocbs=</code> — gộp vào GRUB
-environment block trên ổ đã cài, còn trên USB chỉ đọc thì in ra để bạn tự gõ;</li>
+environment block trên ổ đã cài và được mọi menu entry đã cài đọc
+(<code>${zmrig_extra}</code>), nên có hiệu lực từ lần boot sau; trên USB chỉ đọc thì in ra
+để bạn tự gõ. Block đó chỉ giữ một giá trị và được ghi bởi một hàm duy nhất, nên
+tách CPU sau khi đã đặt trang 1 GiB thì cả hai đều còn, và
+<code>zmrig-os hugepages off</code> không trả CPU lại cho nhân;</li>
 <li class=""><code>--cpu-affinity</code> cho miner, và mặt nạ ngắt được dời sang các CPU còn lại mỗi
 lần supervisor khởi động.</li>
 </ul>
@@ -187,7 +196,17 @@ giữ lại, và miner được restart sang bản mới.</li>
 kiểm tra rồi mới thành mặc định cho lần boot sau.</li>
 <li class=""><strong>Bản cập nhật không boot được thì tự lùi.</strong> Initramfs đếm số lần boot mà máy
 không trở thành một rig đang đào; ba lần thì nó chuyển sang slot kia và reboot.
-<code>zmrig-os slot</code> xem cả hai, <code>zmrig-os slot b</code> chọn một.</li>
+<code>zmrig-os slot</code> xem cả hai, <code>zmrig-os slot b</code> chọn một. Lần lùi đó <em>gộp</em> GRUB
+environment block chứ không ghi đè, nên các tham số nhân của máy —
+<code>isolcpus=</code>, <code>nohz_full=</code>, mức nhiệt trần — sống qua lần lùi. Rig quay về slot
+kia vẫn về đúng cấu hình của nó.</li>
+<li class=""><strong>Bản cập nhật không có checksum thì bị từ chối.</strong> Manifest ghi sha256 cho
+binary và cho ảnh; không có thì không cách nào phân biệt một file tải dở hay
+một trang captive portal với file thật, và cài đúng thứ đó làm miner thì tệ hơn
+là chậm một phiên bản. Quy tắc này giống nhau cho <code>zmrig-os update --apply</code> và
+cho job hằng ngày: cả hai tải đúng cùng một loại byte, nên không thể có hai quy
+tắc khác nhau về việc kiểm chúng. <code>zmrig-os auto</code> nói đúng một dòng rồi thoát 0,
+nên job hằng ngày vẫn im lặng.</li>
 <li class=""><code>AUTO_UPDATE=0</code> tắt toàn bộ. Không với tới được manifest nghĩa là &quot;đang offline&quot;,
 không phải lỗi: rig vẫn đào và job thoát 0.</li>
 </ul>
@@ -200,7 +219,8 @@ hoặc một unit systemd. Ở đây chúng là mặc định:</p>
 nào làm phân mảnh bộ nhớ. Đó là +4–6 % cộng thêm trên transparent huge pages,
 và là bước gần như không thể làm lại vào cuối ngày.</li>
 <li class=""><strong>Transparent huge pages vẫn bật</strong> (<code>always</code> ở các mục max). Tắt nó mất khoảng
-28 % — đã đo, xem <a class="" href="/ZMRIG/vi/docs/operate/performance">Hiệu năng</a>.</li>
+một phần năm — đo bằng cách bật/tắt xen kẽ trong cùng một phiên, xem
+<a class="" href="/ZMRIG/vi/docs/operate/performance">Hiệu năng</a>.</li>
 <li class=""><strong>CPU governor là <code>performance</code></strong>, do đúng bước đặt trước bộ nhớ thiết lập,
 trước khi miner chạy.</li>
 <li class=""><strong><code>swappiness=1</code></strong> để dataset 2,3 GiB không bao giờ bị đẩy ra swap; <strong>giới hạn
@@ -218,7 +238,11 @@ không làm hỏng nó, và chép sang distro nào cũng chạy.</li>
 <ul>
 <li class="">miner tự thoát khi bị treo hoặc khi share bị từ chối liên tiếp
 (<code>--health-restart</code>, 900 giây), và ghi lý do vào log;</li>
-<li class=""><code>zmrig-os run</code> khởi động lại sau 10 giây, mãi mãi;</li>
+<li class=""><code>zmrig-os run</code> khởi động lại sau 10 giây, rồi 20, 40, 80, 160, và từ lần thứ
+năm trở đi là năm phút: crash loop thường là do pool hoặc mạng, và kết nối lại
+mười giây một lần biến một lần mất mạng ngắn thành bão socket;</li>
+<li class="">một lần chạy sống được mười phút thì xoá bộ đếm đó, nên &quot;năm lần liên tiếp&quot;
+đúng nghĩa liên tiếp chứ không phải từ tháng trước;</li>
 <li class="">năm lần thất bại liên tiếp thì máy reboot, vì lúc đó thứ hỏng là hệ điều hành;</li>
 <li class="">log xoay ở 8 MB, nên máy đào một năm vẫn khởi động được;</li>
 <li class="">chrony giữ đồng hồ đúng, vì đăng nhập pool qua TLS sẽ hỏng nếu lệch giờ.</li>

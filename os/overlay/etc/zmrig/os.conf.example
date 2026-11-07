@@ -16,6 +16,11 @@ THREADS="auto"
 # is a setting, not a rule: 0 turns it off, 1 to 10 are all accepted, and
 # `zmrig-os doctor` prints the value this machine will actually run with.
 DONATE="3"
+
+# The RandomX MSR preset: prefetchers off, worth 5-15 % on bare metal and nothing
+# in a virtual machine. auto = the miner decides (it knows whether this CPU has a
+# preset and whether /dev/cpu/0/msr answers), on = always ask, off = never open
+# /dev/cpu. `safe` mode never writes these registers whatever this says.
 MSR="auto"
 API_PORT="0"
 API_HOST="127.0.0.1"
@@ -33,6 +38,15 @@ CHANNEL="stable"
 # for Scala), 0 turns the reservation off. The initramfs reads this before it
 # reserves, so a light-mode box does not ask for pages it cannot use.
 HUGEPAGES=""
+# 1 GiB pages, as a count to reserve at boot. Empty (or 0) means none, and the
+# miner then reads its dataset through 2 MiB pages, which is what almost every
+# rig does and is far better than 4 KiB. A gigantic pool is worth it for one
+# reason only: a Monero dataset is 1 040 TLB entries at 2 MiB and two at 1 GiB.
+# It cannot be created after the machine has fragmented, so it is a kernel
+# parameter, not a sysctl: `zmrig-os hugepages 1g 3` writes it and the next boot
+# reserves it. The pool is reserved whether or not the miner ends up using it, so
+# a 4 GiB rig that never mines Monero should leave this empty.
+HUGEPAGES_1G=""
 # Logical CPUs kept for mining, as whole SMT cores (0 = shared with the OS).
 # `zmrig-os isolate 4` writes this and the matching kernel parameters; the kernel
 # side (isolcpus, nohz_full, rcu_nocbs) takes effect on the next boot.

@@ -175,6 +175,30 @@ else
     fail "--no-health-restart did not reach the config"
 fi
 
+# --- 6. the MSR preset is written as "auto" unless it was pinned --------
+# A config file travels: the same config.json copied to a laptop and to a VPS
+# must not promise a register write to a machine that cannot do it. `auto`
+# leaves the decision to the miner's probe; the two flags pin it.
+DIR6="${WORK}/etc-msr"
+run_config "$DIR6" --engine=zmrig --pool=supportxmr.com:3333
+if [ "$(json_get "${DIR6}/config.json" "randomx.msr")" = "auto" ]; then
+    pass "the MSR setting defaults to auto in the config"
+else
+    fail "the MSR setting is not auto by default (got '$(json_get "${DIR6}/config.json" "randomx.msr")')"
+fi
+run_config "${WORK}/etc-msr-on" --engine=zmrig --pool=supportxmr.com:3333 --msr
+if [ "$(json_get "${WORK}/etc-msr-on/config.json" "randomx.msr")" = "true" ]; then
+    pass "--msr is written as randomx.msr=true"
+else
+    fail "--msr did not reach the config"
+fi
+run_config "${WORK}/etc-msr-off" --engine=zmrig --pool=supportxmr.com:3333 --no-msr
+if [ "$(json_get "${WORK}/etc-msr-off/config.json" "randomx.msr")" = "false" ]; then
+    pass "--no-msr is written as randomx.msr=false"
+else
+    fail "--no-msr did not reach the config"
+fi
+
 echo
 if [ "$FAILED" -eq 0 ]; then
     echo "config: all checks passed"

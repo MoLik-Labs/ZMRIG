@@ -89,10 +89,26 @@ Use AVX2 for dataset initialization. Faster on some CPUs. Auto-detect (`-1`), di
 RandomX mining mode: `auto`, `fast` (2 GB memory), `light` (256 MB memory).
 
 #### `1gb-pages`
-Use 1GB hugepages for RandomX dataset (Linux only). Enabled (`true`) or disabled (`false`). It gives 1-3% speedup.
+Kept for config compatibility with XMRig, and there is nothing to set: this miner
+asks for a 1 GiB mapping **first** whenever huge pages are in use, then the 2 MiB
+pool, then anonymous memory with `MADV_HUGEPAGE`, and prints which one won
+(`huge pages 2336 MB (explicit, 1 GiB pages)`). It cannot be a flag because it
+cannot be granted at runtime: a gigantic pool has to be reserved before the
+machine fragments, so it is a kernel parameter and the tool that writes it is
+`zmrig-os hugepages 1g N` (`zmrig-os hugepages` shows what is reserved). On a
+host with no 1 GiB pool — most virtual machines, including the one this release
+was tested on — the fallback to 2 MiB pages is automatic. The published gain on
+top of 2 MiB is 1-3 %; it is not measured here for that reason.
 
-#### `wrmsr`
-[MSR mod](https://xmrig.com/docs/miner/randomx-optimization-guide/msr). Enabled (`true`) or disabled (`false`). It gives up to 15% speedup depending on your system. _(**Note**: Userspace MSR writes are no longer enabled by default; the flag `msr.allow_writes=on` must be set for Linux Kernels 5.9 and after.)_
+#### `msr` (XMRig spelling: `wrmsr`)
+[MSR mod](https://xmrig.com/docs/miner/randomx-optimization-guide/msr). `"auto"`
+(the default), `true` or `false`; `wrmsr` with a bool still works and means
+`true`/`false`. It gives up to 15% speedup depending on your system. `"auto"`
+probes the machine first — does this CPU have a preset, does `/dev/cpu/0/msr`
+answer — and applies it only when the answer is yes, which is why a config file
+can be copied between a laptop and a VPS without lying to either. _(**Note**:
+Userspace MSR writes are no longer enabled by default; the flag
+`msr.allow_writes=on` must be set for Linux Kernels 5.9 and after.)_
 
 #### `rdmsr`
 Restore MSR register values to their original values on exit. Used together with `wrmsr`. Enabled (`true`) or disabled (`false`).
@@ -115,7 +131,13 @@ Enable (`true`) or disable (`false`) CPU backend, by default `true`.
 Enable (`true`) or disable (`false`) huge pages support, by default `true`.
 
 #### `huge-pages-jit`
-Enable (`true`) or disable (`false`) huge pages support for RandomX JIT code, by default `false`. It gives a very small boost on Ryzen CPUs, but hashrate is unstable between launches. Use with caution.
+Huge pages for the RandomX JIT code region, by default **`true`** here — XMRig
+ships it `false` and calls it unstable, which is why the difference is spelled
+out. The JIT writes a few hundred MB of generated code and the interpreter walks
+it in a tight loop; on a rig the region is written once at startup and then only
+read, so the "hashes differ between launches" reputation is about measurement
+noise, not about wrong results. `--no-huge-pages-jit` turns it off. The measured
+effect is inside noise on the test host (`doc/PERFORMANCE.md`, §4).
 
 #### `hw-aes`
 Force enable (`true`) or disable (`false`) hardware AES support. Default value `null` means miner autodetect this feature. Usually don't need change this option, this option useful for some rare cases when miner can't detect hardware AES, but it available. If you force enable this option, but your hardware not support it, miner will crash.

@@ -19,7 +19,7 @@
         "init-avx2": -1,
         "mode": "auto",
         "rdmsr": true,
-        "wrmsr": true,
+        "msr": "auto",
         "cache_qos": false,
         "numa": true,
         "scratchpad_prefetch_mode": 1

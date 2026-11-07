@@ -65,13 +65,21 @@ function formatXmr(atomic) {
   return `${whole}.${fraction}`;
 }
 
-/** Monero base58 address check: 95 characters, starts with 4 or 8. It is a
- *  shape check, not a checksum check — the payout RPC is the final authority. */
+/**
+ * True for an address this pool can pay: 95 base58 characters *and* a checksum
+ * that matches.
+ *
+ * The alphabet check alone accepts one wrong character in fifty. A miner with a
+ * typo then mines for a week, is credited correctly, and the payout goes to an
+ * address whose spend key nobody holds - so the check moved to `address.js`,
+ * which decodes and verifies. The regex stays as a fast reject.
+ */
 function looksLikeAddress(text) {
   if (typeof text !== 'string') return false;
   const address = text.split('.')[0].trim();
+  if (!/^[48][1-9A-HJ-NP-Za-km-z]{94}$/.test(address)) return false;
 
-  return /^[48][1-9A-HJ-NP-Za-km-z]{94}$/.test(address);
+  return require('./address').payable(address);
 }
 
 /** `wallet.rig` or `wallet/rig` login -> { address, worker } */

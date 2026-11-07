@@ -11,6 +11,7 @@ const ids = require('./ids');
 const format = require('./format');
 const farms = require('./farms');
 const { presence } = require('./store');
+const ADDRESS = require('./address');
 
 const COINS = {
   xmr: 'rx/0',
@@ -76,10 +77,7 @@ function words(text) {
 }
 
 function isMoneroWallet(address) {
-  const value = String(address || '');
-  if (!/^[1-9A-HJ-NP-Za-km-z]{90,110}$/.test(value)) return false;
-  if (!/^[48]/.test(value)) return false;
-  return value.length === 95 || value.length === 106;
+  return ADDRESS.check(String(address || '').trim()).ok;
 }
 
 /** Unknown coins accept any base58-shaped address of a plausible length; the
@@ -88,10 +86,33 @@ function isOtherWallet(address) {
   return /^[1-9A-HJ-NP-Za-km-z]{90,120}$/.test(String(address || ''));
 }
 
-function validWallet(address, coin) {
+/**
+ * Why this address cannot be used, or null when it can.
+ *
+ * The shape check that used to live here accepted one wrong character in fifty
+ * - the exact mistake a person makes copying a 95-character string out of a
+ * wallet. A wallet set through the bot, the dashboard or the roster now goes
+ * through the real decoder (`lib/address.js`), and every refusal says which
+ * part is wrong so the operator can fix it instead of re-typing blind.
+ */
+function walletProblem(address, coin) {
   const name = String(coin || 'xmr').toLowerCase();
-  if (name === 'xmr' || name === 'monero') return isMoneroWallet(address);
-  return isOtherWallet(address);
+  const value = String(address || '').trim();
+
+  if (!(name === 'xmr' || name === 'monero')) {
+    return isOtherWallet(value) ? null : `not a ${name} address`;
+  }
+
+  const verdict = ADDRESS.check(value);
+  if (!verdict.ok) return `not a Monero address - ${verdict.reason}`;
+  if (verdict.net !== 'mainnet') {
+    return `a ${verdict.net} address, which a mainnet pool cannot pay`;
+  }
+  return null;
+}
+
+function validWallet(address, coin) {
+  return walletProblem(address, coin) === null;
 }
 
 function validPool(value) {
@@ -395,13 +416,8 @@ function route(message, { store, config, actor, now = Date.now() }) {
         const address = args[0] || '';
         const coin = (record.config && record.config.coin) || (record.status && record.status.coin) || 'xmr';
         if (!address) return fail(`usage: \`/wallet ${id} 4...\``);
-        if (!validWallet(address, coin)) {
-          return fail(
-            coin === 'xmr'
-              ? 'that is not a Monero address: 95 (or 106 for a subaddress) base58 characters starting with 4 or 8.'
-              : `that does not look like a ${coin} address.`,
-          );
-        }
+        const problem = walletProblem(address, coin);
+        if (problem) return fail(`that is ${problem}.`);
         queue(store, config, id, { cmd: 'setup', args: { wallet: address } });
         store.audit({ actor: actor.key, action: 'wallet', device: id });
         return ok(`💾 wallet for **${record.label || id}** set to \`${format.wallet(address)}\`; applied on the next check-in.`);
@@ -558,6 +574,7 @@ module.exports = {
   findDevice,
   visible,
   validWallet,
+  walletProblem,
   validPool,
   isMoneroWallet,
   COINS,

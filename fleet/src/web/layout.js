@@ -3,7 +3,7 @@
 
 'use strict';
 
-const VERSION = '6.44.0';
+const { VERSION } = require('../version');
 
 const ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 

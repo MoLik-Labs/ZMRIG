@@ -19,9 +19,12 @@ const reconcile = require('../src/reconcile');
 const { Store, presence } = require('../src/store');
 const ids = require('../src/ids');
 const { createServer } = require('../src/http');
+const { substitute } = require('../../tests/common/monero');
 
 const WALLET = '46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ';
-const OTHER = '48aBcDeFgHiJkLmNoPqRsTuVwXyZaBcDeFgHiJkLmNoPqRsTuVwXyZaBcDeFgHiJkLmNoPqRsTuVwXyZaBcDeF';
+// A second real address: a rig with its own wallet must keep it, and an address
+// that fails the checksum would now be refused rather than compared.
+const OTHER = '4AdUndXHHZ6cfufTMvppY6JwXNouMBzSkbLYfpAV5Usx3skxNgYeYTRj5UzqtReoS44qo9mtmXCqY45DJ852K5Jv2684Rge';
 
 const CONFIG = {
   interval: 60,
@@ -88,7 +91,7 @@ test('a broken roster is reported, never thrown', () => {
   assert.match(problems, /unknown key "labl"/);
   assert.match(problems, /unknown mode "turbo"/);
   assert.match(problems, /threads must be a number/);
-  assert.match(problems, /wallet is not valid/);
+  assert.match(problems, /wallet not a Monero address/);
   // The rig is still in the roster: a misconfigured entry must not make a rig
   // unreachable, it must make it reachable and obviously wrong.
   assert.ok(typo.rigs.has('ZMR-1A2B-3C4D-5E6F'));
@@ -280,7 +283,7 @@ test('one wallet at the top is the wallet of the whole farm', () => {
       'ZMR-AAAA-BBBB-CCCC': { label: 'shed-2' },
       // A rig with its own address keeps it: the top-level value is a default,
       // not an override.
-      'ZMR-1111-2222-3333': { label: 'borrowed', wallet: '4' + 'A'.repeat(94) },
+      'ZMR-1111-2222-3333': { label: 'borrowed', wallet: OTHER },
     },
   });
 
@@ -301,6 +304,18 @@ test('a bad top-level wallet is reported once, and the rigs keep the rest', () =
   assert.equal(roster.rigs.size, 1);
   assert.equal(roster.rigs.get('ZMR-1A2B-3C4D-5E6F').desired.wallet, undefined);
   assert.ok(roster.problems.some((line) => /wallet/.test(line)), 'the bad default is reported');
+});
+
+test('a roster wallet with one wrong character is reported, not applied', () => {
+  const roster = rosterModule.parse({
+    wallet: substitute(WALLET, 7),
+    rigs: { 'ZMR-1A2B-3C4D-5E6F': { label: 'shed' } },
+  });
+  const problem = roster.problems.join('\n');
+
+  assert.equal(roster.rigs.get('ZMR-1A2B-3C4D-5E6F').desired.wallet, undefined, 'a typo is never applied');
+  assert.match(problem, /ZMR-1A2B-3C4D-5E6F/);
+  assert.match(problem, /checksum does not match/);
 });
 
 test('a rig that is not in the roster is untouched', async () => {
@@ -393,4 +408,20 @@ test('--check says where the roster came from, and fails only when it is unreada
   const broken = read(() => check({ ...base, FLEET_ROSTER: '{"rigs": ' }));
   assert.equal(broken.ok, false);
   assert.match(broken.text, /problem {4}the roster is not valid JSON/);
+});
+
+test('the heat cap is reconciled on its own, not only with a mode change', () => {
+  // The roster entry only turns the cap down. The rig is already in safe mode
+  // and reports the cap it is holding, so the diff has to see 72 against 78.
+  const desired = { mode: 'safe', maxtemp: 72 };
+  const args = reconcile.diff({ mode: 'safe', maxtemp: 78 }, desired);
+  assert.deepStrictEqual(args, { maxtemp: 72 });
+
+  const matches = reconcile.diff({ mode: 'safe', maxtemp: '72' }, desired);
+  assert.deepStrictEqual(matches, {}, 'the rig reports it as text, the roster as a number');
+
+  // An agent old enough not to report the field must not be told about it every
+  // five minutes for ever: nothing is queued when the field is absent.
+  const old = reconcile.diff({ mode: 'safe' }, desired);
+  assert.deepStrictEqual(old, {});
 });

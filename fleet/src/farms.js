@@ -38,10 +38,14 @@ function group(devices, config, now = Date.now()) {
     const key = wallet || UNKNOWN;
 
     if (!groups.has(key)) {
-      groups.set(key, { wallet: key, label: label(key), rigs: 0, mining: 0, online: 0, rate: 0, hottest: 0, devices: [] });
+      groups.set(key, { wallet: key, label: label(key), coin: '', rigs: 0, mining: 0, online: 0, rate: 0, hottest: 0, devices: [] });
     }
 
     const entry = groups.get(key);
+    // The coin travels with the group so the dashboard can judge the address:
+    // the same 95 characters are a typo under Monero and an ordinary login
+    // under another chain's algorithm.
+    if (!entry.coin) entry.coin = String((record.status && record.status.coin) || '').toLowerCase();
     entry.rigs += 1;
     entry.devices.push(record);
     const state = presence(record, config, now);

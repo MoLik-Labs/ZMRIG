@@ -72,12 +72,21 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends shellcheck
-          # Only real errors fail the job: the scripts are POSIX sh on purpose,
-          # and shellcheck's stylistic notes about `local` are not worth a build.
-          shellcheck -s sh -S error \
+          # Warnings fail the job, not just errors. The scripts are POSIX sh on
+          # purpose and `.shellcheckrc` silences the one thing that means here
+          # (`local`, which busybox ash has and POSIX does not) so anything left
+          # is a real finding: an unquoted expansion, a dead variable, a `for`
+          # loop over a quoted string that only ever runs once.
+          shellcheck -s sh -S warning \
             os/overlay/usr/local/bin/zmrig-os \
             os/overlay/usr/local/lib/zmrig/firstboot.sh \
             os/init os/plan.sh os/chroot-setup.sh os/make-initramfs.sh os/upstream.sh
+
+      # The same check over every script in the repository, not only the ones
+      # named above: the dialect comes from each shebang, so the bash helpers are
+      # read as bash and the appliance scripts as sh.
+      - name: Shellcheck, every script
+        run: bash tests/lint/shellcheck.sh
 
       # Nothing shipped still talks to the person who wrote it: no `set -x` in a
       # boot script, no debug port, no stray TODO in the appliance.

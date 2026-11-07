@@ -512,12 +512,11 @@ has_systemd() {
 }
 
 detect_os() {
-    OS_ID="unknown"; OS_LIKE=""; OS_VER=""
+    OS_ID="unknown"; OS_VER=""
     if [ -r /etc/os-release ]; then
         # shellcheck disable=SC1091
         . /etc/os-release
         OS_ID="${ID:-unknown}"
-        OS_LIKE="${ID_LIKE:-}"
         OS_VER="${VERSION_ID:-}"
     elif have sw_vers; then
         OS_ID="macos"
@@ -1025,9 +1024,13 @@ write_config() {
     local http_token="null"
     [ -n "$NET_HTTP_TOKEN" ] && http_token="\"${NET_HTTP_TOKEN}\""
 
-    # zmrig keys (the C++ engine ignores them). MSR is on by default here: the
-    # service runs as root and the miner restores the old values on exit.
-    local msr_flag="true"
+    # zmrig keys (the C++ engine ignores them). The MSR preset is worth 5-15 % on
+    # bare metal and nothing in a container, so the default is the string
+    # "auto": the miner probes this machine and decides, and the old register
+    # values are restored on exit either way. `--msr` writes true (try anyway),
+    # `--no-msr` writes false.
+    local msr_flag='"auto"'
+    [ "$MSR_MODE" = "on" ] && msr_flag="true"
     [ "$MSR_MODE" = "off" ] && msr_flag="false"
 
     local nicehash_flag="false"
@@ -1175,7 +1178,7 @@ write_config() {
         "init-avx2": -1,
         "mode": "auto",
         "rdmsr": true,
-        "wrmsr": ${msr_flag},
+        "msr": ${msr_flag},
         "cache_qos": false,
         "numa": true,
         "scratchpad_prefetch_mode": 1
@@ -1555,11 +1558,13 @@ current_hashrate() {
     # line: that is the miner's.
     stamp=$(printf '%s' "$raw" | grep -oE '[0-9]{2}:[0-9]{2}:[0-9]{2}' | tail -1) || true
     if [ -n "$stamp" ]; then
-        local then now delta
-        then=$(date -d "today ${stamp}" +%s 2>/dev/null || echo 0)
+        # `then` is a keyword: naming a variable after it works, but only until
+        # somebody reads the block quickly.
+        local stamp_at now delta
+        stamp_at=$(date -d "today ${stamp}" +%s 2>/dev/null || echo 0)
         now=$(date +%s)
-        if [ "$then" -gt 0 ]; then
-            delta=$((now - then))
+        if [ "$stamp_at" -gt 0 ]; then
+            delta=$((now - stamp_at))
             [ "$delta" -lt 0 ] && delta=$((delta + 86400))
             [ "$delta" -le 90 ] || return 1
         fi

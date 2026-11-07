@@ -57,6 +57,14 @@ COPY --from=zmrig /out/zmrig /usr/local/bin/zmrig
 
 WORKDIR /app
 
+# `pool/src/address.js` is a two-line re-export of `lib/address.js`, the one
+# decoder the miner, the fleet, the bot and the pool all use. It used to be
+# required lazily - only when a miner logged in - so an image without `lib/`
+# built, started, and answered /api/config perfectly; the first rig to connect
+# was what crashed it. The pool's config check now decodes its own fee address
+# at startup, which is how this was found. Copy the shared library.
+COPY lib ./lib
+
 COPY pool ./pool
 
 RUN mkdir -p /app/pool/data \

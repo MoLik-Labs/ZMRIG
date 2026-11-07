@@ -9,7 +9,7 @@ image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 RandomX là proof-of-work phụ thuộc bộ nhớ: vòng hash đọc dataset theo thứ tự
 ngẫu nhiên. Gần như mọi thứ quan trọng suy ra từ đúng một câu đó.
 
-## Ba đòn bẩy thật sự
+## Bốn đòn bẩy thật sự
 
 **Huge pages.** Mức lợi lớn nhất và rõ nhất. Trang 4 KiB làm mỗi vài lần truy cập
 dataset lại thành một TLB miss. Có hai cách có trang 2 MiB và miner nói rõ nó
@@ -32,9 +32,40 @@ theo từng thuật toán, và `zmrig-tune --algo=` ghi đúng con số đó, n�
 `sudo zmrig-tune --algo panthera` chỉ đặt 192 MB chứ không phải 2.3 GB.
 
 Kiểm tra miner có lấy được: log khởi động in số byte thật sự đến từ huge pages
-tường minh (`huge pages 2336 MB (explicit)`), API trả
+tường minh (`huge pages 2336 MB (explicit, 2 MiB pages)`), API trả
 `"hugepages": [được cấp, cần]` — `[1168, 1168]` với `rx/0`, `[96, 96]` với
 `panthera`.
+
+**Có pool 1 GiB thì nó được dùng trước.** Dataset 2080 MB là 1 040 mục TLB ở
+2 MiB và hai mục ở 1 GiB, nên bộ cấp phát hỏi trang gigantic trước, rồi tới pool
+2 MiB, rồi tới bộ nhớ thường kèm gợi ý THP — và log nói cái nào đã trả lời
+(`explicit, 1 GiB pages` so với `explicit, 2 MiB pages`). Đây không thể là thiết
+lập lúc chạy: pool là bộ nhớ vật lý liền mạch và phải được lấy sớm lúc boot, nên
+nó là tham số kernel.
+
+```bash
+sudo zmrig-os hugepages            # đang đặt bao nhiêu, lần chạy này cần bao nhiêu
+sudo zmrig-os hugepages 1g 3       # dataset Monero là 3 trang; áp dụng lần boot sau
+sudo zmrig-os hugepages off        # thôi đặt trước
+```
+
+Đặt pool gigantic **thay thế** phần đặt trước 2 MiB chứ không cộng thêm — ba
+trang 1 GiB đã lấy 3 GB bộ nhớ vật lý liền mạch, và miner map pool nào đang có.
+Log lúc boot và `zmrig-os tune` đều nói pool nào đang có hiệu lực.
+
+Trên phần lớn máy ảo, pool không tạo được — ghi `nr_hugepages` dưới
+`hugepages-1048576kB` báo thành công mà vẫn để 0 — và đó không phải lỗi: fallback
+về trang 2 MiB là tự động, và phần lợi ích lớn (4 KiB lên 2 MiB) đã có sẵn — đo
+trên máy kiểm thử ngày 2026-11-07, **đổi qua lại giữa hai cấu hình** để độ trôi
+của chính cái máy không bị nhầm thành lợi ích: **897–900 H/s trên trang 4 KiB so
+với 1090–1094 H/s khi đã đặt pool 2 MiB, +21,5 %**. Một cặp đo trước đó không đổi
+qua lại đọc ra 678 so với 913 và sẽ tuyên bố +34,7 % — đó là thông lượng của máy
+dao động 20 % giữa các giờ, không phải trang nhớ.
+
+Phần thêm 1-3 % thì **chưa đo được trong môi trường đó**, vì ghi vào
+`nr_hugepages` báo thành công mà pool vẫn 0. Preset MSR cũng vậy — chạy bằng root
+thì kernel từ chối bằng `Input/output error`, đúng như một máy ảo không có MSR
+passthrough, nên mức 5–15 % trên bare metal không được tuyên bố từ máy này.
 
 :::warning Đo khi không có huge pages
 Khi đã đặt 1234 trang, RAM thường chỉ còn khoảng 1.2 GB. Chạy `--no-huge-pages`
@@ -76,6 +107,19 @@ máy test, hai thread trên hai vCPU cho 808–817 H/s, một thread 408 H/s, v�
 thread trên hai core 798–801 H/s — chia quá số core không được gì. SMT thường
 thêm 5–15 % hashrate với 30–40 % điện hơn, nên profile `watt` bỏ nó.
 
+**Preset MSR.** Tắt bộ dò trước phần cứng của CPU chỉ tốn một lần ghi thanh ghi,
+và đây là đòn bẩy duy nhất không miễn phí: cần root và module `msr`. RandomX đi
+trong dataset một cách ngẫu nhiên, nên bộ dò đoán sai và đốt băng thông bộ nhớ cho
+những dòng không ai cần. Mức tăng được công bố là **5–15 %** trên Zen và ít hơn
+trên Intel; nó **chưa được đo trên máy này**, và con VM 4 lõi dùng để viết tài
+liệu này không có MSR passthrough.
+
+Từ 6.48 nó **bật mặc định** (`auto`): miner tự dò, áp preset khi máy chịu được, và
+in đúng một dòng — trong log và trong `--check`. `--no-msr` là cách giữ
+`/dev/cpu/*` không bị đụng tới, chế độ `safe` luôn làm vậy, còn máy đã cài ZMRIG OS
+thì đã có root sẵn, nên preset đơn giản là được áp. Giá trị gốc được lưu và trả
+lại khi thoát.
+
 ## Hai thứ không có tác dụng
 
 - **Chế độ scratchpad prefetch** (0/1/2/3): 1208–1302 kH/s trên `panthera` — trong
@@ -112,6 +156,16 @@ là phần dùng được.
 
 Engine C++ trên cùng host, để tham chiếu: **1075.7 H/s**. Khoảng cách tới engine
 Zig còn nhỏ hơn khoảng cách giữa hai lần chạy.
+
+## Bộ nhớ theo thời gian
+
+Rò rỉ vài megabyte mỗi phút là một rig chết ba ngày sau khi cài, và log không nói
+gì. Tám phút trên máy kiểm thử ở 1,2 kH/s, qua hai lần đổi seed và một lần đổi
+thuật toán: RSS đi từ 2 408 lên 2 429 MB theo từng bước **và đi cả hai chiều**
+(dataset được chạm lại), còn `VmData` và `VmPeak` thì không nhúc nhích — đó mới là
+phép thử thật cho allocator. 1 422 share được nhận, 0 bị từ chối. Tám phút không
+phải một tuần, nhưng nó loại bỏ được kiểu lỗi quan trọng: một cấp phát cho mỗi
+share hoặc mỗi job mà không bao giờ trả lại.
 
 ## Tự đo
 

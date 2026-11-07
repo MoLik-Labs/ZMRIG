@@ -13,6 +13,7 @@ tar -xzf openssl-${OPENSSL_VERSION}.tar.gz
 
 cd openssl-${OPENSSL_VERSION}
 ./config -no-shared -no-asm -no-zlib -no-comp -no-dgram -no-filenames -no-cms
+# shellcheck disable=SC2046,SC2044  # word splitting is the point here
 make -j$(nproc || sysctl -n hw.ncpu || sysctl -n hw.logicalcpu)
 cp -fr include ../../deps
 cp libcrypto.a ../../deps/lib

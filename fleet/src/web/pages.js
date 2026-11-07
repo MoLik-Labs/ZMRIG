@@ -8,6 +8,7 @@ const { presence } = require('../store');
 const { page, escape, VERSION } = require('./layout');
 const { COINS } = require('../commands');
 const farms = require('../farms');
+const address = require('../address');
 
 // `commands.js` exports the two tables the bot accepts; the dashboard must offer
 // exactly the same words or a form would queue something the rig refuses.
@@ -22,6 +23,55 @@ function stateOf(record, config, now) {
 function dot(state) {
   const kind = state === 'mining' ? 'mining' : state === 'offline' ? 'offline' : state === 'stopped' ? 'warn' : 'online';
   return `<span class="dot ${kind}"></span>`;
+}
+
+/**
+ * What the wallet on this rig is worth, in one word: `ok` when the address
+ * decodes on mainnet, `bad` when it does not, '' when the rig has not reported
+ * one (a test rig with a plain login is not a problem, it is just not a wallet).
+ *
+ * The chat says this once, as an alert. A dashboard that says nothing until
+ * somebody reads the chat is a dashboard that hides the one thing that costs
+ * money, so every list that shows a rig shows this too.
+ */
+// A decode is about 0.2 ms of BigInt Keccak, and a farm is one address repeated
+// per rig: 200 rigs on one wallet would be 200 identical decodes on every
+// render. The cache is by address, so a farm pays for one; the size cap means a
+// store full of junk logins cannot grow it without bound - it is emptied rather
+// than tracked, because an address that is checked twice a day does not need an
+// eviction policy.
+const VERDICT_CACHE = new Map();
+const VERDICT_CACHE_MAX = 512;
+
+function walletVerdict(wallet) {
+  const cached = VERDICT_CACHE.get(wallet);
+  if (cached) return cached;
+
+  const verdict = address.check(wallet);
+  if (VERDICT_CACHE.size >= VERDICT_CACHE_MAX) VERDICT_CACHE.clear();
+  VERDICT_CACHE.set(wallet, verdict);
+
+  return verdict;
+}
+
+function walletMark(wallet, coin) {
+  const text = String(wallet || '');
+  const ticker = String(coin || 'xmr').toLowerCase();
+  // Only something shaped like an address is judged: a test rig logs in with
+  // `rig-1`, and calling that a bad wallet would put a red mark on every rig
+  // whose login is a name rather than an address.
+  if (!text || (text.length !== 95 && text.length !== 106)) return null;
+  if (ticker !== 'xmr' && ticker !== 'monero') return null;
+  const verdict = walletVerdict(text);
+  if (verdict.ok && verdict.net === 'mainnet') return null;
+
+  return verdict.ok
+    ? `<span class="tag bad" title="${escape(verdict.net)} address: a mainnet pool cannot pay it">${escape(verdict.net)}</span>`
+    : `<span class="tag bad" title="${escape(verdict.reason)}">wallet ✗</span>`;
+}
+
+function walletTag(record) {
+  return walletMark(record.status && record.status.wallet, record.status && record.status.coin);
 }
 
 function csrfField(csrf) {
@@ -57,8 +107,11 @@ function rigTable(devices, config, now) {
     <tbody>${devices
       .map((record) => {
         const state = stateOf(record, config, now);
+        const tag = walletTag(record);
         return `<tr>
-          <td>${dot(state)}<a href="/rig/${encodeURIComponent(record.id)}">${escape(record.label || record.id)}</a>
+          <td>${dot(state)}<a href="/rig/${encodeURIComponent(record.id)}">${escape(record.label || record.id)}</a>${
+            tag ? ` ${tag}` : ''
+          }
             <div class="muted small">${escape(record.id)}</div></td>
           <td>${escape(state)}</td>
           <td class="num">${escape(format.hashrate(record.status.hashrate))}</td>
@@ -77,7 +130,13 @@ function dashboard({ store, config, now, csrf }) {
   const { devices, rate, hot, mining, online } = totals(store, config, now);
   const attention = devices.filter((record) => {
     const state = stateOf(record, config, now);
-    return state === 'offline' || state === 'error' || Number(record.status.temp) >= config.alert_temp || record.queue.length > 0;
+    return (
+      state === 'offline' ||
+      state === 'error' ||
+      Number(record.status.temp) >= config.alert_temp ||
+      record.queue.length > 0 ||
+      walletTag(record) !== null
+    );
   });
 
   const cards = `<div class="grid">
@@ -101,8 +160,12 @@ function dashboard({ store, config, now, csrf }) {
           <tbody>${groups
             .map((entry) => {
               const share = rate > 0 ? Math.round((entry.rate / rate) * 100) : 0;
+              // The group is where "all of it is unpaid" is one fact instead of
+              // twelve identical red marks: the wallet is the unit the pool pays
+              // in, so it is the unit the mark belongs to as well.
+              const mark = walletMark(entry.wallet, entry.coin);
               return `<tr>
-                <td><code>${escape(entry.label)}</code></td>
+                <td><code>${escape(entry.label)}</code>${mark ? ` ${mark}` : ''}</td>
                 <td class="num">${escape(format.hashrate(entry.rate))}</td>
                 <td class="num">${share}%</td>
                 <td class="num">${entry.rigs}</td>
@@ -178,7 +241,17 @@ function rig({ record, config, now, csrf, flash, flashBad, roster = null }) {
     }</dd>
     <dt>temperature</dt><dd>${escape(format.temperature(status.temp))}</dd>
     <dt>uptime</dt><dd>${escape(format.duration(status.uptime))}</dd>
-    <dt>wallet</dt><dd><code>${escape(format.wallet(status.wallet))}</code></dd>
+    <dt>wallet</dt><dd><code>${escape(format.wallet(status.wallet))}</code>${
+      walletTag(record) ? ` ${walletTag(record)}` : ''
+    }${
+      walletTag(record)
+        ? `<div class="muted small">${escape(
+            walletVerdict(String(status.wallet || '')).ok
+              ? 'a stagenet or testnet address - a mainnet pool cannot pay it'
+              : `this address fails its checksum: ${walletVerdict(String(status.wallet || '')).reason}. The rig will not start under rx/0.`,
+          )}</div>`
+        : ''
+    }</dd>
     <dt>pool</dt><dd><code>${escape(status.pool || '-')}</code></dd>
     <dt>coin / mode</dt><dd>${escape(status.coin || 'xmr')} · ${escape(status.mode || 'max')} · ${escape(status.threads || 'auto')} threads</dd>
     <dt>version</dt><dd>${escape(status.version || '?')}${status.slot ? ` · slot ${escape(status.slot)}` : ''}</dd>

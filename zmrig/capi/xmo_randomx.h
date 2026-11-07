@@ -71,6 +71,11 @@ int  xmo_engine_seed(xmo_engine *engine, const uint8_t *seed, size_t seed_len,
  * miner reports it as one. */
 size_t xmo_engine_huge_pages(const xmo_engine *engine);
 size_t xmo_engine_huge_pages_total(const xmo_engine *engine);
+
+/* The page size that backed the mapping: 0 for ordinary pages, 2048 for 2 MiB
+ * pages, 1048576 for 1 GiB pages. A 1 GiB mapping reports "explicit" only when
+ * the kernel really did hand pages out of the gigantic pool. */
+size_t xmo_engine_huge_page_kb(const xmo_engine *engine);
 size_t xmo_engine_total_memory(const xmo_engine *engine);
 
 /* RandomX memory-latency fix. These return 0 on success, 1 when this machine

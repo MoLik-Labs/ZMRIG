@@ -7,9 +7,9 @@
 <link rel="icon" type="image/png" sizes="32x32" href="/ZMRIG/img/favicon-32.png">
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.e1cb14c0.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.ba71088d.js" defer="defer"></script>
-<script src="/ZMRIG/vi/assets/js/main.defc2876.js" defer="defer"></script>
+<meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.c6cca0d9.css">
+<script src="/ZMRIG/vi/assets/js/runtime~main.67d59003.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/main.6ebd84ff.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -54,7 +54,11 @@ Miner này đặt <code>MADV_HUGEPAGE</code> cho mọi mapping nó tạo, nên t
 root vẫn nhận trang 2 MiB, chỉ là không lấy từ pool. Ba trạng thái, <code>rx/0</code>, mỗi
 cấu hình hai lần, cùng phiên:</p>
 <table><thead><tr><th>Số trang</th><th>Nguồn cấp</th><th style="text-align:right">Hashrate</th></tr></thead><tbody><tr><td>đặt trước 1168</td><td><code>MAP_HUGETLB</code></td><td style="text-align:right">814.5 / 832.2 H/s</td></tr><tr><td>không đặt trang nào</td><td>THP gộp 99 % mapping</td><td style="text-align:right">785.9 / 786.1 H/s</td></tr><tr><td>không đặt trang nào, THP tắt</td><td>4 KiB</td><td style="text-align:right">614.8 / 626.3 H/s</td></tr></tbody></table>
-<p>Vậy bước quan trọng là 4 KiB → 2 MiB (≈ +28 %), còn pool đặt trước thêm 4–6 %
+<p>Ba dòng trên đo liền nhau, và tỉ lệ giữa chúng (+28 %) hoá ra là do cái máy trôi
+— nó dao động tới 20 % giữa các giờ. Đo lại ngày 2026-11-07 bằng cách bật/tắt THP
+xen kẽ trong cùng một phiên, không đặt trước bên nào: <strong>1088 / 1095 H/s với THP so
+với 892,8 / 900,5 H/s trên trang 4 KiB</strong>. Vậy bước quan trọng là 4 KiB → 2 MiB
+(≈ +21 %), còn pool đặt trước thêm vài phần trăm
 nữa. Đó là lý do miner chỉ đòi quyền root khi THP tắt, và tại sao log khởi động
 in chính con số kernel đếm được (<code>huge pages: 2332 MB via THP (99 % of the 2336 MB mapping, measured by the kernel)</code>) thay vì tuyên bố rằng gợi ý đã có
 tác dụng.</p>

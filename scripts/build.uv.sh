@@ -14,6 +14,7 @@ tar -xzf v${UV_VERSION}.tar.gz
 cd libuv-v${UV_VERSION}
 sh autogen.sh
 ./configure --disable-shared
+# shellcheck disable=SC2046,SC2044  # word splitting is the point here
 make -j$(nproc || sysctl -n hw.ncpu || sysctl -n hw.logicalcpu)
 cp -fr include ../../deps
 cp .libs/libuv.a ../../deps/lib

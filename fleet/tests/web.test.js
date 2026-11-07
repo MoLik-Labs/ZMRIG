@@ -11,6 +11,7 @@ const { Store } = require('../src/store');
 const ids = require('../src/ids');
 const { createServer } = require('../src/http');
 const { Releases } = require('../src/releases');
+const { substitute } = require('../../tests/common/monero');
 
 const PASSWORD = 'correct horse battery staple';
 const WALLET = '46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ';
@@ -65,12 +66,12 @@ function fakeGitHub() {
   };
 }
 
-async function fleet({ password = PASSWORD, fetchImpl, roster = null } = {}) {
+async function fleet({ password = PASSWORD, fetchImpl, roster = null, trustProxy = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zmrig-web-'));
   const store = new Store(path.join(dir, 'state.json')).load();
   const releases = new Releases({ fetchImpl: fetchImpl || fakeGitHub(), log: () => {} });
   const { server, web } = createServer({
-    config: { ...CONFIG, web_password: password, web_enabled: Boolean(password) },
+    config: { ...CONFIG, web_password: password, web_enabled: Boolean(password), trust_proxy: trustProxy },
     store,
     log: () => {},
     releases,
@@ -95,10 +96,10 @@ async function fleet({ password = PASSWORD, fetchImpl, roster = null } = {}) {
     return response;
   }
 
-  async function signIn(password = PASSWORD) {
+  async function signIn(password = PASSWORD, options = {}) {
     const response = await request('/login', {
       method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      headers: { 'content-type': 'application/x-www-form-urlencoded', ...(options.headers || {}) },
       body: new URLSearchParams({ password }).toString(),
     });
     return response;
@@ -183,6 +184,77 @@ test('a wrong password is refused, a right one gets a hardened cookie', async ()
     assert.equal(response.status, 303);
   } finally {
     await app.close();
+  }
+});
+
+test('a spoofed X-Forwarded-For does not buy a fresh throttle budget', async () => {
+  // The throttle is keyed by the caller's address, and the address used to come
+  // from the *first* entry of X-Forwarded-For — a value the caller writes. Ten
+  // wrong passwords from one machine with a different header on each request
+  // therefore arrived as ten different clients, and the block never happened.
+  const app = await fleet({ trustProxy: true });
+  try {
+    for (let index = 0; index < 10; index += 1) {
+      await app.signIn(`wrong-${index}`, { headers: { 'x-forwarded-for': `10.0.0.${index}, 203.0.113.7` } });
+    }
+    const blocked = await app.signIn(PASSWORD, { headers: { 'x-forwarded-for': '10.0.0.99, 203.0.113.7' } });
+    assert.equal(blocked.status, 429, 'the address the proxy appended is the one counted');
+
+    // The header is also not believed when there is no proxy: a client talking
+    // to this process directly sets it itself.
+    const direct = await fleet({ trustProxy: false });
+    try {
+      for (let index = 0; index < 10; index += 1) {
+        await direct.signIn(`wrong-${index}`, { headers: { 'x-forwarded-for': `198.51.100.${index}` } });
+      }
+      const refused = await direct.signIn(PASSWORD, { headers: { 'x-forwarded-for': '198.51.100.250' } });
+      assert.equal(refused.status, 429, 'without a proxy the socket address is counted');
+    } finally {
+      await direct.close();
+    }
+  } finally {
+    await app.close();
+  }
+});
+
+test('wrong passwords from many addresses are slowed down for everybody', async () => {
+  // Rotating the address defeats a per-address counter whatever the header
+  // says, so there is a second budget that does not depend on who is asking:
+  // past ten failures in the window, each attempt pays a delay first. The owner
+  // with the right password still gets in — it just takes a second.
+  const app = await fleet({ trustProxy: true });
+  try {
+    // Both ends of the header change, which is what a botnet or a proxy pool
+    // looks like: the per-address counter legitimately sees twelve strangers.
+    for (let index = 0; index < 12; index += 1) {
+      await app.signIn(`wrong-${index}`, { headers: { 'x-forwarded-for': `10.1.0.${index}, 203.0.113.${index}` } });
+    }
+    const started = Date.now();
+    const correct = await app.signIn(PASSWORD, { headers: { 'x-forwarded-for': '10.9.9.9, 203.0.113.7' } });
+    const waited = Date.now() - started;
+    assert.equal(correct.status, 303, 'the right password is still accepted');
+    assert.ok(waited >= 100, `a delayed attempt waited (${waited} ms)`);
+  } finally {
+    await app.close();
+  }
+});
+
+test('the Secure flag follows the proxy setting, not a header anyone can send', async () => {
+  const proxied = await fleet({ trustProxy: true });
+  try {
+    const response = await proxied.signIn(PASSWORD, { headers: { 'x-forwarded-proto': 'https' } });
+    assert.match(response.headers.get('set-cookie'), /; Secure/, 'a declared proxy is believed');
+  } finally {
+    await proxied.close();
+  }
+
+  const direct = await fleet({ trustProxy: false });
+  try {
+    const response = await direct.signIn(PASSWORD, { headers: { 'x-forwarded-proto': 'https' } });
+    assert.equal(response.status, 303);
+    assert.doesNotMatch(response.headers.get('set-cookie'), /; Secure/, 'an undeclared header is ignored');
+  } finally {
+    await direct.close();
   }
 });
 
@@ -482,6 +554,13 @@ test('a wallet change is validated, queued once, and an empty form changes nothi
     assert.match(bad.headers.get('location'), /err=/);
     assert.equal(app.store.get(record.id).queue.length, 0);
 
+    // The shape is perfect and the checksum is not: the dashboard has to say
+    // which of the two it is, because "invalid" sends an operator looking for a
+    // length problem that is not there.
+    const typo = await post({ wallet: substitute(WALLET, 12) });
+    assert.match(decodeURIComponent(typo.headers.get('location')), /checksum does not match/);
+    assert.equal(app.store.get(record.id).queue.length, 0);
+
     const nothing = await post({ wallet: WALLET, pool: 'pool:3333', coin: 'xmr', mode: 'max', threads: '8' });
     assert.match(nothing.headers.get('location'), /err=nothing\+changed|err=nothing%20changed/);
 
@@ -660,6 +739,125 @@ test('rendering is fast enough to be worth the word', async () => {
     // work per request (a disk read, a network call), not a microsecond.
     assert.ok(median < 50, `median ${median.toFixed(1)} ms`);
     assert.ok(p95 < 120, `p95 ${p95.toFixed(1)} ms`);
+  } finally {
+    await app.close();
+  }
+});
+
+test('the dashboard marks a rig that cannot be paid, before the chat is read', async () => {
+  const app = await fleet();
+  try {
+    const key = crypto.randomBytes(32).toString('hex');
+    const record = app.store.claim(key);
+    record.owner = 'tg:1';
+    record.label = 'shed';
+    record.status = { state: 'mining', hashrate: 1200, temp: 63, wallet: substitute(WALLET, 20), coin: 'xmr' };
+    record.last_seen = Date.now();
+
+    await app.signIn();
+    const rigPage = await (await app.request(`/rig/${record.id}`)).text();
+    assert.match(rigPage, /wallet ✗/, 'the rig page marks the address');
+    assert.match(rigPage, /fails its checksum/, 'and says why, in words');
+    assert.match(rigPage, /will not start/, 'and what the rig does about it');
+
+    const list = await (await app.request('/rigs')).text();
+    assert.match(list, /wallet ✗/);
+
+    // A rig with a good address carries no mark: the tag has to mean something.
+    // The store, not the object `claim` returned, and then `touch()`: pages are
+    // cached against `store.revision`, so a change nobody told the store about
+    // is a change the next request legitimately does not see.
+    app.store.get(record.id).status.wallet = WALLET;
+    app.store.touch();
+    const clean = await (await app.request(`/rig/${record.id}`)).text();
+    assert.doesNotMatch(clean, /wallet ✗/);
+    assert.doesNotMatch(clean, /fails its checksum/);
+
+    // A plain login is not a wallet and is not a problem: test rigs use names.
+    app.store.get(record.id).status.wallet = 'rig-1';
+    app.store.touch();
+    assert.doesNotMatch(await (await app.request(`/rig/${record.id}`)).text(), /wallet ✗/);
+  } finally {
+    await app.close();
+  }
+});
+
+test('the wallet mark costs one decode per address, not one per rig', async () => {
+  const app = await fleet();
+  try {
+    // 120 rigs, one wallet: the shape of every real farm, and the shape the
+    // first version of this mark got wrong - it decoded the same address 120
+    // times per render, which turned a 1 ms page into a 70 ms page.
+    const rigs = [];
+    for (let index = 0; index < 120; index += 1) {
+      const record = app.store.claim(crypto.randomBytes(32).toString('hex'));
+      record.owner = 'tg:1';
+      record.label = `rig-${index}`;
+      record.last_seen = Date.now();
+      record.status = { state: 'mining', hashrate: 900, temp: 60, wallet: WALLET, coin: 'xmr' };
+      rigs.push(record);
+    }
+
+    await app.signIn();
+    await (await app.request('/rigs')).text();
+
+    // With the verdict cached by address, a second render is string work only.
+    const started = process.hrtime.bigint();
+    const body = await (await app.request('/rigs')).text();
+    const elapsed = Number(process.hrtime.bigint() - started) / 1e6;
+
+    assert.match(body, /rig-119/);
+    // 120 decodes would be ~24 ms of BigInt Keccak on top of the render; the
+    // budget below is loose enough for a shared CI runner and tight enough to
+    // fail if the cache stops working.
+    assert.ok(elapsed < 25, `rigs page took ${elapsed.toFixed(1)} ms for 120 rigs`);
+  } finally {
+    await app.close();
+  }
+});
+
+test('the by-wallet table marks the group, not just the rigs in it', async () => {
+  const app = await fleet();
+  try {
+    // Three rigs, one shared typo: the dashboard knows every rig cannot be
+    // paid, but the aggregation view is the one an operator reads first, and
+    // "hashrate 3 kH/s, 100 % share" next to a dead address is a lie of
+    // omission. One mark on the group says it once instead of three times.
+    const typo = substitute(WALLET, 20);
+    const rigs = [];
+    for (const name of ['shed-1', 'shed-2', 'shed-3']) {
+      const record = app.store.claim(crypto.randomBytes(32).toString('hex'));
+      record.owner = 'tg:1';
+      record.label = name;
+      record.status = { state: 'mining', hashrate: 1000, temp: 61, wallet: typo, coin: 'xmr' };
+      record.last_seen = Date.now();
+      rigs.push(record);
+    }
+    // A second wallet that is fine, so the table has something to compare to.
+    const good = app.store.claim(crypto.randomBytes(32).toString('hex'));
+    good.owner = 'tg:1';
+    good.label = 'attic';
+    good.status = { state: 'mining', hashrate: 500, temp: 55, wallet: WALLET, coin: 'xmr' };
+    good.last_seen = Date.now();
+    app.store.touch();
+
+    await app.signIn();
+    const html = await (await app.request('/')).text();
+    const table = html.slice(html.indexOf('By wallet'), html.indexOf('<h2>Rigs</h2>'));
+    assert.match(table, /wallet ✗/, 'the group row carries the mark');
+    assert.match(table, /fails its checksum|checksum does not match/, 'with the reason on hover');
+
+    // Exactly one mark in the table: one per wallet, not one per rig.
+    assert.strictEqual(table.split('wallet ✗').length - 1, 1);
+
+    // And the healthy wallet is not marked. Both rows print the same
+    // abbreviated prefix (`46SQLW...`), so the hashrate is what tells them
+    // apart: 3 kH/s is the typo group, 500 H/s is the wallet that works.
+    const rows = table.split('<tr>');
+    assert.strictEqual(rows.length - 2, 2, 'one row per wallet');
+    const healthy = rows.find((row) => row.includes('500 H/s'));
+    assert.ok(healthy, 'the healthy wallet has a row');
+    assert.doesNotMatch(healthy, /wallet ✗/);
   } finally {
     await app.close();
   }

@@ -7,9 +7,9 @@
 <link rel="icon" type="image/png" sizes="32x32" href="/ZMRIG/img/favicon-32.png">
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.e1cb14c0.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.ba71088d.js" defer="defer"></script>
-<script src="/ZMRIG/vi/assets/js/main.defc2876.js" defer="defer"></script>
+<meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.c6cca0d9.css">
+<script src="/ZMRIG/vi/assets/js/runtime~main.67d59003.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/main.6ebd84ff.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -32,6 +32,11 @@ worker, đổi tên, và xoá. Tất cả đều được <strong>xếp hàng</s
 check-in sau, mặc định 60 giây, rồi báo kết quả về cả trang và chat. Không có gì
 đẩy xuống qua kết nối thường trực, nên một cú bấm trên trình duyệt không thể làm
 kẹt miner giữa một share.</p>
+<p>Địa chỉ không thể nhận tiền được đánh dấu ngay nơi người ta đọc, không chỉ trong
+chat: rig có ví sai checksum mang thẻ đỏ <strong>wallet ✗</strong> trong danh sách rig, trang
+của nó nói rõ vì sao và máy sẽ làm gì (với <code>rx/0</code> là từ chối khởi động), và nó
+được tính vào mục <em>cần chú ý</em> cho tới khi sửa xong. Thẻ này nói về địa chỉ cuối
+cùng mà rig báo — cảnh báo trong chat chỉ báo một lần, còn dấu thì ở lại.</p>
 <p>Hai điều dễ bất ngờ:</p>
 <ul>
 <li class="">Ô ví hay pool để trống nghĩa là <strong>giữ nguyên</strong>, không bao giờ là &quot;xoá&quot;. Muốn
@@ -78,7 +83,14 @@ là một bề mặt quá nhiều để giữ an toàn. Cần trang đó thì ch
 <ul>
 <li class="">mật khẩu được so bằng <code>timingSafeEqual</code> với <code>FLEET_WEB_PASSWORD</code>;</li>
 <li class="">mười lần đăng nhập sai từ một địa chỉ trong mười lăm phút ⇒ <code>429</code> cho địa chỉ
-đó;</li>
+đó. Địa chỉ là mục <strong>cuối</strong> của <code>X-Forwarded-For</code> — mục mà proxy thêm vào — và
+chỉ khi <code>FLEET_TRUST_PROXY</code> nói rằng có proxy. Trước đây nó lấy mục đầu, thứ do
+chính client viết: mỗi request một số khác nhau là mỗi lần một client mới, và
+chặn hoàn toàn bị đi vòng;</li>
+<li class="">một ngân sách thứ hai đếm số lần sai từ <strong>mọi</strong> địa chỉ, vì cái đầu chỉ tốt
+bằng địa chỉ: quá mười lần trong cửa sổ thì mỗi lần thử phải chờ tới hai giây
+trước khi so mật khẩu. Xoay địa chỉ chỉ mua được vài lần mỗi giây thay vì hàng
+nghìn; mật khẩu đúng vẫn vào được;</li>
 <li class="">mọi form mang một CSRF token gắn với phiên; form không có token là <code>403</code> và
 không đổi gì;</li>
 <li class="">cookie phiên là <code>HttpOnly</code>, <code>SameSite=Lax</code>, bảy ngày, và <code>Secure</code> khi request
@@ -86,7 +98,14 @@ không đổi gì;</li>
 <li class=""><code>Content-Security-Policy: default-src &#x27;none&#x27;</code> — không script, font hay ảnh của
 bên thứ ba nào tải được, nên một CDN bị chiếm cũng không nhìn được fleet;</li>
 <li class="">mật khẩu nằm trong biến môi trường, không bao giờ trong repo, không bao giờ
-trong file trạng thái, và không in ra lúc khởi động.</li>
+trong file trạng thái, và không in ra lúc khởi động;</li>
+<li class="">một máy chưa được ghi danh vẫn phải gõ cửa được, nên bất kỳ khoá 64 hex nào
+cũng tạo ra một bản ghi — nghĩa là ai có <code>curl</code> cũng tạo được. Bản ghi của máy
+chưa ghi danh bị chặn ở <code>FLEET_UNOWNED_LIMIT</code> (200) và hết hạn sau
+<code>FLEET_UNOWNED_TTL</code> (một ngày). Quá mức đó thì bản ghi <strong>lâu không thấy nhất</strong>
+bị đẩy ra, không phải máy mới bị từ chối, vì một lần gõ cửa đầu tiên bị từ chối
+là một máy bạn không thể ghi danh được. Năm nghìn lần gõ cửa vô danh mỗi giây
+để lại 200 bản ghi và một file trạng thái 118 KB.</li>
 </ul>
 <p>Hãy chạy nó qua HTTPS. Trên Render là tự động; ở nơi khác thì đặt sau reverse
 proxy, vì mật khẩu gõ vào HTTP thường là mật khẩu nằm trên dây.</p>

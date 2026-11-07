@@ -9,7 +9,7 @@ image: https://molik-labs.github.io/ZMRIG/img/og-en.png
 RandomX is a memory-bound proof of work: the hash loop reads a dataset in a
 random order. Almost everything that matters follows from that one sentence.
 
-## The three levers that matter
+## The four levers that matter
 
 **Huge pages.** The largest and most obvious gain. A 4 KiB page size makes the
 dataset walk a TLB miss every few accesses. There are two ways to get 2 MiB
@@ -32,9 +32,43 @@ sizes its own reservation per algorithm and `zmrig-tune --algo=` writes the same
 number, so `sudo zmrig-tune --algo panthera` reserves 192 MB and not 2.3 GB.
 
 To check the miner got them: the startup log prints how many bytes really came
-from explicit huge pages (`huge pages 2336 MB (explicit)`), and the API reports
-`"hugepages": [granted, needed]` — `[1168, 1168]` for `rx/0`, `[96, 96]` for
-`panthera`.
+from explicit huge pages (`huge pages 2336 MB (explicit, 2 MiB pages)`), and the
+API reports `"hugepages": [granted, needed]` — `[1168, 1168]` for `rx/0`,
+`[96, 96]` for `panthera`.
+
+**If a 1 GiB pool exists, it is used first.** A 2080 MB dataset is 1 040 TLB
+entries at 2 MiB and two at 1 GiB, so the mapper asks for gigantic pages, then
+the 2 MiB pool, then anonymous memory with the THP hint — and the log says which
+one answered (`explicit, 1 GiB pages` against `explicit, 2 MiB pages`). It cannot
+be a runtime setting: the pool is contiguous physical memory and has to be
+carved out early in boot, so it is a kernel parameter.
+
+```bash
+sudo zmrig-os hugepages            # what is reserved, and what this run needs
+sudo zmrig-os hugepages 1g 3       # a Monero dataset is 3 pages; next boot
+sudo zmrig-os hugepages off        # stop reserving it
+```
+
+Reserving a gigantic pool **replaces** the 2 MiB reservation rather than adding
+to it — three 1 GiB pages have already taken 3 GB of contiguous memory, and the
+miner maps whichever pool exists. The boot log and `zmrig-os tune` both say which
+one is in force.
+
+On most virtual machines the pool cannot be made at all — writing
+`nr_hugepages` under `hugepages-1048576kB` reports success and leaves it at 0 —
+and that is not a fault: the fallback to 2 MiB pages is automatic and the gain
+that matters (4 KiB to 2 MiB) is already there — measured on the test host on
+2026-11-07, alternating between the two configurations so that the box's own
+drift cannot be mistaken for a gain: **897–900 H/s on 4 KiB pages against
+1090–1094 H/s with a reserved 2 MiB pool, +21.5 %**. An earlier pair measured
+without alternating read 678 against 913 and would have claimed +34.7 %; that
+was the machine's throughput moving 20 % between hours, not the pages.
+
+The extra 1-3 % has not been measured in that environment: the write to
+`nr_hugepages` reports success and the pool stays at 0. The MSR preset is the
+same — as root the kernel rejects it with `Input/output error`, which is what a
+virtual machine without MSR passthrough does, so the bare-metal 5–15 % is not
+claimed from this host.
 
 :::warning Measuring without huge pages
 Once 1234 pages are reserved, only about 1.2 GB of ordinary RAM is left. Running
@@ -77,6 +111,19 @@ host, two threads on two vCPUs gave 808–817 H/s, one thread 408 H/s, and four
 threads on two cores 798–801 H/s — oversubscribing buys nothing. SMT usually adds
 5–15 % hashrate for 30–40 % more power, which is why the `watt` profile drops it.
 
+**The MSR preset.** Disabling the CPU's hardware prefetchers costs one register
+write and is the one lever that is not free: it needs root and the `msr` module.
+RandomX walks its dataset at random, so the prefetchers guess wrong and burn
+memory bandwidth on lines nobody asked for. The published gain is **5–15 %** on
+Zen and a smaller number on Intel; it was not measured on this host, and the
+4-core VM this documentation was built on has no MSR passthrough at all.
+
+Since 6.48 it is **on by default** (`auto`): the miner probes, applies the preset
+when the machine can take it, and prints one line either way — in the log and in
+`--check`. `--no-msr` is the way to keep `/dev/cpu/*` untouched, `safe` mode does
+it regardless, and an appliance has root already, so on an installed rig the
+preset is simply applied. Original values are saved and restored on exit.
+
 ## The two that do not
 
 - **Scratchpad prefetch mode** (0/1/2/3): 823, 814, 823, 814 H/s — inside noise.
@@ -113,6 +160,16 @@ useless, and why the ratios above are the useful part.
 
 C++ engine on the same host, for reference: **1075.7 H/s**. The gap to the Zig
 engine is smaller than the gap between two runs.
+
+## Memory over time
+
+A leak of a few megabytes a minute is a rig that dies three days after it was
+installed, and the log says nothing. Eight minutes on the test host at 1.2 kH/s,
+across two seed changes and an algorithm switch: RSS moved 2 408 → 2 429 MB in
+steps that go both ways (the dataset being re-touched), while `VmData` and
+`VmPeak` did not move at all — which is the honest test for the allocator.
+1 422 shares accepted, 0 rejected. Eight minutes is not a week, but it does rule
+out an allocation per share or per job that is never returned.
 
 ## Measuring it yourself
 

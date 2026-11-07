@@ -83,6 +83,25 @@ pub fn parseField(text: []const u8, label: []const u8) u64 {
     return 0;
 }
 
+/// How many 1 GiB pages the kernel has reserved, from the sysfs pool the
+/// gigantic allocator draws on. 0 on kernels without such a pool, on a machine
+/// whose architecture has no 1 GiB page, and on anything that is not root —
+/// which is the normal case, and the reason this is only ever read.
+///
+/// The pool cannot be created by the miner: it has to be reserved before the
+/// machine fragments, so writing it at runtime either fails or (worse) spends
+/// minutes compacting memory and then fails. `zmrig-os hugepages` and the
+/// documentation say how to reserve it at boot.
+pub fn giganticReserved() u64 {
+    return readNumber("/sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages") orelse 0;
+}
+
+/// Bytes of 1 GiB pool available to this process, in MiB. Used by `--check` to
+/// say whether the first mapping will come from gigantic pages or 2 MiB ones.
+pub fn giganticMb() u64 {
+    return giganticReserved() * 1024;
+}
+
 /// Asks the kernel for at least `pages`. Returns what the pool holds afterwards,
 /// or null when the write failed (not root, read-only /proc, no permission).
 pub fn reserve(pages: u64) ?u64 {
@@ -317,4 +336,18 @@ test "anonymous huge pages are read from smaps_rollup, not meminfo" {
     // No line at all is also zero rather than a guess.
     try testing.expectEqual(@as(u64, 0), parseAnonHugeBytes("Rss: 100 kB\n"));
     try testing.expectEqual(@as(u64, 0), parseAnonHugeBytes(""));
+}
+
+test "1 GiB pages are counted in MiB, and no pool means no gigantic mapping" {
+    const testing = std.testing;
+
+    // Pure arithmetic on the number the sysfs file would give: 2 pages of 1 GiB
+    // is 2048 MB, which is what the check line compares against a 2080 MB
+    // dataset - two pages is not enough to hold it, so the allocation falls
+    // through to the 2 MiB pool.
+    const pages: u64 = 2;
+    try testing.expectEqual(@as(u64, 2048), pages * 1024);
+    try testing.expect((pages * 1024) < 2080);
+    try testing.expectEqual(@as(u64, 3), pagesFor(2080, 1024 * 1024));
+    try testing.expectEqual(@as(u64, 3 * 1024), pagesFor(2080, 1024 * 1024) * 1024);
 }

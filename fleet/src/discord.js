@@ -7,6 +7,7 @@
 
 'use strict';
 
+const { VERSION } = require('./version');
 const API = 'https://discord.com/api/v10';
 
 // GUILDS | GUILD_MESSAGES | DIRECT_MESSAGES | MESSAGE_CONTENT
@@ -35,7 +36,7 @@ class Discord {
         headers: {
           authorization: `Bot ${this.token}`,
           'content-type': 'application/json',
-          'user-agent': 'ZMRIGFleet (https://github.com/MoLik-Labs/ZMRIG, 6.37)',
+          'user-agent': `ZMRIGFleet (https://github.com/MoLik-Labs/ZMRIG, ${VERSION})`,
         },
         body: body ? JSON.stringify(body) : undefined,
         signal: controller.signal,

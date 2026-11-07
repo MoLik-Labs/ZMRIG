@@ -215,7 +215,7 @@ Key knobs (`randomx` object, `src/crypto/rx/RxConfig.h`):
 | `init` | threads used for dataset init (`-1` = auto) | `-1` |
 | `init-avx2` | AVX2/JIT optimised dataset init (`-1` = auto) | `-1` |
 | `1gb-pages` | use 1 GiB pages (**auto-detected** here) | `auto` |
-| `rdmsr` / `wrmsr` | MSR mod (fix prefetcher/commit unit) | `true` / `true` |
+| `rdmsr` / `msr` | restore the old MSR values on exit / apply the preset at all: `"auto"`, `true` or `false` | `true` / `"auto"` |
 | `cache_qos` | Intel CAT: isolate L3 per thread | `false` |
 | `numa` | one dataset per NUMA node | `true` |
 | `scratchpad_prefetch_mode` | `0`off `1`T0 `2`NTA `3`movntdqa | `1` |

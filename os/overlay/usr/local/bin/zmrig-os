@@ -17,6 +17,10 @@
 #   zmrig-os mode safe 70        # ... and keep the hottest CPU sensor at 70 C
 #   zmrig-os isolate 4           # keep 4 CPUs for mining (whole cores), pin the
 #                                # miner to them and move IRQs off them
+#   zmrig-os hugepages           # the page size the miner reads its dataset
+#                                # through, and how much of it is reserved
+#   zmrig-os hugepages 1g 3      # reserve 3 x 1 GiB pages at boot (a Monero
+#                                # dataset is 3, and they cannot be made later)
 #   zmrig-os doctor --json       # every check, machine readable
 #   zmrig-os install --disk /dev/nvme0n1   # write this image onto a disk
 #   zmrig-os install             # explain the two forms (live, installed)
@@ -45,7 +49,7 @@
 
 set -eu
 
-VERSION="6.47.0"
+VERSION="6.48.0"
 MANIFEST_URL="https://github.com/MoLik-Labs/ZMRIG/releases/latest/download"
 # The rolling beta is a pre-release, and `releases/latest` never points at one:
 # `CHANNEL="beta"` has to name the tag instead of following the newest stable.
@@ -276,6 +280,12 @@ load_conf() {
     # 0 turns the reservation off entirely; empty means "decide from the
     # algorithm". The boot sets it, the config can override it.
     HUGEPAGES=$(conf_default HUGEPAGES "")
+    # Gigantic pages, as a count to reserve at boot. Empty is "none", which is
+    # the honest default: the pool can only be created before the machine
+    # fragments, and a rig that has already been mining for a week cannot get
+    # one. The miner uses it when it exists and falls back to 2 MiB pages when
+    # it does not, so an empty value costs nothing but the option.
+    HUGEPAGES_1G=$(conf_default HUGEPAGES_1G "")
     ISOLATED_CPUS=""
     case "$ISOLATE" in
         ''|0|*[!0-9]*) ;;
@@ -295,7 +305,8 @@ load_conf() {
         v=$(_kc "$kc" SAFE_TEMP); [ -z "$v" ] || SAFE_TEMP="$v"
         v=$(_kc "$kc" ALGO);      [ -z "$v" ] || ALGO="$v"
         v=$(_kc "$kc" ISOLATE);   [ -z "$v" ] || ISOLATE="$v"
-        v=$(_kc "$kc" HUGEPAGES); [ -z "$v" ] || HUGEPAGES="$v"
+        v=$(_kc "$kc" HUGEPAGES);    [ -z "$v" ] || HUGEPAGES="$v"
+        v=$(_kc "$kc" HUGEPAGES_1G); [ -z "$v" ] || HUGEPAGES_1G="$v"
         v=$(_kc "$kc" FLEET);     [ -z "$v" ] || FLEET_URL="$v"
         v=$(_kc "$kc" INSTALL);   [ -z "$v" ] || INSTALL="$v"
     fi
@@ -337,6 +348,7 @@ TUNED_AT="${TUNED_AT:-}"
 CHANNEL="${CHANNEL}"
 ISOLATE="${ISOLATE:-0}"
 HUGEPAGES="${HUGEPAGES:-}"
+HUGEPAGES_1G="${HUGEPAGES_1G:-}"
 EXTRA_ARGS="${EXTRA_ARGS}"
 FLEET_URL="${FLEET_URL}"
 FLEET_INTERVAL="${FLEET_INTERVAL:-$FLEET_INTERVAL_DEFAULT}"
@@ -395,31 +407,41 @@ other_slot() { case "$1" in a) printf 'b' ;; *) printf 'a' ;; esac; }
 # used to forget the other - which is how a rig boots the wrong slot after
 # somebody isolates a few CPUs.
 write_grubenv() { # key value
-    local env="${BOOT_DIR}/grub/grubenv" line
+    local env="${BOOT_DIR}/grub/grubenv"
     [ -d "${BOOT_DIR}/grub" ] || return 1
-    line="$1=$2"
 
-    # Existing keys, minus the one being written. A file that does not exist yet
-    # is not an error: a fresh install writes the block after this.
-    if [ -r "$env" ]; then
-        sed 's/^#.*$//' "$env" 2>/dev/null | awk -v key="$1" 'index($0, "=") > 0 && substr($0, 1, index($0, "=") - 1) != key' > "${env}.body" 2>/dev/null ||
-            : > "${env}.body"
-    else
-        : > "${env}.body"
+    # The block is built by plan.sh, which merges the keys already in it. The
+    # initramfs calls the same function: it used to have its own copy that
+    # replaced the block, so an automatic rollback dropped `zmrig_extra` and the
+    # rig came back without its isolated CPUs. One implementation, two callers.
+    if command -v plan_grubenv_block >/dev/null 2>&1; then
+        plan_grubenv_block "$1" "$2" "$env" > "${env}.new" 2>/dev/null || { rm -f "${env}.new"; return 1; }
+        mv "${env}.new" "$env" 2>/dev/null || return 1
+        return 0
     fi
 
-    {
-        printf '%s\n' "$line"
-        cat "${env}.body"
-    } | awk 'BEGIN { head = "# GRUB Environment Block\n" } { body = body $0 "\n" }
+    # A root filesystem whose plan.sh did not load: the tool still has to be able
+    # to switch a slot, so the fallback writes the one key it was given. The
+    # block may not exist yet (a fresh install), and awk treats a missing input
+    # file as an error, so /dev/null stands in for it.
+    local src="$env"
+    [ -r "$env" ] || src=/dev/null
+    awk -v key="$1" -v value="$2" -v total=1024 '
+        BEGIN { head = "# GRUB Environment Block\n" }
+        {
+            if ($0 == "" || substr($0, 1, 1) == "#") next
+            eq = index($0, "=")
+            if (eq > 0 && substr($0, 1, eq - 1) == key) next
+            body = body $0 "\n"
+        }
         END {
-            room = 1024 - length(head) - length(body) - 1
+            body = key "=" value "\n" body
+            room = total - length(head) - length(body) - 1
             if (room < 0) exit 1
             pad = ""
             for (i = 0; i < room; i++) pad = pad "#"
             printf "%s%s%s\n", head, body, pad
-        }' > "${env}.new" 2>/dev/null || { rm -f "${env}.new" "${env}.body"; return 1; }
-    rm -f "${env}.body"
+        }' "$src" > "${env}.new" 2>/dev/null || { rm -f "${env}.new"; return 1; }
     mv "${env}.new" "$env" 2>/dev/null || return 1
 }
 
@@ -452,9 +474,19 @@ mark_boot_ok() {
 # share. Other coins in the matrix use the same alphabet with their own lengths,
 # and those are not checked beyond the alphabet: claiming to validate them would
 # be a lie the first time a Wownero address changed length.
+# The shape check below is the second line of defence, not the first: the miner
+# decodes the address and verifies its Keccak checksum, and that is what catches
+# the typo the alphabet check cannot see. Asking the binary costs a millisecond
+# and refuses the one mistake that silently costs somebody a week of hashing, so
+# it is tried first and the shell check is the fallback for a rig whose binary is
+# not there yet (a first boot, or an ISO being prepared).
 validate_wallet() {
-    local wallet="$1" algo="$2" len
+    local wallet="$1" algo="$2" len bin
     len=${#wallet}
+    # Whether the checksum was actually decoded, as opposed to the shape being
+    # counted. `doctor` prints the difference instead of claiming a verification
+    # that did not happen.
+    WALLET_DECODED=0
 
     [ "$len" -ge 90 ] || return 1
     case "$wallet" in
@@ -464,14 +496,30 @@ validate_wallet() {
     case "$algo" in
         auto|rx/0|randomx|xmr|monero|"")
             case "$len" in
-                95)
-                    case "$wallet" in 4*|8*) return 0 ;; *) return 1 ;; esac ;;
-                106)
-                    case "$wallet" in 4*|8*) return 0 ;; *) return 1 ;; esac ;;
+                95|106) ;;
                 *) return 1 ;;
-            esac ;;
+            esac
+            case "$wallet" in 4*|8*) ;; *) return 1 ;; esac
+
+            bin=$(zmrig_bin 2>/dev/null || true)
+            if [ -n "$bin" ] && [ -x "$bin" ]; then
+                "$bin" --check-wallet "$wallet" >/dev/null 2>&1 || return 1
+                WALLET_DECODED=1
+            fi
+            return 0 ;;
         *) return 0 ;;
     esac
+}
+
+# The same check with the reason, for anything that wants to say what is wrong
+# rather than only refusing. Prints one line; returns 1 when the address is bad.
+explain_wallet() {
+    local wallet="$1" bin
+    bin=$(zmrig_bin 2>/dev/null || true)
+    if [ -n "$bin" ] && [ -x "$bin" ]; then
+        "$bin" --check-wallet "$wallet" 2>/dev/null | sed -n '2p' | sed 's/^  //' && return 0
+    fi
+    validate_wallet "$wallet" auto
 }
 
 # ------------------------------------------------------------------ modes
@@ -543,10 +591,12 @@ iso_list() {
 }
 
 housekeeping_list() {
-    local total
+    local total cpus
     total=$(thread_count)
+    # The mask is a list by design ("4-7"), and plan_housekeeping splits it.
+    cpus=$(plan_housekeeping "$total" ${ISOLATED_CPUS:-} 2>/dev/null || true)
     # shellcheck disable=SC2086
-    plan_join_list $(plan_housekeeping "$total" ${ISOLATED_CPUS:-})
+    plan_join_list $cpus
 }
 
 # Move every IRQ that can be moved off the isolated CPUs.
@@ -571,17 +621,26 @@ steer_irqs() {
 # and rcu_nocbs are parsed before the scheduler exists. An installed rig carries
 # a GRUB environment block the initramfs already writes to, so the parameters go
 # there and take effect on the next boot - one mechanism, no grub.cfg editing.
-write_iso_boot_params() {
-    local cpus extra
+# One writer for the whole block, because `zmrig_extra` is a single value:
+# isolating CPUs after reserving gigantic pages used to overwrite the
+# reservation, which is exactly the silent loss this file was already fixed for
+# once (see doc/ARCHITECTURE.md on plan_grubenv_block).
+write_boot_params() {
+    local cpus extra=""
     cpus=$(iso_list)
-    if [ -z "$cpus" ]; then
-        write_grubenv zmrig_extra "" 2>/dev/null || return 1
-        say "next boot: no isolated CPUs"
-        return 0
+    if [ -n "$cpus" ]; then
+        extra="isolcpus=${cpus} nohz_full=${cpus} rcu_nocbs=${cpus}"
     fi
-    extra="isolcpus=${cpus} nohz_full=${cpus} rcu_nocbs=${cpus}"
+    case "${HUGEPAGES_1G:-}" in
+        ''|0|*[!0-9]*) ;;
+        *)
+            # default_hugepagesz is what makes 1 GiB the default for the pool
+            # that follows; hugepages= then counts pages of that size.
+            extra="${extra:+$extra }default_hugepagesz=1G hugepagesz=1G hugepages=${HUGEPAGES_1G}"
+            ;;
+    esac
     write_grubenv zmrig_extra "$extra" || return 1
-    say "next boot: ${extra}"
+    say "next boot: ${extra:-no kernel parameters set}"
 }
 
 # The flags handed to the miner. Printed by `zmrig-os args` so the exact command
@@ -633,10 +692,22 @@ build_args() {
         [ -n "${API_TOKEN:-}" ] && args="$args --http-access-token $API_TOKEN"
     fi
 
+    # The MSR preset (prefetchers off) is worth 5-15 % on bare metal and nothing
+    # in a VM. Three settings, and `auto` is the default:
+    #
+    #   on     ask for it; a machine that cannot take it logs one warning
+    #   off    never, for a host where /dev/cpu must not be opened at all
+    #   auto   say nothing and let the miner's own probe decide: it knows
+    #          whether this CPU *has* a preset as well as whether the device
+    #          answers, which is more than `msr_usable` can tell from a path.
+    #
+    # `safe` never writes a hardware register in any of the three: a mode whose
+    # job is "leave the machine as you found it" cannot change CPU behaviour
+    # behind a thermal governor that measures the result.
     case "$MSR" in
         on)  [ "$MODE" = "safe" ] && args="$args --no-msr" || args="$args --msr" ;;
         off) args="$args --no-msr" ;;
-        auto) msr_usable && args="$args --msr" || args="$args --no-msr" ;;
+        auto) [ "$MODE" = "safe" ] && args="$args --no-msr" || : ;;
     esac
 
     # Pinning also protects the thread count chosen above: without it the
@@ -838,7 +909,11 @@ supervise() {
 
     mkdir -p "$RUN" "$(dirname "$LOG")" 2>/dev/null || true
 
-    if [ -e "$RUN/nostart" ]; then
+    # Two places, because the initramfs cannot know whether /run survived: it
+    # writes /etc/zmrig/nostart, which the overlay keeps for this boot, and
+    # /run/zmrig/nostart for anything that looks there. Missing the flag means
+    # mining when somebody asked for a rig that does not mine.
+    if [ -e "$ROOT/etc/zmrig/nostart" ] || [ -e "$RUN/nostart" ]; then
         log_os "not starting: zmrig.os.nostart=1 was on the kernel command line"
         return 0
     fi
@@ -899,7 +974,17 @@ supervise() {
         set -e
 
         rm -f "$PIDFILE"
-        log_os "exit $rc after $(( $(date +%s) - started ))s"
+        ran=$(( $(date +%s) - started ))
+        log_os "exit $rc after ${ran}s"
+
+        # "Five failed starts in a row" is what the reboot is for, so a start
+        # that actually lasted has to clear the count. Without this a rig that
+        # crashes once a week walked to a reboot once a month, and the reboot
+        # told nobody anything: the last failure was five weeks old.
+        if [ "$ran" -ge "${HEALTHY_RUN:-$(plan_healthy_run 2>/dev/null || printf 600)}" ]; then
+            [ "$fails" = "0" ] || log_os "ran for ${ran}s: clearing the failure count"
+            fails=0
+        fi
 
         # `zmrig-os autotune` asked for this: it wrote the new thread count and
         # killed the miner so this loop would pick it up. Counting it as a
@@ -926,15 +1011,20 @@ supervise() {
             exit 1
         fi
 
-        log_os "restarting in 10 s (failure $fails)"
-        sleep 10
+        # A crash loop is usually the pool or the network, and hammering it every
+        # ten seconds turns a five-minute outage into a socket storm. The delay
+        # doubles up to five minutes; the arithmetic is in plan.sh so the test
+        # suite can check the shape of it without waiting ten minutes.
+        delay=$(plan_restart_delay "$fails" 2>/dev/null || printf '10')
+        log_os "restarting in ${delay}s (failure $fails)"
+        sleep "$delay"
     done
 }
 
 # --------------------------------------------------------------- commands
 
 cmd_setup() {
-    local wallet="" pool="" mode="" threads="" worker="" donate="" start=0 interactive=1
+    local wallet="" pool="" mode="" threads="" worker="" donate="" maxtemp="" start=0 interactive=1
 
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -943,8 +1033,12 @@ cmd_setup() {
             --pool)    pool="${2:?}"; shift ;;
             --pool=*)  pool="${1#*=}" ;;
             --mode)    mode="${2:?}"; shift ;;
-            --max-temp) SAFE_TEMP="${2:?}"; shift ;;
-            --max-temp=*) SAFE_TEMP="${1#*=}" ;;
+            # Into a local, not into $SAFE_TEMP: load_conf() runs after this
+            # loop and would put the file's value straight back, which is what
+            # made `setup --max-temp 77` print "safe (holding 72 C)" and write
+            # 72. Same trap as --donate below.
+            --max-temp) maxtemp="${2:?}"; shift ;;
+            --max-temp=*) maxtemp="${1#*=}" ;;
             --mode=*)  mode="${1#*=}" ;;
             --threads|--threads=*) threads="${1#*=}"; [ "$threads" = "$1" ] && { threads="${2:?}"; shift; } ;;
             --worker)  worker="${2:?}"; shift ;;
@@ -968,8 +1062,27 @@ cmd_setup() {
     # command line, so it must never end up waiting at a prompt.
     if [ -z "$wallet" ] && [ -z "$pool" ] && [ -z "$mode" ] && [ "$interactive" = "1" ] && [ -c /dev/tty ]; then
         printf '\n ZMRIG OS setup\n ---------------\n\n'
-        printf 'Monero wallet address: '
-        read -r wallet < /dev/tty
+        # Three tries, with the reason. A person plugging in a screen and a
+        # keyboard is the one operator who can fix a typo, and `die` on the
+        # first one means they reboot the machine to try again - or worse, walk
+        # away from a rig that sits at "no wallet configured" for a week. The
+        # decode happens here, so a wrong character is refused at the console
+        # rather than after the first rejected login.
+        attempt=0
+        while :; do
+            printf 'Monero wallet address: '
+            read -r wallet < /dev/tty || wallet=""
+            [ -n "$wallet" ] || die "a wallet address is required (--wallet)"
+            if validate_wallet "$wallet" "${ALGO:-auto}"; then
+                break
+            fi
+            attempt=$((attempt + 1))
+            printf '\n That address cannot be paid: %s\n' "$(explain_wallet "$wallet" 2>/dev/null || printf 'wrong shape')"
+            if [ "$attempt" -ge 3 ]; then
+                die "giving up after three attempts; run 'zmrig-os setup' again when you have the address"
+            fi
+            printf ' Try again (ctrl-c to stop).\n\n'
+        done
         printf 'Pool host:port [%s]: ' "$POOL_DEFAULT"
         read -r pool < /dev/tty
         printf 'Worker name [%s]: ' "$(hostname 2>/dev/null || echo rig)"
@@ -980,20 +1093,24 @@ cmd_setup() {
 
     [ -n "$wallet" ] || die "a wallet address is required (--wallet)"
     if ! validate_wallet "$wallet" "${ALGO:-auto}"; then
-        die "that is not a valid Monero address: 95 characters, base58, starting with 4 or 8"
+        # Say which kind of wrong it is. "Not valid" makes an operator re-type a
+        # 95-character string hoping for the best; "checksum does not match" tells
+        # them the string is the right shape and one character is off.
+        die "that is not a valid Monero address: $(explain_wallet "$wallet" 2>/dev/null || printf '95 characters, base58, starting with 4 or 8')"
     fi
 
     WALLET="$wallet"
     [ -n "$pool" ] && POOL="$pool"
     [ -n "$worker" ] && WORKER="$worker"
     [ -n "$mode" ] && MODE="$mode"
-    case "$SAFE_TEMP" in
-        ""|*[!0-9]*) : ;;
-        *)
-            [ "$SAFE_TEMP" -ge 45 ] && [ "$SAFE_TEMP" -le 95 ] ||
-                die "--max-temp must be 45..95 degrees Celsius"
-            ;;
-    esac
+    if [ -n "$maxtemp" ]; then
+        case "$maxtemp" in
+            *[!0-9]*) die "--max-temp must be a whole number of degrees Celsius" ;;
+        esac
+        [ "$maxtemp" -ge 45 ] && [ "$maxtemp" -le 95 ] ||
+            die "--max-temp must be 45..95 degrees Celsius"
+        SAFE_TEMP="$maxtemp"
+    fi
     if [ -n "$threads" ]; then
         THREADS="$threads"
         # A hand-picked count is not a measurement, and leaving one behind
@@ -1130,7 +1247,7 @@ cmd_isolate() {
 
     # Kernel-side, next boot, when there is somewhere to write it.
     if is_installed; then
-        if write_iso_boot_params; then
+        if write_boot_params; then
             say "reboot once to put the kernel side in place (isolcpus, nohz_full, rcu_nocbs)"
         else
             warn "could not write the GRUB environment block; add these by hand instead:"
@@ -1145,6 +1262,107 @@ cmd_isolate() {
     if running; then
         say "restarting the miner so the new affinity applies"
         cmd_restart
+    fi
+}
+
+# Does the 1 GiB pool reserved at boot already hold everything this run needs?
+#
+# The miner asks for gigantic pages first and falls back to the 2 MiB pool, so a
+# rig with a big enough pool needs no second reservation — and cannot afford one:
+# `hugepages=3` has already taken 3 GB of contiguous memory, and another 2.3 GB
+# of 2 MiB pages on the same machine is how a rig ends up swapping while it mines.
+gigantic_covers() {
+    local giga need
+    giga=$(cat "$SYS/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages" 2>/dev/null || echo 0)
+    case "${giga:-x}" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    [ "$giga" -gt 0 ] || return 1
+    [ "${HUGEPAGES:-}" = "0" ] && return 1
+    need=$(plan_need_mb "$ALGO" "$MODE" "$(core_count)" "$THREADS" 2>/dev/null || echo 0)
+    [ "${need:-0}" -gt 0 ] || return 1
+    [ "$((giga * 1024))" -ge "$need" ]
+}
+
+# The page the miner reads its dataset through.
+#
+# 2 MiB pages are the difference between 855 and 1033 H/s on a two-core box, so
+# the reservation is a performance setting, not a detail. 1 GiB pages go further:
+# a 2080 MB dataset is 1 040 TLB entries at 2 MiB and two at 1 GiB. The catch is
+# that the gigantic pool can only be made early in boot, from unfragmented
+# memory, so it is a kernel parameter and not a sysctl - which is why this
+# command writes the boot block instead of poking /proc.
+cmd_hugepages() {
+    local want="${1:-show}" count="${2:-}" pages_2m page_kb need_mb have_1g giga_file
+
+    load_conf
+    giga_file="$SYS/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages"
+
+    show_pools() {
+        pages_2m=$(awk '/^HugePages_Total:/ { print $2 }' /proc/meminfo 2>/dev/null || echo 0)
+        page_kb=$(awk '/^Hugepagesize:/ { print $2 }' /proc/meminfo 2>/dev/null || echo 0)
+        need_mb=$(plan_need_mb "$ALGO" "$MODE" "$(thread_count)" 2>/dev/null || echo 0)
+        [ "${HUGEPAGES:-}" = "0" ] && need_mb=0
+        have_1g=$(cat "$giga_file" 2>/dev/null || echo 0)
+        case "${have_1g:-x}" in ''|*[!0-9]*) have_1g=0 ;; esac
+
+        say "2 MiB    ${pages_2m:-0} page(s) reserved of ${page_kb:-0} KB"
+        if [ -r "$giga_file" ]; then
+            say "1 GiB    ${have_1g} page(s) reserved"
+        else
+            say "1 GiB    this kernel has no 1 GiB pool"
+        fi
+        say "this run ${need_mb} MB: $(((need_mb + 1) / 2)) page(s) of 2 MiB, or $(((need_mb + 1023) / 1024)) of 1 GiB"
+        if [ -n "${HUGEPAGES_1G:-}" ] && [ "${HUGEPAGES_1G}" != "0" ]; then
+            say "boot     reserves ${HUGEPAGES_1G} x 1 GiB; 'zmrig-os hugepages off' removes that"
+        fi
+    }
+
+    case "$want" in
+        show|"")
+            show_pools
+            return 0
+            ;;
+        off|none|no|0)
+            HUGEPAGES_1G=""
+            ;;
+        1g|1G|gigantic)
+            case "${count:-}" in
+                ''|*[!0-9]*) die "usage: zmrig-os hugepages 1g N (N pages of 1 GiB), or 'hugepages off'" ;;
+            esac
+            HUGEPAGES_1G="$count"
+            [ "$count" = "0" ] && HUGEPAGES_1G=""
+            ;;
+        *[!0-9]*)
+            die "usage: zmrig-os hugepages [1g N | off]"
+            ;;
+        *)
+            # A bare number is a 1 GiB count too: it is the only thing this
+            # command reserves, because the 2 MiB pool is already handled by the
+            # initramfs from HUGEPAGES and the algorithm.
+            HUGEPAGES_1G="$want"
+            [ "$want" = "0" ] && HUGEPAGES_1G=""
+            ;;
+    esac
+
+    save_conf
+
+    if [ -z "${HUGEPAGES_1G:-}" ]; then
+        say "1 GiB pages off: the mapping uses 2 MiB pages"
+    else
+        say "1 GiB pages: ${HUGEPAGES_1G} page(s), $((HUGEPAGES_1G * 1024)) MB, reserved at the next boot"
+    fi
+
+    if is_installed; then
+        if write_boot_params; then
+            say "reboot once: the gigantic pool cannot be created after the machine has fragmented"
+        else
+            warn "could not write the GRUB environment block; add this to the kernel line by hand:"
+            say "  default_hugepagesz=1G hugepagesz=1G hugepages=${HUGEPAGES_1G:-0}"
+        fi
+    else
+        say "live stick: the boot entry is read-only - press 'e' in GRUB and add:"
+        say "  default_hugepagesz=1G hugepagesz=1G hugepages=${HUGEPAGES_1G:-0}"
     fi
 }
 
@@ -1180,7 +1398,8 @@ cmd_quickstart() {
         die "no wallet: pass --wallet 4... (or run this again after 'zmrig-os setup')"
 
     [ -z "$wallet" ] || WALLET="$wallet"
-    validate_wallet "$WALLET" "${coin:-$ALGO}" || die "that is not a valid address for ${coin:-$ALGO}"
+    validate_wallet "$WALLET" "${coin:-$ALGO}" ||
+        die "that is not a valid address for ${coin:-$ALGO}: $(explain_wallet "$WALLET" 2>/dev/null || printf 'wrong shape or alphabet')"
 
     if [ -n "$pool" ]; then
         case "$pool" in
@@ -1320,6 +1539,14 @@ cmd_tune() {
         *)         huge_args="--hugepages 2M --pages ${HUGEPAGES}" ;;
     esac
 
+    # A gigantic pool that already covers this run must not be topped up with
+    # 2 MiB pages: on a 4 GB box the two reservations together do not fit, and
+    # the one that loses is the one holding the dataset. The miner maps whichever
+    # pool exists, so "leave it alone" is `--hugepages off`.
+    if gigantic_covers; then
+        huge_args="--hugepages off"
+    fi
+
     # NUMA balancing migrates pages while a process runs, which for a uniformly
     # random walk over 2.3 GiB is a stalled hash that buys nothing. In light mode
     # the machine is somebody's desktop, so it is left alone.
@@ -1419,7 +1646,7 @@ cmd_status() {
     printf '%-14s %s\n' "updates"  "$( if [ "${AUTO_UPDATE:-1}" = "1" ]; then printf 'daily, automatically'; [ "${AUTO_IMAGE:-0}" = "1" ] && printf ' (including the OS image, with rollback)'; else printf 'off (AUTO_UPDATE=0)'; fi )"
     # Huge pages and where the threads are allowed to run: the two numbers a
     # "why is it slower than yesterday" question usually turns into.
-    printf '%-14s %s\n' "hugepages" "$(awk '/^HugePages_Total:/ { print $2 " x " $3 }' /proc/meminfo 2>/dev/null || echo '?')$( [ -n "${HUGEPAGES:-}" ] && printf ' (HUGEPAGES=%s)' "$HUGEPAGES" )"
+    printf '%-14s %s\n' "hugepages" "$(awk '/^HugePages_Total:/ { print $2 " x " $3 }' /proc/meminfo 2>/dev/null || echo '?')$( [ -n "${HUGEPAGES:-}" ] && printf ' (HUGEPAGES=%s)' "$HUGEPAGES" )$( [ -n "${HUGEPAGES_1G:-}" ] && [ "${HUGEPAGES_1G}" != "0" ] && printf ' + %s x 1G at boot' "$HUGEPAGES_1G" )"
     printf '%-14s %s\n' "cpus"     "$( if [ -n "${ISOLATED_CPUS:-}" ]; then printf 'mining on %s, kernel on %s' "$(iso_list)" "$(housekeeping_list)"; else printf 'shared (zmrig-os isolate N keeps some for mining)'; fi )"
     printf '%-14s %s\n' "thermal"  "$(thermal_now)"
     printf '%-14s %s\n' "fee"      "${DONATE}% of Monero time (--donate-level=0 to turn off)"
@@ -1498,6 +1725,19 @@ thermal_now() {
     else
         printf '%s C' "$((best / 1000))"
     fi
+}
+
+# The same reading as a plain number of degrees, or empty when there is none.
+# Anything that parses thermal_now's output as a number gets 0 instead of a
+# temperature ("68 C" has a space in it), which is how the fleet payload sent a
+# temperature of zero for every rig while the status line printed a real one.
+thermal_c() {
+    local t
+    t=$(thermal_now 2>/dev/null) || return 0
+    case "$t" in
+        *" C") printf '%s' "${t% C}" ;;
+        *)     printf '' ;;
+    esac
 }
 
 wallet_short() {
@@ -1807,7 +2047,19 @@ cmd_doctor() {
     fi
 
     if [ -n "$WALLET" ]; then
-        if validate_wallet "$WALLET" "$ALGO"; then check ok wallet "$(wallet_short)"; else check fail wallet "invalid for $ALGO"; fi
+        # The checksum is verified by the miner, so this line means "a pool can
+        # pay this", not "it is the right length".
+        if validate_wallet "$WALLET" "$ALGO"; then
+            if [ "${WALLET_DECODED:-0}" = 1 ]; then
+                check ok wallet "$(wallet_short), checksum verified"
+            else
+                # No miner to ask: the shape is all this rig can check yet, and
+                # saying more would be a claim the tool cannot back.
+                check ok wallet "$(wallet_short), shape only (no miner to verify the checksum)"
+            fi
+        else
+            check fail wallet "$(explain_wallet "$WALLET" 2>/dev/null || printf 'invalid for %s' "$ALGO")"
+        fi
     else
         check fail wallet "not configured (zmrig-os setup)"
     fi
@@ -1851,6 +2103,16 @@ cmd_doctor() {
     else
         check warn hugepages "none reserved: the miner runs on THP (~20% slower than a reserved pool)"
     fi
+
+    # 1 GiB pages: never a warning, because not having them is not a fault — the
+    # pool has to be reserved before the machine fragments, so it is a decision
+    # taken at install time, and the miner falls back to 2 MiB pages by itself.
+    giga_have=$(cat "$SYS/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages" 2>/dev/null || echo "")
+    case "${giga_have:-x}" in
+        ''|*[!0-9]*) check ok gigantic "no 1 GiB pool on this kernel: the miner uses 2 MiB pages" ;;
+        0)  check ok gigantic "no 1 GiB pages reserved (zmrig-os hugepages 1g $(( (need_mb + 1023) / 1024 )) reserves them at boot)" ;;
+        *)  check ok gigantic "${giga_have} x 1 GiB reserved: the ${need_mb} MB mapping takes $(( (need_mb + 1023) / 1024 ))" ;;
+    esac
 
     thp=$(cat /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null | sed 's/.*\[\(.*\)\].*/\1/' || echo unknown)
     case "$thp" in
@@ -1914,7 +2176,9 @@ cmd_doctor() {
     fi
 
     if [ -x "$bin" ] && [ -n "$WALLET" ]; then
-        # shellcheck disable=SC2086
+        # build_args prints one argument per line; splitting them back into
+        # words is the whole point of it.
+        # shellcheck disable=SC2046
         if out=$("$bin" $(build_args) --check 2>&1); then
             check ok config "miner --check passed"
         else
@@ -2077,6 +2341,69 @@ install_plan() { # disk kernel initramfs squashfs esp_part root_part
         "copy        $3 -> root/boot/initramfs-a.gz" \
         "write       boot.img -> first 512 bytes of $1, core.img -> sector 2048" \
         "write       root/boot/grub/grub.cfg and grubenv (slot a)"
+}
+
+grub_cfg_for() { # rootfs_dir [version]
+    local rootfs_mnt="$1" version="${2:-$(image_version)}" slot
+    {
+        cat <<EOF2
+# ZMRIG OS on disk. Written by 'zmrig-os install'; edit the parameters rather
+# than the entries, and see 'zmrig-os help' for everything they do.
+set timeout=3
+set default="a"
+if [ -f \${prefix}/grubenv ]; then
+    load_env
+fi
+set default="\${zmrig_slot}"
+set zmrig_params="quiet loglevel=3 nowatchdog console=tty0 console=ttyS0,115200"
+# Empty unless 'zmrig-os isolate' has written it, and defined here so the
+# entries below read the same with or without an environment block.
+set zmrig_extra=""
+EOF2
+        for slot in a b; do
+            [ -f "${rootfs_mnt}/zmrig/rootfs-${slot}.squashfs" ] || [ "$slot" = "a" ] || continue
+            cat <<EOF2
+
+menuentry "ZMRIG OS ${version} - slot ${slot} - max hashrate" --id "max-${slot}" {
+    linux /boot/vmlinuz-${slot} \${zmrig_params} \${zmrig_extra} zmrig.slot=${slot} zmrig.os.mode=max transparent_hugepage=always
+    initrd /boot/initramfs-${slot}.gz
+}
+menuentry "ZMRIG OS ${version} - slot ${slot} - max hashrate, CPU mitigations off" --id "fast-${slot}" {
+    linux /boot/vmlinuz-${slot} \${zmrig_params} \${zmrig_extra} zmrig.slot=${slot} zmrig.os.mode=max transparent_hugepage=always mitigations=off
+    initrd /boot/initramfs-${slot}.gz
+}
+menuentry "ZMRIG OS ${version} - slot ${slot} - safe (never above 72 C)" --id "safe-${slot}" {
+    linux /boot/vmlinuz-${slot} \${zmrig_params} \${zmrig_extra} zmrig.slot=${slot} zmrig.os.mode=safe zmrig.os.maxtemp=72 transparent_hugepage=madvise
+    initrd /boot/initramfs-${slot}.gz
+}
+menuentry "ZMRIG OS ${version} - slot ${slot} - install to disk" --id "install-${slot}" {
+    linux /boot/vmlinuz-${slot} \${zmrig_params} \${zmrig_extra} zmrig.slot=${slot} zmrig.os.nostart=1 transparent_hugepage=madvise
+    initrd /boot/initramfs-${slot}.gz
+}
+menuentry "ZMRIG OS ${version} - slot ${slot} - debug shell" --id "debug-${slot}" {
+    linux /boot/vmlinuz-${slot} \${zmrig_params} \${zmrig_extra} zmrig.slot=${slot} zmrig.os.debug=1 zmrig.os.nostart=1 nomodeset
+    initrd /boot/initramfs-${slot}.gz
+}
+EOF2
+        done
+    }
+}
+
+# A fresh environment block for a new install: exactly 1024 bytes, because GRUB
+# ignores a block of any other size, and built by the same function the
+# initramfs uses so an install and a rollback agree about the format.
+grubenv_init() { # path
+    local path="$1"
+    if command -v plan_grubenv_block >/dev/null 2>&1; then
+        plan_grubenv_block zmrig_slot a /dev/null > "$path" 2>/dev/null && return 0
+    fi
+    awk 'BEGIN {
+        head = "# GRUB Environment Block\nzmrig_slot=a\n"
+        n = 1023 - length(head)
+        pad = ""
+        for (i = 0; i < n; i++) pad = pad "#"
+        printf "%s%s\n", head, pad
+    }' > "$path"
 }
 
 cmd_install() {
@@ -2263,57 +2590,22 @@ EOF2
     printf '%s\n' "$(image_version)" > "${rootfs_mnt}/zmrig/version" 2>/dev/null || true
     : > "${rootfs_mnt}/zmrig/installed"
 
-    # GRUB config: two slots, chosen by the environment block, with the same
-    # menu a live image has. Slot B appears only once an update writes it, so a
-    # fresh install cannot boot into a root filesystem that does not exist.
-    {
-        cat <<EOF2
-# ZMRIG OS on disk. Written by 'zmrig-os install'; edit the parameters rather
-# than the entries, and see 'zmrig-os help' for everything they do.
-set timeout=3
-set default="a"
-if [ -f \${prefix}/grubenv ]; then
-    load_env
-fi
-set default="\${zmrig_slot}"
-set zmrig_params="quiet loglevel=3 nowatchdog console=tty0 console=ttyS0,115200"
-EOF2
-        for slot in a b; do
-            [ -f "${rootfs_mnt}/zmrig/rootfs-${slot}.squashfs" ] || [ "$slot" = "a" ] || continue
-            cat <<EOF2
-
-menuentry "ZMRIG OS $(image_version) - slot ${slot} - max hashrate" --id "max-${slot}" {
-    linux /boot/vmlinuz-${slot} \${zmrig_params} zmrig.slot=${slot} zmrig.os.mode=max transparent_hugepage=always
-    initrd /boot/initramfs-${slot}.gz
-}
-menuentry "ZMRIG OS $(image_version) - slot ${slot} - max hashrate, CPU mitigations off" --id "fast-${slot}" {
-    linux /boot/vmlinuz-${slot} \${zmrig_params} zmrig.slot=${slot} zmrig.os.mode=max transparent_hugepage=always mitigations=off
-    initrd /boot/initramfs-${slot}.gz
-}
-menuentry "ZMRIG OS $(image_version) - slot ${slot} - safe (never above 72 C)" --id "safe-${slot}" {
-    linux /boot/vmlinuz-${slot} \${zmrig_params} zmrig.slot=${slot} zmrig.os.mode=safe zmrig.os.maxtemp=72 transparent_hugepage=madvise
-    initrd /boot/initramfs-${slot}.gz
-}
-menuentry "ZMRIG OS $(image_version) - slot ${slot} - install to disk" --id "install-${slot}" {
-    linux /boot/vmlinuz-${slot} \${zmrig_params} zmrig.slot=${slot} zmrig.os.nostart=1 transparent_hugepage=madvise
-    initrd /boot/initramfs-${slot}.gz
-}
-menuentry "ZMRIG OS $(image_version) - slot ${slot} - debug shell" --id "debug-${slot}" {
-    linux /boot/vmlinuz-${slot} \${zmrig_params} zmrig.slot=${slot} zmrig.os.debug=1 zmrig.os.nostart=1 nomodeset
-    initrd /boot/initramfs-${slot}.gz
-}
-EOF2
-        done
-    } > "${rootfs_mnt}/boot/grub/grub.cfg"
+# The menu an installed rig boots with. Two slots, chosen by the environment
+# block, with the same choices a live image has. Slot B appears only once an
+# update writes it, so a fresh install cannot boot a root filesystem that does
+# not exist.
+#
+# ${zmrig_extra} is the line that makes `zmrig-os isolate N` mean something:
+# isolcpus / nohz_full / rcu_nocbs are parsed before the scheduler exists, so the
+# tool can only write them into the environment block and let the next boot pick
+# them up. Without this reference the parameters were written, reported as "next
+# boot: isolcpus=4-7", and silently ignored, which is a rig that looks isolated
+# and mines on every core.
+    run mkdir -p "${rootfs_mnt}/boot/grub"
+    grub_cfg_for "$rootfs_mnt" > "${rootfs_mnt}/boot/grub/grub.cfg"
 
     # 1024 bytes: GRUB ignores an environment block of any other size.
-    awk 'BEGIN {
-        head = "# GRUB Environment Block\nzmrig_slot=a\n"
-        n = 1024 - length(head) - 1
-        pad = ""
-        for (i = 0; i < n; i++) pad = pad "#"
-        printf "%s%s\n", head, pad
-    }' > "${rootfs_mnt}/boot/grub/grubenv"
+    grubenv_init "${rootfs_mnt}/boot/grub/grubenv"
 
     # The config the installed system boots with: the same wallet, pool and
     # mode, plus the marker that makes /etc/zmrig persistent.
@@ -2497,6 +2789,12 @@ cmd_update() {
             mkdir -p "$RUN"
             say "downloading $url"
             fetch "$url" > "$tmp" || die "download failed"
+            # A manifest with no checksum cannot be verified, and the manual
+            # path used to accept that while the unattended one refused it -
+            # the same download, a weaker rule because a person was watching.
+            # The person watching is the one who cannot tell a truncated
+            # download or a captive-portal page from a binary.
+            [ -n "$sha" ] || die "the manifest has no binary_sha256: refusing to install something it cannot verify"
             verify_sha "$tmp" "$sha" || die "checksum mismatch: refusing to install"
             chmod +x "$tmp"
             # Same install path as the automatic one: on an installed disk the
@@ -2515,6 +2813,7 @@ cmd_update() {
         mkdir -p "$(dirname "$target")"
         say "downloading $url"
         fetch "$url" > "$target" || die "download failed"
+        [ -n "$sha" ] || die "the manifest has no iso_sha256: refusing to write an image it cannot verify"
         verify_sha "$target" "$sha" || die "checksum mismatch: refusing to write"
 
         # Writing the stick you booted from turns a running rig into a brick.
@@ -2676,7 +2975,10 @@ cmd_auto() {
         run mkdir -p "$RUN"
         say "downloading $url"
         if fetch "$url" > "$tmp"; then
-            if verify_sha "$tmp" "$sha"; then
+            if [ -z "$sha" ]; then
+                warn "the manifest has no checksum for the miner: refusing an update that cannot be verified"
+                rm -f "$tmp"
+            elif verify_sha_required "$tmp" "$sha"; then
                 ota_install_binary "$tmp" "$latest" || warn "the binary could not be installed"
                 if running; then cmd_restart; fi
             else
@@ -2697,7 +2999,10 @@ cmd_auto() {
             run mkdir -p "$STATE"
             say "downloading $url"
             if fetch "$url" > "$iso"; then
-                if verify_sha "$iso" "$sha"; then
+                if [ -z "$sha" ]; then
+                    warn "the manifest has no checksum for the image: refusing to write an unverified slot"
+                    rm -f "$iso"
+                elif verify_sha_required "$iso" "$sha"; then
                     if ota_write_slot "$iso" "$latest"; then
                         rm -f "$iso"
                         say "the next boot runs $latest; 'zmrig-os slot $(boot_slot)' undoes it"
@@ -2745,6 +3050,16 @@ verify_sha() { # file expected
     [ -n "$expected" ] || return 0
     actual=$(sha256sum "$file" | cut -d' ' -f1)
     [ "$actual" = "$expected" ]
+}
+
+# The same check for an update nobody is watching. A manifest with no checksum
+# cannot be verified, and the failure it lets through is the quiet one: a
+# truncated download, a captive-portal HTML page saved under the binary's name, a
+# redirect to a mirror that served the wrong file. Staying one version behind is
+# always better than installing that and restarting the miner into it.
+verify_sha_required() { # file expected
+    [ -n "${2:-}" ] || return 1
+    verify_sha "$1" "$2"
 }
 
 # --------------------------------------------------------------- helpers
@@ -2950,7 +3265,7 @@ ack_add() { # id ok cmd detail
 }
 
 fleet_body() {
-    local state rate temp up installed=false slot coin threads reason log state_reason
+    local state rate temp up installed=false slot coin threads reason log
     load_conf
 
     if running; then
@@ -2960,6 +3275,15 @@ fleet_body() {
     fi
     reason=""
     [ -z "$WALLET" ] && reason="no wallet configured"
+    # The miner refuses to start under rx/0 on an address that fails its
+    # checksum, so "stopped" without a reason would send whoever reads the
+    # dashboard looking at the network. The reason is the wallet: this is the
+    # same verdict `doctor` prints, reduced to the characters a status field
+    # can carry.
+    if [ -z "$reason" ] && [ -n "$WALLET" ] && ! validate_wallet "$WALLET" "$ALGO"; then
+        reason="wallet address is not valid: $(explain_wallet "$WALLET" 2>/dev/null || printf 'wrong shape')"
+        reason=$(printf '%s' "$reason" | tr -c 'A-Za-z0-9.:/@_+ -' ' ' | cut -c1-160)
+    fi
 
     rate=$(last_rate)
     case "$rate" in ''|*[!0-9.]*) rate=0 ;; esac
@@ -2968,8 +3292,8 @@ fleet_body() {
     # keeping state of its own.
     measured="$MEASURED_HS"
     case "$measured" in ''|*[!0-9]*) measured=0 ;; esac
-    temp=$(thermal_now 2>/dev/null || echo 0)
-    case "$temp" in ''|*[!0-9]*) temp=0 ;; *) temp=$((temp / 1000)) ;; esac
+    temp=$(thermal_c 2>/dev/null || true)
+    case "$temp" in ''|*[!0-9]*) temp=0 ;; esac
     up=$(cut -d. -f1 /proc/uptime 2>/dev/null || echo 0)
     case "$up" in ''|*[!0-9]*) up=0 ;; esac
     if is_installed; then installed=true; else installed=false; fi
@@ -2991,7 +3315,7 @@ fleet_body() {
     log=$(log_payload)
 
     cat <<EOF
-{"device":"$(device_id 2>/dev/null || echo unknown)","version":"$(image_version)","status":{"state":"$state","reason":"$reason","hashrate":${rate:-0},"measured":${measured:-0},"temp":${temp:-0},"uptime":${up:-0},"mode":"$(printf '%s' "$MODE" | safe_value)","wallet":"$(printf '%s' "$WALLET" | safe_value)","pool":"$(printf '%s' "$POOL" | safe_value)","worker":"$(printf '%s' "$WORKER" | safe_value)","coin":"$(printf '%s' "$coin" | safe_value)","threads":"$threads","version":"$(image_version)","slot":"$slot","installed":$installed},"acks":$(acks_payload),"log":$log}
+{"device":"$(device_id 2>/dev/null || echo unknown)","version":"$(image_version)","status":{"state":"$state","reason":"$reason","hashrate":${rate:-0},"measured":${measured:-0},"temp":${temp:-0},"uptime":${up:-0},"mode":"$(printf '%s' "$MODE" | safe_value)","wallet":"$(printf '%s' "$WALLET" | safe_value)","pool":"$(printf '%s' "$POOL" | safe_value)","worker":"$(printf '%s' "$WORKER" | safe_value)","coin":"$(printf '%s' "$coin" | safe_value)","threads":"$threads","maxtemp":"${SAFE_TEMP:-}","version":"$(image_version)","slot":"$slot","installed":$installed},"acks":$(acks_payload),"log":$log}
 EOF
 }
 
@@ -3239,6 +3563,44 @@ cmd_fleet() {
     fi
 }
 
+# The check-in lock, and what to do when its owner is gone.
+#
+# A lock left behind is a rig that never checks in again until somebody reboots
+# it. There are two ways to leave one: the OOM killer (or any SIGKILL) takes the
+# agent between `mkdir` and its trap, and a power cut lands in the same window.
+# `/run` is tmpfs, so the directory outlives the process that made it and there
+# is nothing on the other side to notice.
+sync_take_lock() {
+    if mkdir "${RUN}/sync.lock" 2>/dev/null; then
+        printf '%s\n' "$$" >"${RUN}/sync.lock/pid" 2>/dev/null || true
+        return 0
+    fi
+
+    local owner age now
+    owner=$(cat "${RUN}/sync.lock/pid" 2>/dev/null || true)
+    case "$owner" in ''|*[!0-9]*) owner="" ;; esac
+
+    now=$(date +%s)
+    age=$(stat -c %Y "${RUN}/sync.lock" 2>/dev/null || true)
+    case "$age" in ''|*[!0-9]*) age="$now" ;; esac
+
+    # Longer than any check-in can take: the request is bounded by --max-time,
+    # and five minutes is already three times the longest configured one. The
+    # age check is also what protects against a reused PID, which is how a dead
+    # owner can look alive.
+    if [ $((now - age)) -lt 300 ]; then
+        [ -n "$owner" ] || return 1
+        kill -0 "$owner" 2>/dev/null && return 1
+    fi
+
+    printf 'fleet: taking over a stale check-in lock (pid %s, %s s old)\n' \
+        "${owner:-unknown}" "$((now - age))" >>"$OSLOG" 2>/dev/null || true
+    rm -rf "${RUN}/sync.lock"
+    mkdir "${RUN}/sync.lock" 2>/dev/null || return 1
+    printf '%s\n' "$$" >"${RUN}/sync.lock/pid" 2>/dev/null || true
+    return 0
+}
+
 cmd_sync() {
     local quiet=0 force=0 url resp interval cmds line count=0
     local next="" now=""
@@ -3264,10 +3626,13 @@ cmd_sync() {
 
     # One check-in at a time. Two crons, a boot script and an impatient operator
     # must not become two hellos and two applications of the same command.
-    if ! mkdir "${RUN}/sync.lock" 2>/dev/null; then
+    if ! sync_take_lock; then
         return 0
     fi
-    trap 'rmdir "${RUN}/sync.lock" 2>/dev/null || true' EXIT HUP INT TERM
+    # `rm -rf`, not `rmdir`: the lock holds the owner's pid, and rmdir on a
+    # non-empty directory would leave the lock behind for ever - the very
+    # failure this lock is now careful to recover from.
+    trap 'rm -rf "${RUN}/sync.lock" 2>/dev/null || true' EXIT HUP INT TERM
 
     if [ "$force" = 0 ] && [ -f "${RUN}/sync.next" ]; then
         next=$(cat "${RUN}/sync.next" 2>/dev/null || echo 0)
@@ -3344,6 +3709,7 @@ main() {
         setup)    cmd_setup "$@" ;;
         mode)     cmd_mode "$@" ;;
         isolate)  cmd_isolate "$@" ;;
+        hugepages|huge) cmd_hugepages "$@" ;;
         quickstart|quick) cmd_quickstart "$@" ;;
         boot)     cmd_boot "$@" ;;
         tune)     cmd_tune "$@" ;;
@@ -3379,6 +3745,8 @@ main() {
 # and the boot cannot disagree about how many pages this machine needs.
 for _plan in "${ROOT}/usr/local/lib/zmrig/plan.sh" /plan.sh; do
     [ -r "$_plan" ] || continue
+    # The path depends on how the image was laid out, which is the point.
+    # shellcheck source=/dev/null
     . "$_plan"
     break
 done

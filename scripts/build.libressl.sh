@@ -13,6 +13,7 @@ tar -xzf libressl-${LIBRESSL_VERSION}.tar.gz
 
 cd libressl-${LIBRESSL_VERSION}
 ./configure --disable-shared
+# shellcheck disable=SC2046,SC2044  # word splitting is the point here
 make -j$(nproc || sysctl -n hw.ncpu || sysctl -n hw.logicalcpu)
 cp -fr include ../../deps
 cp crypto/.libs/libcrypto.a ../../deps/lib

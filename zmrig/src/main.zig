@@ -20,9 +20,10 @@ const topology = @import("topology.zig");
 const health = @import("health.zig");
 const thermal = @import("thermal.zig");
 const verify = @import("verify.zig");
+const wallet = @import("wallet.zig");
 const util = @import("util.zig");
 
-pub const version = "6.47.0";
+pub const version = "6.48.0";
 
 var running = std.atomic.Value(bool).init(true);
 
@@ -118,6 +119,15 @@ pub fn main() !void {
     }
 
     log.global = log.Logger.init(opts.colors, opts.verbose);
+    // `--verify-share` writes a protocol on stdout: one JSON line per share,
+    // nothing else. The sink has to be set here rather than just before
+    // `verify.run`, because the fee banner below is printed first - and a pool
+    // that reads that banner as a share reply drops the share that was in
+    // flight. Everything from this point on belongs on stderr.
+    if (opts.verify_share) log.global.stderr_sink = true;
+    // `--check-wallet` prints one verdict on stdout and exits; its log has no
+    // business in the middle of that.
+    if (opts.check_wallet != null) log.global.stderr_sink = true;
     stratum.user_agent = opts.user_agent;
     for (opts.pools.items) |pool| {
         if (!pool.tls_insecure) continue;
@@ -129,11 +139,43 @@ pub fn main() !void {
         break;
     }
 
+    // A wallet with one wrong character mines perfectly and is never paid. The
+    // pool refuses it too, but a rig that keeps reconnecting against a refusal
+    // that reads like a network problem can spend a week doing it, and nothing
+    // on the machine ever says why. So the address is decoded here, before the
+    // first share: a Monero rig whose address fails its checksum does not start.
+    //
+    // `--allow-bad-wallet` exists because a login can be address shaped without
+    // being a Monero address (another CryptoNote coin, a pool account name that
+    // happens to be 95 characters). For every algorithm except rx/0 the check is
+    // advisory, because this repository only claims to know Monero's format.
+    const wallet_fatal = firstAlgo(&opts) == .rx_0 and !opts.allow_bad_wallet;
+    for (opts.pools.items) |pool| {
+        const login = pool.user;
+        const cut = std.mem.indexOfAny(u8, login, "./") orelse login.len;
+        const address = login[0..cut];
+        if (address.len != 95 and address.len != 106) continue;
+
+        const verdict = wallet.check(address);
+        if (!verdict.ok) {
+            if (wallet_fatal) {
+                log.global.err("{s} is not a valid Monero address: {s}", .{ address, verdict.reason });
+                log.global.err("this rig would mine and never be paid; check it with `zmrig --check-wallet {s}`", .{address});
+                log.global.err("if that login is not a Monero address, pass --allow-bad-wallet", .{});
+                std.process.exit(1);
+            }
+            log.global.warn("{s} is not a valid Monero address: {s}", .{ address, verdict.reason });
+            log.global.warn("check it with: zmrig --check-wallet {s}", .{address});
+        } else if (verdict.net != .mainnet) {
+            log.global.warn("{s} is a {s} address: a mainnet pool cannot pay it", .{ address, wallet.netLabel(verdict.net) });
+        }
+    }
+
     // The fee is a policy decision, so it is stated before anything else runs:
     // what it costs, which coin it applies to, where it goes, how to stop it.
     if (opts.donate_percent == 0) {
         log.global.info("developer fee: off (--donate-level=0); nothing is mined for anyone but your wallet", .{});
-    } else if (opts.version or opts.benchmark or opts.report or opts.self_test or opts.check) {
+    } else if (opts.version or opts.benchmark or opts.report or opts.self_test or opts.check or opts.verify_share or opts.check_wallet != null) {
         // These paths never mine to a pool, and main prints the fee line in
         // --check. Saying it twice in a 3-second benchmark is noise.
     } else {
@@ -162,6 +204,35 @@ pub fn main() !void {
         }) catch "?";
 
         std.io.getStdOut().writer().print("zmrig {s} - ZMRIG by @nggkhaiz ({s}, {s})\n", .{ version, api.xmo_engine_name(), cpu }) catch {};
+
+        return;
+    }
+
+    if (opts.check_wallet) |address| {
+        // Prints and exits: this is what `zmrig-os doctor`, the fleet and a
+        // person pasting an address into a shell all need.
+        const verdict = wallet.check(address);
+        const out = std.io.getStdOut().writer();
+
+        if (verdict.ok) {
+            out.print("valid   {s}\n", .{address}) catch {};
+            // The property that was actually checked, said out loud: "valid" is
+            // the shape, "checksum verified" is why a pool can pay it.
+            out.print("  check checksum verified (Keccak-256)\n", .{}) catch {};
+            out.print("  kind  {s}\n", .{wallet.kindLabel(verdict.kind)}) catch {};
+            out.print("  net   {s}\n", .{wallet.netLabel(verdict.net)}) catch {};
+            out.print("  spend {s}\n  view  {s}\n", .{ verdict.spend, verdict.view }) catch {};
+            if (verdict.kind == .integrated or verdict.kind == .integrated_subaddress) {
+                out.print("  payment id {s}\n", .{verdict.payment_id}) catch {};
+            }
+            if (verdict.net != .mainnet) {
+                out.print("warning: a mainnet pool cannot pay this address\n", .{}) catch {};
+                std.process.exit(1);
+            }
+        } else {
+            out.print("invalid {s}\n  {s}\n", .{ address, verdict.reason }) catch {};
+            std.process.exit(1);
+        }
 
         return;
     }
@@ -1222,7 +1293,25 @@ fn mergeOptions(allocator: std.mem.Allocator, base: *options.Options, extra: *op
 /// Applies the RandomX MSR preset when the user asked for it. Returns true when
 /// the values were written (so the caller knows there is something to restore).
 fn applyMsr(opts: *const options.Options, logger: *log.Logger) bool {
-    if (!opts.msr) return false;
+    switch (opts.msr) {
+        .off => return false,
+        .on => {},
+        .auto => {
+            // Nothing to decide unless the machine can actually take it. The
+            // probe reads one register and reports why not, which is the same
+            // sentence a user needs when they ask `--check`; doing it here
+            // means `auto` never logs a scary warning on a container host.
+            var probe_buf: [192]u8 = undefined;
+            @memset(&probe_buf, 0);
+            const probe_rc = api.xmo_msr_probe(&probe_buf, probe_buf.len);
+            const probe_text = probe_buf[0..std.mem.indexOfScalar(u8, &probe_buf, 0) orelse probe_buf.len];
+            if (probe_rc != 0) {
+                logger.info("msr: not applying the preset by itself ({s}); --msr tries anyway", .{probe_text});
+                return false;
+            }
+            logger.info("msr: {s}", .{probe_text});
+        },
+    }
 
     var report_buf: [192]u8 = undefined;
     @memset(&report_buf, 0);
@@ -1316,6 +1405,34 @@ fn printConfigSummary(opts: *const options.Options) !void {
         if (pool.proxy_spec.kind != .none) {
             try out.print("  proxy   {s} {s}:{d}\n", .{ @tagName(pool.proxy_spec.kind), pool.proxy_spec.host, pool.proxy_spec.port });
         }
+
+        // The address is the one field a `--check` can prove wrong without a
+        // network, so it is stated as a fact rather than left to the first
+        // rejected login.
+        const cut = std.mem.indexOfAny(u8, pool.user, "./") orelse pool.user.len;
+        const address = pool.user[0..cut];
+        if (address.len == 95 or address.len == 106) {
+            const verdict = wallet.check(address);
+            if (verdict.ok) {
+                try out.print("  wallet  {s} {s} {s}\n", .{
+                    wallet.kindLabel(verdict.kind),
+                    wallet.netLabel(verdict.net),
+                    if (verdict.net == .mainnet) "checksum verified" else "not payable on mainnet",
+                });
+            } else {
+                try out.print("  wallet  INVALID: {s}\n", .{verdict.reason});
+                // What it means depends on the algorithm, and saying the wrong
+                // one is worse than saying nothing: under rx/0 this rig mines
+                // for nobody and will not start; under another coin's algorithm
+                // the login may simply be that coin's address, which this
+                // repository does not claim to know.
+                if (firstAlgo(opts) == .rx_0) {
+                    try out.print("          this rig would mine and never be paid, so it will not start; zmrig --check-wallet {s}\n", .{address});
+                } else {
+                    try out.print("          not a Monero address: if this is another coin's address, mining is unaffected (--allow-bad-wallet silences the check)\n", .{});
+                }
+            }
+        }
     }
 
     try out.print("  threads {d} (default would be {d})\n", .{ opts.threads orelse miner_mod.defaultThreads(miner_mod.cpuCount()), miner_mod.defaultThreads(miner_mod.cpuCount()) });
@@ -1392,10 +1509,16 @@ fn printConfigSummary(opts: *const options.Options) !void {
         var mem_buf: [160]u8 = undefined;
 
         try out.print("  memory  {s}\n", .{
-            std.fmt.bufPrint(&mem_buf, "{s} maps {d} MB, {d} pages of 2 MiB: {s}", .{
-                algo.label(), need_mb, (need_mb + 1) / 2, hugePageStatus(opts),
+            std.fmt.bufPrint(&mem_buf, "{s} maps {d} MB, {d} pages of 2 MiB (or {d} of 1 GiB): {s}", .{
+                algo.label(), need_mb, (need_mb + 1) / 2, (need_mb + 1023) / 1024, hugePageStatus(opts),
             }) catch "cannot describe the memory this mode needs",
         });
+
+        // 1 GiB pages cannot be reserved after the machine has fragmented, so
+        // the pool either exists at boot or never will. Saying whether the
+        // mapper's first choice is available turns a silent fallback into a
+        // decision the operator can take.
+        try out.print("  1g      {s}\n", .{giganticStatus(need_mb)});
 
         // Reserved pages are one way to get 2 MiB pages; transparent huge pages
         // are the other, and on most hosts it is the only one an unprivileged
@@ -1423,10 +1546,17 @@ fn printConfigSummary(opts: *const options.Options) !void {
 
     // MSR is read-only here: probe the first CPU, never write during --check.
     var msr_buf: [192]u8 = undefined;
-    _ = api.xmo_msr_probe(&msr_buf, msr_buf.len);
+    const msr_rc = api.xmo_msr_probe(&msr_buf, msr_buf.len);
     try out.print("  msr     {s} ({s})\n", .{
         msr_buf[0..std.mem.indexOfScalar(u8, &msr_buf, 0) orelse msr_buf.len],
-        if (opts.msr) "on" else "off: --msr is worth 5-15% on Zen 3/4 (measured elsewhere, not on this host)",
+        switch (opts.msr) {
+            .off => "off: --no-msr, or 'msr: false' in the config",
+            .on => "on: --msr",
+            .auto => if (msr_rc == 0)
+                "auto: this machine can take it, so the preset is applied"
+            else
+                "auto: the preset is skipped here; --msr tries anyway",
+        },
     });
 }
 
@@ -1610,7 +1740,7 @@ fn autoReserveHugePages(opts: *const options.Options, logger: *@import("log.zig"
         // rx/0 mapping), and the miner verifies that figure after the dataset
         // is built. With THP off, the warning is real and worth acting on.
         switch (hugepages_mod.thp()) {
-            .never, .unknown => logger.warn("huge pages: {d} reserved, {d} needed for {d} MB, and transparent huge pages are {s}: RandomX is ~28% slower on 4 KiB pages. Run as root or set vm.nr_hugepages={d}", .{
+            .never, .unknown => logger.warn("huge pages: {d} reserved, {d} needed for {d} MB, and transparent huge pages are {s}: RandomX is ~20% slower on 4 KiB pages. Run as root or set vm.nr_hugepages={d}", .{
                 before.reserved, want, need_mb, hugepages_mod.thp().label(), want,
             }),
             .always, .madvise => logger.info("huge pages: {d} of {d} reserved; transparent huge pages ({s}) will back the {d} MB mapping instead", .{
@@ -1691,10 +1821,37 @@ fn hugePageStatus(opts: *const options.Options) []const u8 {
         return if (thp_ok)
             "no pages reserved; transparent huge pages collapse the mapping instead"
         else
-            "no huge pages and THP off -> 4 KiB pages, ~28% slower; see --help";
+            "no huge pages and THP off -> 4 KiB pages, ~20% slower; see --help";
     }
 
     return "fewer pages reserved than this mode needs; see --help";
+}
+
+/// Static buffer for `giganticStatus`, which has to return a slice.
+var gigantic_summary_buf: [224]u8 = undefined;
+
+/// One line for `--check`: does the mapper's first choice exist?
+///
+/// RandomX asks for 1 GiB pages before 2 MiB ones, and the pool for them can
+/// only be created early in boot — `echo 3 > /sys/kernel/mm/hugepages/\
+/// hugepages-1048576kB/nr_hugepages` on a machine that has been up for days
+/// either fails or compacts memory for minutes and then fails. So this is
+/// information, not a warning: on a fresh install it says which of the two the
+/// mapping will use, and how many of them the current mode needs.
+fn giganticStatus(need_mb: u64) []const u8 {
+    const buf = &gigantic_summary_buf;
+    const pages = (need_mb + 1023) / 1024;
+    const have = hugepages_mod.giganticMb();
+
+    if (have == 0) {
+        return std.fmt.bufPrint(buf, "no pool: this mode would need {d} page(s) of 1 GiB, and the mapping uses 2 MiB pages instead (doc/PERFORMANCE.md has the one-line reservation)", .{pages}) catch "no 1 GiB pool";
+    }
+
+    if (have < need_mb) {
+        return std.fmt.bufPrint(buf, "{d} MB reserved in 1 GiB pages, {d} MB needed: short by {d} page(s), so the mapping uses 2 MiB pages", .{ have, need_mb, pages - have / 1024 }) catch "1 GiB pool too small";
+    }
+
+    return std.fmt.bufPrint(buf, "{d} MB reserved in 1 GiB pages: this mode takes {d} of them and RandomX reads its dataset through 1 GiB pages", .{ have, pages }) catch "1 GiB pool present";
 }
 
 /// One line for `--check`: whether the governor is armed, and the number it
@@ -1741,7 +1898,7 @@ fn thpStatus() []const u8 {
     return switch (hugepages_mod.thp()) {
         .always => "always: the kernel collapses anonymous memory into 2 MiB pages without being asked",
         .madvise => "madvise (default): the hint this miner sets is honoured, so no root step is needed",
-        .never => "never: nothing backs the mapping with 2 MiB pages; reserve pages as root or boot with transparent_hugepage=madvise (~28% hashrate)",
+        .never => "never: nothing backs the mapping with 2 MiB pages; reserve pages as root or boot with transparent_hugepage=madvise (~20% hashrate)",
         .unknown => "unknown: this kernel does not report a THP policy; reserve pages as root",
     };
 }

@@ -51,6 +51,13 @@ as a rig of the farm. A rig that has not reported a wallet yet gets its own row,
 last in the table — a machine mining into the wrong address is exactly the
 mistake that view exists to make visible.
 
+An address that cannot be paid is marked where it is read, not only in the chat:
+a rig whose wallet fails its checksum carries a red **wallet ✗** tag in the rig
+list, its page says why and what the rig does about it (it refuses to start under
+`rx/0`), and it is counted under *needs attention* until it is fixed. The tag is
+about the last address the rig reported — the alert in the chat fires once, the
+mark stays.
+
 Two rules that surprise people:
 
 * An empty wallet or pool field means **leave it alone**, never "clear it".
@@ -97,7 +104,15 @@ immediately instead of within a minute.
 ## Security
 
 * the password is compared with `timingSafeEqual` against `FLEET_WEB_PASSWORD`;
-* ten failed logins from one address in fifteen minutes ⇒ `429` for that address;
+* ten failed logins from one address in fifteen minutes ⇒ `429` for that address.
+  The address is the **last** entry of `X-Forwarded-For` — the one the proxy
+  appended — and only when `FLEET_TRUST_PROXY` says there is a proxy. It used to
+  be the first entry, which the client writes: a different number per request
+  made every attempt a new client and stepped around the block entirely;
+* a second budget counts failures from every address, because the first one is
+  only as good as the address: past ten in the window, each attempt waits up to
+  two seconds before the password is compared. Rotating addresses buys a few
+  attempts a second instead of thousands; the right password still gets in;
 * every form carries a CSRF token bound to the session; a form without one is
   `403` and changes nothing;
 * the session cookie is `HttpOnly`, `SameSite=Lax`, seven days, and `Secure` when
@@ -105,7 +120,14 @@ immediately instead of within a minute.
 * `Content-Security-Policy: default-src 'none'` — no third-party script, font or
   image can load, so a compromised CDN cannot watch your fleet;
 * the password lives in the environment, never in the repository, never in the
-  state file, and it is not printed at startup.
+  state file, and it is not printed at startup;
+* a rig that has never been enrolled still has to be able to knock, so any
+  64-hex key creates a record — and that means anybody with `curl` can make one.
+  Records for unenrolled rigs are capped at `FLEET_UNOWNED_LIMIT` (200) and
+  expire after `FLEET_UNOWNED_TTL` (a day). Past the cap the least recently seen
+  unenrolled record is evicted, not the new arrival turned away, because a
+  refused first check-in is a rig you cannot enroll. Five thousand anonymous
+  check-ins a second leave 200 records and a 118 KB state file.
 
 Serve it over HTTPS. On Render that is automatic; anywhere else, put it behind a
 reverse proxy, because a password typed into plain HTTP is a password on the

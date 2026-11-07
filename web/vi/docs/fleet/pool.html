@@ -7,9 +7,9 @@
 <link rel="icon" type="image/png" sizes="32x32" href="/ZMRIG/img/favicon-32.png">
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.e1cb14c0.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.ba71088d.js" defer="defer"></script>
-<script src="/ZMRIG/vi/assets/js/main.defc2876.js" defer="defer"></script>
+<meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.c6cca0d9.css">
+<script src="/ZMRIG/vi/assets/js/runtime~main.67d59003.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/main.6ebd84ff.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -74,9 +74,22 @@ hoặc vào chính workspace này nếu bot không chạy ở đây.</p>
 <li class=""><code>/metrics</code> xuất Prometheus; <code>/healthz</code> trả 503 cho tới khi có template từ
 <code>monerod</code>.</li>
 <li class="">Log audit chỉ ghi thêm — xoay vòng bằng <code>logrotate</code>, đừng sửa.</li>
-<li class="">Đổi ví phí bằng <code>OPERATOR_ADDRESS</code>; mặc định nằm trong <code>pool/src/operator.js</code>.</li>
+<li class="">Đổi ví phí bằng <code>OPERATOR_ADDRESS</code>; mặc định nằm trong <code>pool/src/operator.js</code>.
+Địa chỉ được giải mã lúc khởi động (base58, byte mạng, checksum Keccak-256),
+không chỉ so hình dạng: sai một ký tự vẫn &quot;trông giống&quot; địa chỉ, mà ví phí thì
+không bao giờ đăng nhập nên không chỗ nào khác phát hiện được.</li>
 <li class=""><code>--check</code> từ chối cấu hình không thể trả đúng: phí ngoài 0–10 %, mode lạ, cửa
-sổ PPLNS quá ngắn.</li>
+sổ PPLNS quá ngắn, ví phí không giải mã được.</li>
+<li class="">Mỗi share đều được pool băm lại trước khi trả (<code>verify_shares</code>), dùng một tiến
+trình <code>zmrig --verify-share</code> sống lâu cho mỗi core để cache 256 MB chỉ dựng một
+lần mỗi round. <code>pool/tests/bench-verify.mjs</code> đo trên chính máy bạn; trên một
+máy thử 2 vCPU với hai verifier và 200 share mỗi round: share đầu 0,85 s (dựng
+cache), trạng thái ổn định <strong>43 share/giây</strong> — một rig 1 kH/s ở độ khó 300 gửi
+khoảng 3,3 share/giây, nên máy đó verify được chừng một tá rig.</li>
+<li class=""><code>/stratum</code> là mặt tiếp xúc internet, nên khung truyền có giới hạn: khung quá
+1 MiB thì đóng kết nối, <strong>tin nhắn</strong> quá 256 KiB cũng vậy (chỉ giới hạn từng
+khung thì client vẫn gửi khung nối tiếp mãi được), và một khung dữ liệu thứ hai
+xuất hiện khi tin nhắn còn mở là lỗi giao thức.</li>
 </ul>
 <p>Payout qua <code>monero-wallet-rpc</code>, API và các lưu ý bảo mật nằm trong
 <code>pool/README.md</code>; những bước bạn phải tự chạy khi deploy ở

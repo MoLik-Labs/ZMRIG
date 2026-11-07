@@ -7,9 +7,9 @@
 <link rel="icon" type="image/png" sizes="32x32" href="/ZMRIG/img/favicon-32.png">
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.e1cb14c0.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.ba71088d.js" defer="defer"></script>
-<script src="/ZMRIG/vi/assets/js/main.defc2876.js" defer="defer"></script>
+<meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.c6cca0d9.css">
+<script src="/ZMRIG/vi/assets/js/runtime~main.67d59003.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/main.6ebd84ff.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -41,10 +41,23 @@ control plane cũng không lừa được rig dùng ví mà nó sẽ từ chối
 <li class="">hashrate dưới một nửa lần check-in trước;</li>
 <li class="">hashrate dưới một nửa mức rig tự đo được trên chính nó — bắt được cái máy đã
 tụt dần cả tuần, chứ không phải cái vừa ngã trong một phút;</li>
+<li class="">rig đào vào địa chỉ ví sai checksum, hoặc địa chỉ của mạng khác — bản thân rig
+không thể nhận ra, và trên một pool chỉ kiểm tra bảng chữ cái thì cũng không ai
+nhận ra. Cả farm dùng chung một địa chỉ, nên đây là <strong>một tin cho mỗi địa chỉ</strong>
+(<code>💸 5 rigs all mine to an address that cannot be paid — …</code>), không phải một tin
+cho mỗi máy;</li>
 <li class="">mọi kết quả lệnh, kể cả bị từ chối.</li>
 </ul>
 <p>Mỗi loại có thời gian chờ riêng cho từng rig, nên máy nóng không hét lên mỗi
-phút. Luật hashrate thứ hai là luật chậm, và nó nói rõ nó so với cái gì:</p>
+phút (<code>FLEET_ALERT_COOLDOWN</code>, giây, mặc định 1800). Ngưỡng là <code>FLEET_ALERT_TEMP</code>
+(mặc định 85 °C), còn luật hashrate là <code>FLEET_ALERT_HASHRATE_DROP</code> (mặc định 0.5,
+tức &quot;một nửa&quot;).</p>
+<p>Nhiệt độ là chỉ số nóng nhất mà rig tìm được, không phải chỉ số đầu tiên:
+<code>coretemp</code>, <code>k10temp</code> hay <code>x86_pkg_temp</code> trước, rồi mới tới chip Super I/O của
+bo mạch, và <code>acpitz</code> — vốn báo ước lượng từ chip cầu nam, thấp hơn lõi 10–20 °C —
+chỉ khi không còn gì khác. Rig báo 0 là rig không có cảm biến, và <code>zmrig-os doctor</code> nói đúng một dòng về việc đó; cảnh báo không thể bắn trên một cái máy
+không tự đo được, nên con số 0 đáng để ý.</p>
+<p>Luật hashrate thứ hai là luật chậm, và nó nói rõ nó so với cái gì:</p>
 <div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token plain">🐌 rig-2 is at </span><span class="token number" style="color:rgb(247, 140, 108)">640.0</span><span class="token plain"> H/s, </span><span class="token number" style="color:rgb(247, 140, 108)">45</span><span class="token plain">% of the </span><span class="token number" style="color:rgb(247, 140, 108)">1.4</span><span class="token plain"> kH/s it measured itself</span><br></div></code></pre></div></div>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="tự-host">Tự host<a href="#tự-host" class="hash-link" aria-label="Đường dẫn trực tiếp đến Tự host" title="Đường dẫn trực tiếp đến Tự host" translate="no">​</a></h2>
 <p>Một tiến trình Node, <strong>không phụ thuộc gì</strong>, trạng thái là một file JSON.</p>
@@ -81,6 +94,12 @@ thuộc về nó, và mã nhập chứng minh máy đang ở ngay trước mặt
 nối <em>vào</em> rig: rig gọi ra, mỗi phút một lần, mọi thứ khác chờ lần gọi đó.</p>
 <p>Trên USB live, khóa nằm trong RAM — cài lên ổ, hoặc tạo phân vùng <code>ZMRIGDATA</code>
 bằng <code>zmrig-os persist</code>, nếu không rig sẽ báo ID mới sau khi khởi động lại.</p>
+<p>Hai lần check-in không bao giờ chồng nhau: lần đang chạy giữ một lock có ghi PID
+của nó. Nếu agent bị giết thẳng — OOM killer, mất điện — lock đó sống lâu hơn
+tiến trình, và một lock không ai gỡ sẽ là một rig lặng lẽ thôi check-in trong khi
+vẫn đào. Vì vậy lock có chủ đã chết sẽ được tiếp quản, lock không ghi chủ bị phá
+sau năm phút, còn lock có chủ đang sống thì được tôn trọng. Một rig tự nhiên rơi
+khỏi fleet mà không có lý do rõ ràng thì nên chạy <code>zmrig-os status</code> trước tiên.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="khi-không-dùng-fleet">Khi không dùng fleet<a href="#khi-không-dùng-fleet" class="hash-link" aria-label="Đường dẫn trực tiếp đến Khi không dùng fleet" title="Đường dẫn trực tiếp đến Khi không dùng fleet" translate="no">​</a></h2>
 <p>Để trống <code>FLEET_URL</code> thì không có gì thay đổi: rig không liên lạc với ai, và
 <code>zmrig-os setup</code> vẫn là cách cấu hình. Control plane là phần thêm vào, không phải

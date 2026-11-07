@@ -110,7 +110,7 @@ donation switch).
 | Page size | Typical RandomX gain vs 4 KiB |
 |---|---|
 | 2 MiB explicit (`huge-pages: true`) | +5 % … +20 % |
-| 1 GiB explicit (`1gb-pages: auto`) | +1 % … +3 % on top of 2 MiB |
+| 1 GiB explicit (`hugepages 1g N`, used automatically when reserved) | +1 % … +3 % on top of 2 MiB |
 | Transparent huge pages (fallback) | +2 % … +8 %, less predictable |
 
 `tune-linux.sh` reserves exactly what the algorithm being mined needs, and that
@@ -141,6 +141,71 @@ Measured on the container used for this release (2 vCPU Xeon 2.6 GHz, 3.9 GiB,
 That is the whole story of this engine on a small box: page size and thread
 count decide the hashrate, everything else is noise.
 
+### 1 GiB pages: reserved at boot or not at all
+
+A 2080 MB dataset is 1 040 TLB entries at 2 MiB and two at 1 GiB, so the mapper
+asks for gigantic pages **first**, then the 2 MiB pool, then anonymous memory with
+`MADV_HUGEPAGE` — three attempts, no configuration, and the page size that won is
+printed (`huge pages 2336 MB (explicit, 1 GiB pages)`).
+
+It asks; the kernel decides. A gigantic pool is contiguous physical memory and
+can only be carved out early in boot, so it cannot be a sysctl — on this
+validation host, with 3.9 GiB free and nothing else running, writing
+`/sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages` returns success and
+leaves the pool at 0. That is the normal answer from a virtualised host and it is
+why the fallback is silent rather than a warning: **the rig is not misconfigured
+when there is no 1 GiB pool, it is on 2 MiB pages, which is where the +21 % lives
+anyway.**
+
+Where the pool does exist, it is a kernel parameter:
+
+```bash
+sudo zmrig-os hugepages 1g 3     # Monero dataset: 2080 MB, so 3 pages
+sudo reboot                      # the pool is made from unfragmented memory
+sudo zmrig-os hugepages          # what is reserved, and what this run needs
+sudo zmrig-os hugepages off      # stop reserving it (next boot)
+```
+
+`zmrig-os hugepages` writes `default_hugepagesz=1G hugepagesz=1G hugepages=3`
+into the same GRUB environment block `isolate` uses, composing with it rather
+than replacing it. Reserving a gigantic pool **stops the 2 MiB reservation**:
+three 1 GiB pages have already taken 3 GB of contiguous memory, so the initramfs
+skips `/proc/sys/vm/nr_hugepages` for that boot and `zmrig-os tune` passes
+`--hugepages off`. Both say so in the log — the two pools are alternatives, and
+the miner maps whichever one exists. `zmrig --check` prints the pool and what this run would take
+from it, and `doctor` reports it as information, never as a failure.
+
+The gain on top of 2 MiB is small — published RandomX figures are 1–3 %, and it
+has **not been measured in this environment**: on this sandbox
+`echo 3 > /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages` returns
+success and the pool stays at 0, so the code path that uses a gigantic page has
+never executed here. What has been verified is the fallback and the step below
+it. 2026-11-07, same host, `--bench=3000`, alternating between the two
+configurations so that the box's own drift cannot be mistaken for a gain:
+
+| Pages | Startup line | H/s |
+|---|---|---:|
+| none, `--no-huge-pages` | `huge pages off` | 900.1 / 897.5 |
+| 1200 × 2 MiB reserved | `huge pages 2336 MB (explicit, 2 MiB pages)` | **1090 / 1094** |
+| | | **+21.5 %** |
+| 1 GiB pool | `… (explicit, 1 GiB pages)` | not measurable here |
+
+An earlier pair on the same machine, measured back to back without alternating,
+read 678.1 against 913.2 H/s and would have claimed +34.7 %. That was the box,
+not the pages: this sandbox's throughput moves by up to 20 % between hours, so a
+non-interleaved comparison is worth nothing. The ratio above reproduces to 0.4 %
+because the two configurations take turns.
+
+The MSR preset is the same story with a different cause. As root on this host
+`--msr` reports `intel preset rejected by the kernel (Input/output error)`, which
+is what a virtual machine without MSR passthrough does, so the 5–15 % that
+`doc/CPU.md` quotes for bare metal is **not measurable here** and no number is
+claimed for it.
+
+The gigantic attempt runs first on every one of those rows and falls through to
+the 2 MiB pool, which is what the `explicit, 2 MiB pages` label proves: the label
+is the page size that *won*, not the one that was asked for.
+
 ### The 2026-11 round: what "THP fallback" actually costs
 
 The row above calls the unprivileged case a "THP fallback" as if it were a
@@ -155,8 +220,20 @@ session):
 | none reserved | THP collapsed 99 % of the mapping | 785.9 / 786.1 |
 | none reserved, no `MADV_HUGEPAGE` | 4 KiB | 614.8 / 626.3 |
 
-4 KiB → 2 MiB is the step that matters (≈ +28 %); the reserved pool adds 4–6 %
-on top. So `zmrig` now:
+Those three rows were measured back to back on 2026-11-05, and their ratio
+(+28 %) turned out to be the host drifting rather than the pages: it moves by up
+to 20 % between hours. Re-measured 2026-11-07 by alternating THP on and off in
+one session, no reservation either way:
+
+| Pages | Backing | H/s |
+|---|---|---:|
+| THP `always` | 99 % of the mapping collapsed | 1088 / 1095 |
+| THP `never` | 4 KiB | 892.8 / 900.5 |
+
+**4 KiB → 2 MiB is worth +21 %**, and the reserved pool adds a few per cent on
+top of that (1090 / 1094 against 1088 / 1095 here — inside the noise). The rule
+of thumb that survives both sessions is "about a fifth", which is also what the
+miner's own warning says now. So `zmrig` now:
 
 * prints the kernel's own figure after the dataset is built —
   `huge pages: 2332 MB via THP (99 % of the 2336 MB mapping, measured by the
@@ -409,13 +486,31 @@ your electricity price, instead of with this table.
 
 ## 3. MSR mod ("HASHRATE WILL BE LOW")
 
-`randomx.rdmsr` / `randomx.wrmsr` are already `true`. What is missing on most
-systems is permission to use them:
+Since 6.48 the preset is no longer opt-in: the default is `auto`. Before doing
+anything the miner probes the machine — does this CPU have a preset, does
+`/dev/cpu/0/msr` answer, and can it be written — and then either applies it or
+prints one line saying why not. `--check` prints the same line, so the answer is
+available before a mining session starts:
+
+```
+  msr     intel preset; reading /dev/cpu/0/msr needs root (auto: the preset is skipped here; --msr tries anyway)
+```
+
+| Setting | What happens |
+| --- | --- |
+| *(nothing)* | `auto`: applied when the machine can take it, one log line either way |
+| `--msr` | try anyway; a VM without passthrough gets a warning and keeps mining |
+| `--no-msr` | never open `/dev/cpu/*` — for containers and for a host that must stay untouched |
+| `"msr": false` in the config | the same as `--no-msr`; a config is an instruction, not a default |
+| `MSR="off"` in `os.conf` (appliance) | the same, and `safe` mode does it regardless of the setting |
+
+What is still missing on most systems is permission, which an appliance has and a
+desktop usually does not:
 
 ```bash
 sudo modprobe msr
 ls -l /dev/cpu/0/msr           # must exist
-sudo ./build/xmrig …           # start as root, or grant CAP_SYS_RAWIO
+sudo ./zmrig …                 # or grant CAP_SYS_RAWIO
 ```
 
 Intel preset: `MSR 0x1a4 = 0xf` (disable L2/L1 prefetchers).
@@ -571,7 +666,7 @@ good compromise on a single rig, `0` lets the pool switch as fast as it wants.
   "randomx": {
     "mode": "auto",
     "rdmsr": true,
-    "wrmsr": true,
+    "msr": "auto",
     "numa": true,
     "scratchpad_prefetch_mode": 1
   },
@@ -618,6 +713,31 @@ Rules:
    proxy, rejected shares and switch overheads are not.
 
 ---
+
+## 8b. Memory does not drift
+
+A rig runs for weeks, so a leak of a few megabytes a minute is a rig that dies
+three days after it was installed, and nothing in the log says why. Measured on
+the test host, 2026-11-07: eight minutes at 1.2 kH/s against a fake pool that
+changes the seed and the algorithm underneath it, `-t 2`, 1 422 shares accepted,
+0 rejected.
+
+| t (s) | RSS | VmData | VmPeak |
+|---:|---:|---:|---:|
+| 30 | 2 407 764 KB | 2 422 496 KB | 2 622 108 KB |
+| 240 | 2 417 300 KB | 2 430 176 KB | 2 622 108 KB |
+| 480 | 2 428 824 KB | 2 437 856 KB | 2 622 108 KB |
+
+RSS moves by about 20 MB in total, in steps, and it moves both ways — it is the
+dataset being re-touched after a seed change, not growth. `VmData` and `VmPeak`
+are the honest test for the allocator and they do not move. A second run sampling
+every ten seconds for six minutes showed the same: heap flat, RSS oscillating
+around the dataset, no trend.
+
+Eight minutes is not a week. What it does rule out is the failure mode that
+matters — an allocation per share, per job or per reconnect that is never
+returned, which is visible within a few hundred shares and is what the RSS steps
+would look like if they only ever went up.
 
 ## 9. Troubleshooting
 

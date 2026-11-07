@@ -34,6 +34,13 @@ show it in brackets.
     --ban-cooldown=N       seconds to skip a pool after a ban, a rejected
                            wallet or a full-pool message [900]
                            a rejected wallet is floored at 30 minutes
+    --check-wallet=ADDR    decode a Monero address - length, base58 alphabet,
+                           network byte, Keccak-256 checksum - print the kind,
+                           the network and the keys, and exit 1 if a mainnet
+                           pool could not pay it
+    --allow-bad-wallet     start anyway when the address fails its checksum.
+                           Under rx/0 a bad checksum is otherwise a refusal:
+                           the rig would mine and never be paid
     --idle-timeout=N       drop a silent connection after N s [300, 0 = off]
     --keepalive-interval=N [60, 0 = off]
 ```
@@ -55,6 +62,34 @@ show it in brackets.
     --thermal-file=PATH    read the temperature from PATH instead of sysfs
     --no-thermal           turn the governor off
 ```
+
+## The wallet address
+
+`-u/--user` takes the address the pool pays. For Monero it is decoded before the
+first share: 95 characters (106 with a payment id), base58, a network byte, and a
+four-byte Keccak-256 checksum. One wrong character is the failure that a
+character count cannot see — the rig hashes perfectly and the payout goes to an
+address whose spend key nobody holds — so under `rx/0` it is a refusal:
+
+```console
+$ zmrig -o gulf.moneroocean.stream:10001 -u 4AdUndXH...684Rgf
+error 4AdUndXH...684Rgf is not a valid Monero address: checksum does not match: at least one character is wrong
+error this rig would mine and never be paid; check it with `zmrig --check-wallet 4AdUndXH...684Rgf`
+error if that login is not a Monero address, pass --allow-bad-wallet
+```
+
+`--check-wallet ADDR` is the same check without a pool, and `--check` prints the
+verdict next to the rest of the configuration:
+
+```console
+$ zmrig -o gulf.moneroocean.stream:10001 -u 4... --check
+  wallet  standard mainnet checksum verified
+```
+
+Every other algorithm keeps the check advisory: this repository only claims to
+know Monero's format, and a login that is address-shaped but is another
+CryptoNote coin's address must not stop a rig from starting. `--allow-bad-wallet`
+turns the refusal into the old warning when that is what you have.
 
 ## Logging and lifecycle
 
@@ -179,15 +214,27 @@ config ok
   threads 2 (default would be 2)
   cpus    [0,1] on 2 cpu(s), 2 physical core(s)
   mode    auto, huge pages on, jit on
-  memory  rx/0 maps 2336 MB, 1168 pages of 2 MiB: no pages reserved; transparent huge pages collapse the mapping instead
+  memory  rx/0 maps 2336 MB, 1168 pages of 2 MiB (or 3 of 1 GiB): no pages reserved; transparent huge pages collapse the mapping instead
+  1g      no pool: this mode would need 3 page(s) of 1 GiB, and the mapping uses 2 MiB pages instead (doc/PERFORMANCE.md has the one-line reservation)
   thp     madvise (default): the hint this miner sets is honoured, so no root step is needed
-  msr     intel preset; reading /dev/cpu/0/msr needs root (off: --msr is worth 5-15% on Zen 3/4 …)
+  msr     intel preset; reading /dev/cpu/0/msr needs root (auto: the preset is skipped here; --msr tries anyway)
 ```
+
+The `msr` line is the answer, not a nag: the prefetcher-off preset is worth
+**5–15 %** on bare metal, and since 6.48 it is applied **by itself** when the
+machine can take it (`auto`). What the parentheses say is which of three states
+this run is in — `auto: …` (decided by the probe), `on: --msr` (asked for),
+`off: --no-msr` (refused, which a config with `"msr": false` also does).
+
+The `1g` line is the pool that cannot be made at runtime: it says whether the
+1 GiB pages the mapper would rather use exist, and `zmrig-os hugepages 1g 3`
+reserves them at the next boot. Empty is the normal answer on a virtual machine
+and costs nothing — 2 MiB pages are where almost all of the gain is.
 
 The `memory` line is the coin's own size — `panthera maps 192 MB, 96 pages` —
 and the `thp` line answers the question it raises: `madvise` and `always` mean
 the kernel backs the mapping with 2 MiB pages without any root step, `never`
-means it does not and the miner will be ~28 % slower until pages are reserved.
+means it does not and the miner will be ~20 % slower until pages are reserved.
 
 `--check` reads the file and prints; it opens no socket and allocates no
 dataset. If the file is root-only, run it with `sudo` or you get
