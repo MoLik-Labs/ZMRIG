@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/assets/js/runtime~main.8c47c051.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/runtime~main.7d34dd50.js" defer="defer"></script>
 <script src="/ZMRIG/assets/js/main.dda710d9.js" defer="defer"></script>
 </head>
 <body>
@@ -78,14 +78,20 @@ balance.</li>
 arrives from <code>monerod</code>.</li>
 <li class="">The audit log is append-only — rotate it with <code>logrotate</code>, never edit it.</li>
 <li class="">Change the fee wallet with <code>OPERATOR_ADDRESS</code>; the default lives in
-<code>pool/src/operator.js</code>.</li>
+<code>pool/src/operator.js</code>. The address is decoded at startup (base58, network
+byte, Keccak-256 checksum), not shape-matched: one wrong character still looks
+like an address, and the fee wallet never logs in, so nothing else would
+notice.</li>
 <li class=""><code>--check</code> refuses configurations that cannot pay correctly: a fee outside
-0–10 %, an unknown mode, a PPLNS window that is too short.</li>
+0–10 %, an unknown mode, a PPLNS window that is too short, a fee address that
+does not decode.</li>
 <li class="">Every share is re-hashed by the pool before it is paid (<code>verify_shares</code>), one
 long-lived <code>zmrig --verify-share</code> per core so the 256 MB cache is built once
-per round. Measured on 2 vCPU with two verifiers: 530 ms for the first share
-and 103 shares/s after that — a rig at 1 kH/s on difficulty 300 submits about
-one share every 0.3 s.</li>
+per round. <code>pool/tests/bench-verify.mjs</code> measures it on your machine; on a
+2 vCPU test box with two verifiers and 200 shares per round the first share
+costs 0.85 s (cache build) and the steady state is 43 shares/s — a rig at
+1 kH/s on difficulty 300 submits about 3.3 shares/s, so that box verifies
+roughly a dozen of them.</li>
 <li class=""><code>/stratum</code> faces the internet, so its framing is bounded: a frame over 1 MiB
 closes the connection, a <strong>message</strong> over 256 KiB closes it too (a per-frame
 limit alone leaves a client free to send continuation frames for ever), and a
