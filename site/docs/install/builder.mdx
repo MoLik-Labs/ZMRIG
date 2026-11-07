@@ -39,12 +39,25 @@ adding a flag:
 - A TLS pool becomes part of the `--pool` value (`tls://host:port`), because
   that is the form `oneclick.sh` parses.
 
-The address you type is validated before the copy button unlocks: for Monero,
-95 characters, 106 for an integrated address, base58 alphabet only. For the other
-six coins the check is the alphabet and a plausible length, plus a warning when
-the prefix is not the one this site knows — it does not pretend to verify a
-checksum it never computes. A pool host is validated as `host:port`, and a full
-`stratum+tcp://…` URL pasted from a provider page is accepted.
+The address you type is validated before the copy button unlocks. For Monero the
+page decodes it: 95 characters (106 for an integrated address), the base58
+alphabet, the network byte, and the four-byte Keccak-256 checksum every address
+carries. A character swapped for another valid base58 character is refused —
+that is the typo a character count cannot see, and the one that costs a week of
+hashing. It is the same decoder the pool and the bot use (`lib/address.js`),
+compiled into this page, so the three cannot disagree.
+
+```console
+builder.wallet.checksum   One character is wrong: the checksum does not match.
+```
+
+A stagenet or testnet address is a valid address that a mainnet pool cannot pay,
+and the page says so instead of calling it a typo.
+
+For the other six coins the check is the alphabet and a plausible length, plus a
+warning when the prefix is not the one this site knows — it does not pretend to
+verify a checksum it never computes. A pool host is validated as `host:port`, and
+a full `stratum+tcp://…` URL pasted from a provider page is accepted.
 
 The coin decides two things. It pins the algorithm (`--algo rx/wow` and so on) —
 except for Monero, where adding the flag would stop a switching pool from moving

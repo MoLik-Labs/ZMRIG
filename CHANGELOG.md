@@ -1,5 +1,50 @@
 # 6.48.0 — the boot that comes back configured
 
+## The wallet address is decoded now, not counted
+
+Every address check in this repository was a regex on the alphabet: 95
+characters, starts with `4` or `8`. A Monero address also carries a four-byte
+Keccak-256 checksum, and nothing looked at it — so changing one character to
+another base58 character passed every check there was. A rig configured that
+way mines for a week, is credited correctly by the pool, and the payout goes to
+an address whose spend key nobody holds. The pool cannot tell; the miner cannot
+tell; the person finds out from a balance that never arrives.
+
+There is one decoder now, and everything that accepts an address uses it:
+
+- `lib/address.js` — block base58 (8 bytes to 11 characters) plus Keccak-256,
+  written out because Node's `crypto` only ships the SHA3 variant, which pads
+  differently and produces a different digest. It reports the network
+  (mainnet/stagenet/testnet) and the kind (standard/subaddress/integrated).
+  `pool/src/address.js` and `fleet/src/address.js` re-export it.
+- `zmrig/src/wallet.zig` — the same check inside the miner, allocation-free, so
+  a bad address is refused before the first hash instead of after the first
+  payout.
+
+Where it lands:
+
+| Where an address is typed | Before | Now |
+| --- | --- | --- |
+| `zmrig -u ADDR` | warned | **refuses to start** under `rx/0`, with the reason and the flag to override it |
+| `zmrig --check` | — | prints `wallet  standard mainnet checksum verified`, or `INVALID: …` |
+| `zmrig --check-wallet ADDR` | — | one verdict: kind, net, spend key, view key; exit 0/1 |
+| pool stratum login | accepted | refused with `wallet address is not valid: …`; not payable, not credited |
+| pool `looksLikeAddress()` | regex | regex fast-reject, then the checksum |
+| `zmrig-os setup` / `doctor` | "not a valid Monero address" | the reason: `checksum does not match: at least one character is wrong` |
+| bot `/wallet`, dashboard form, roster | "does not look like a Monero address" | the same reason, before anything is queued |
+| fleet alert | — | a rig reporting an address it cannot be paid on raises one alert, once |
+
+`--allow-bad-wallet` exists because a login can be address shaped without being
+a Monero address: another CryptoNote coin, or a pool account name that happens
+to be 95 characters. Without it, a bad checksum under `rx/0` is a refusal — a
+rig that does not start is better than a rig that hashes for nobody — and for
+every other algorithm the check stays advisory, because this repository only
+claims to know Monero's format.
+
+The pool's tests were the only suite CI did not run. They run now, in a `pool`
+job, together with the fee audit: a change to the payout path could previously
+break the ledger, the address check or the share verifier and merge green.
+
 Five bugs in the installed appliance, all of them quiet: each one made a rig look
 healthier than it was, and none of them printed a warning. Found by reading the
 boot path against the tests that claim to cover it.

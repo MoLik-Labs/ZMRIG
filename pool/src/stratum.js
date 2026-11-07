@@ -216,6 +216,27 @@ class StratumPool {
 
     const { address, worker } = splitLogin(login);
 
+    // Something shaped exactly like an address but with a broken checksum is a
+    // typo, and a typo is the one failure the miner cannot see: the rig hashes
+    // happily, the pool credits it, and the payout goes to an address nobody
+    // holds. Refusing the login says so at the only moment somebody is looking
+    // at the screen. Plain names (test rigs, `wallet.rig` with no address) are
+    // untouched: they never matched the shape in the first place.
+    if (/^[48][1-9A-HJ-NP-Za-km-z]{94}$/.test(address) || /^[48][1-9A-HJ-NP-Za-km-z]{105}$/.test(address)) {
+      const verdict = require('./address').check(address);
+      if (!verdict.ok) {
+        this.stats.loginFailed += 1;
+        this.reply(conn, id, null, { code: -1, message: `wallet address is not valid: ${verdict.reason}` });
+        this.drop(conn, 'invalid address checksum');
+        this.log('warn', `login from ${conn.remote || 'unknown'} refused: ${verdict.reason}`);
+
+        return;
+      }
+      if (verdict.net !== 'mainnet') {
+        this.log('warn', `login ${address.slice(0, 8)}… is a ${verdict.net} address: it will mine but cannot be paid`);
+      }
+    }
+
     // A wallet address is required to be payable later. Anything else is
     // accepted (test rigs use plain names) but flagged, and it never gets a
     // payout because `duePayouts` skips non-addresses.

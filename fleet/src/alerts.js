@@ -10,6 +10,7 @@
 'use strict';
 
 const format = require('./format');
+const address = require('./address');
 
 function mark(record, kind, now) {
   record.alerts = record.alerts || {};
@@ -58,6 +59,26 @@ function onHello(record, config, now, before) {
   ) {
     mark(record, 'stopped', now);
     out.push({ kind: 'stopped', level: 'warn', text: `⏸ **${name(record)}** stopped mining (${status.reason || 'no reason given'})` });
+  }
+
+  // The wallet the rig is mining to. A rig that reports an address with a
+  // broken checksum is mining for nobody: the pool refuses the login, or - on a
+  // pool that only looks at the alphabet - credits an account that can never be
+  // paid. This is checked here, on the dashboard and in the chat, because the
+  // rig itself has no way to notice.
+  const wallet = String(status.wallet || '');
+  if ((wallet.length === 95 || wallet.length === 106) && cooling(record, 'wallet', config, now)) {
+    const verdict = address.check(wallet);
+    if (!verdict.ok || verdict.net !== 'mainnet') {
+      mark(record, 'wallet', now);
+      out.push({
+        kind: 'wallet',
+        level: 'warn',
+        text: verdict.ok
+          ? `💸 **${name(record)}** mines to a ${verdict.net} address: a mainnet pool cannot pay it`
+          : `💸 **${name(record)}** has an invalid wallet address - ${verdict.reason}. Nothing mined to it can be paid.`,
+      });
+    }
   }
 
   const rate = Number(status.hashrate) || 0;

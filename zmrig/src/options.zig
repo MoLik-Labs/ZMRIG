@@ -261,6 +261,14 @@ pub const Options = struct {
     config_path: ?[]const u8 = null,
     self_test: bool = false,
     self_test_light: bool = false,
+    /// `--check-wallet ADDR`: decode the address, verify its checksum and say
+    /// what it is. Exits non-zero when a pool could not pay it.
+    check_wallet: ?[]const u8 = null,
+    /// `--allow-bad-wallet`: start even though the address fails its checksum.
+    /// For the rare rig that logs into a pool with something that is address
+    /// shaped but is not a Monero address; without it, a bad checksum under
+    /// rx/0 is a refusal rather than a rig that hashes for nobody.
+    allow_bad_wallet: bool = false,
     check: bool = false,
     benchmark: bool = false,
     bench_hashes: u64 = 1_000_000,
@@ -358,6 +366,10 @@ pub const usage =
     \\  -o, --url=URL            pool URL. Schemes: tcp (default), tls, ws, wss -
   \\                           e.g. wss://pool.example.com/monero
     \\  -u, --user=USER          wallet address (login)
+\\      --check-wallet=ADDR  verify a Monero address (checksum, network) and exit
+\\      --allow-bad-wallet   start anyway if the address fails its checksum
+\\                           (rx/0 refuses to start on a bad checksum: the rig
+\\                           would mine and never be paid)
     \\  -p, --pass=PASS          password / worker name (default: x)
     \\  -a, --algo=ALGO          rx/0, rx/2, rx/wow, rx/arq, rx/graft, rx/sfx, rx/yada, panthera
     \\                           'auto' advertises all RandomX variants, so a pool that
@@ -849,6 +861,10 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseEr
                     return error.UnknownOption;
                 }
             }
+        } else if (std.mem.eql(u8, name, "--allow-bad-wallet")) {
+            opts.allow_bad_wallet = true;
+        } else if (std.mem.eql(u8, name, "--check-wallet")) {
+            opts.check_wallet = allocator.dupe(u8, try needValue(args, &i, inline_value)) catch return error.OutOfMemory;
         } else if (std.mem.eql(u8, name, "--check") or std.mem.eql(u8, name, "--dry-run")) {
             // --dry-run is XMRig's name for "validate and exit".
             opts.check = true;
@@ -910,7 +926,7 @@ pub fn validate(opts: *const Options) ParseError!void {
     // it used to be rejected with NoPools, which made the one command that
     // helps a fresh box useless on a fresh box.
     if (opts.help or opts.version or opts.self_test or opts.benchmark or
-        opts.report or opts.verify_share or opts.autotune) return;
+        opts.report or opts.verify_share or opts.autotune or opts.check_wallet != null) return;
     _ = opts.check;
 
     if (opts.pools.items.len == 0) return error.NoPools;

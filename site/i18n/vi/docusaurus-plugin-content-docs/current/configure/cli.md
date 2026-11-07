@@ -33,6 +33,11 @@ hiện trong ngoặc vuông.
     --ban-cooldown=N       giây bỏ qua một pool sau khi bị ban, bị từ chối ví
                            hoặc nhận thông báo pool đầy [900]
                            trường hợp từ chối ví bị kẹp tối thiểu 30 phút
+    --check-wallet=ADDR    giải mã địa chỉ Monero - độ dài, bảng chữ base58,
+                           byte mạng, checksum Keccak-256 - in ra loại địa chỉ,
+                           mạng và các khóa, thoát 1 nếu pool mainnet không trả được
+    --allow-bad-wallet     vẫn khởi động dù checksum sai. Với rx/0, checksum
+                           sai là bị từ chối: máy sẽ đào mà không bao giờ được trả
     --idle-timeout=N       ngắt kết nối im lặng sau N giây [300, 0 = tắt]
     --keepalive-interval=N [60, 0 = tắt]
 ```
@@ -54,6 +59,34 @@ hiện trong ngoặc vuông.
     --thermal-file=PATH    đọc nhiệt độ từ FILE thay vì sysfs
     --no-thermal           tắt bộ điều tiết
 ```
+
+## Địa chỉ ví
+
+`-u/--user` nhận địa chỉ mà pool sẽ trả. Với Monero, địa chỉ được giải mã trước
+chia sẻ đầu tiên: 95 ký tự (106 nếu có payment id), base58, byte mạng, và
+checksum Keccak-256 bốn byte. Sai **một** ký tự là kiểu hỏng mà phép đếm ký tự
+không thấy — máy vẫn băm hoàn hảo và tiền trả về một địa chỉ không ai giữ khóa
+spend — nên với `rx/0` đó là lý do từ chối khởi động:
+
+```console
+$ zmrig -o gulf.moneroocean.stream:10001 -u 4AdUndXH...684Rgf
+error 4AdUndXH...684Rgf is not a valid Monero address: checksum does not match: at least one character is wrong
+error this rig would mine and never be paid; check it with `zmrig --check-wallet 4AdUndXH...684Rgf`
+error if that login is not a Monero address, pass --allow-bad-wallet
+```
+
+`--check-wallet ADDR` là đúng phép kiểm đó mà không cần pool, và `--check` in kết
+luận cạnh phần còn lại của cấu hình:
+
+```console
+$ zmrig -o gulf.moneroocean.stream:10001 -u 4... --check
+  wallet  standard mainnet checksum verified
+```
+
+Với mọi thuật toán khác, phép kiểm chỉ là cảnh báo: kho này chỉ nhận là biết định
+dạng của Monero, và một login có dạng địa chỉ nhưng là địa chỉ của đồng CryptoNote
+khác thì không được phép ngăn máy khởi động. `--allow-bad-wallet` biến lý do từ
+chối trở lại thành cảnh báo như trước, cho trường hợp đó.
 
 ## Log và vòng đời
 

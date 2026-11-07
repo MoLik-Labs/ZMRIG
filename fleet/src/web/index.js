@@ -519,10 +519,9 @@ function createWeb({ config, store, releases = null, log = () => {}, now = () =>
 
       if (field === 'wallet') {
         const coin = args.coin || status.coin || 'xmr';
-        if (!commands.validWallet(raw, coin)) {
-          problems.push(coin === 'xmr'
-            ? 'that is not a Monero address: 95 or 106 base58 characters starting with 4 or 8'
-            : `that does not look like a ${coin} address`);
+        const problem = commands.walletProblem(raw, coin);
+        if (problem) {
+          problems.push(problem);
           continue;
         }
         args.wallet = raw;

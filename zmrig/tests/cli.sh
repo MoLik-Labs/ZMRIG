@@ -331,5 +331,54 @@ else
     record FAIL "--ban-cooldown is documented" "not in --help"
 fi
 
+
+# -- the wallet address is decoded, not just measured ---------------------
+# A 95-character base58 string with one character wrong mines perfectly and is
+# never paid. These four checks are the contract: the flag answers, it exits
+# non-zero on a bad address, a Monero run refuses to start on one, and the
+# override exists and is documented.
+TYPO=${WALLET%?}f
+expect_exit 0 "--check-wallet accepts a real address" -- "$BIN" --check-wallet "$WALLET"
+expect_exit 1 "--check-wallet rejects a typo" -- "$BIN" --check-wallet "$TYPO"
+
+out=$("$BIN" --check-wallet "$WALLET" 2>/dev/null)
+if printf '%s' "$out" | grep -q '^valid' && printf '%s' "$out" | grep -q 'checksum verified' &&
+    printf '%s' "$out" | grep -q 'net   mainnet' && printf '%s' "$out" | grep -q 'spend [0-9a-f]\{64\}'; then
+    record PASS "--check-wallet names the network and the checksum" "ok"
+else
+    record FAIL "--check-wallet names the network and the checksum" "$("$BIN" --check-wallet "$WALLET" 2>/dev/null | head -3 | tr '\n' ' ')"
+fi
+
+# Captured, not piped: `set -o pipefail` makes a deliberate exit 1 from the
+# miner the status of the pipeline, which would read as "the test failed".
+bad=$("$BIN" --check-wallet "$TYPO" 2>/dev/null)
+if printf '%s' "$bad" | grep -q 'checksum does not match'; then
+    record PASS "--check-wallet says which character class is wrong" "ok"
+else
+    record FAIL "--check-wallet says which character class is wrong" "no reason"
+fi
+
+# Starting is the moment it matters: a rig that hashes for nobody for a week is
+# worse than a rig that does not start. The check happens before any mining, so
+# this costs a millisecond even though the command line asks for a benchmark.
+expect_exit 1 "a typo refuses to start (rx/0)" -- \
+    "$BIN" -o pool.example.com:3333 -u "$TYPO" --bench
+expect_exit 0 "--allow-bad-wallet overrides the refusal" -- \
+    "$BIN" -o pool.example.com:3333 -u "$TYPO" --allow-bad-wallet --check
+
+# --check carries the verdict in the summary, so an operator reading a dry run
+# sees what the pool will see.
+if "$BIN" -o pool.example.com:3333 -u "$WALLET" --check 2>/dev/null | grep -q 'wallet .*checksum verified'; then
+    record PASS "--check states the wallet was verified" "ok"
+else
+    record FAIL "--check states the wallet was verified" "no wallet line"
+fi
+
+if "$BIN" --help | grep -qF -- "--allow-bad-wallet"; then
+    record PASS "--allow-bad-wallet is documented" ""
+else
+    record FAIL "--allow-bad-wallet is documented" "not in --help"
+fi
+
 printf '\n    %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

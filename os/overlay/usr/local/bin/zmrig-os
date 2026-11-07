@@ -474,9 +474,19 @@ mark_boot_ok() {
 # share. Other coins in the matrix use the same alphabet with their own lengths,
 # and those are not checked beyond the alphabet: claiming to validate them would
 # be a lie the first time a Wownero address changed length.
+# The shape check below is the second line of defence, not the first: the miner
+# decodes the address and verifies its Keccak checksum, and that is what catches
+# the typo the alphabet check cannot see. Asking the binary costs a millisecond
+# and refuses the one mistake that silently costs somebody a week of hashing, so
+# it is tried first and the shell check is the fallback for a rig whose binary is
+# not there yet (a first boot, or an ISO being prepared).
 validate_wallet() {
-    local wallet="$1" algo="$2" len
+    local wallet="$1" algo="$2" len bin
     len=${#wallet}
+    # Whether the checksum was actually decoded, as opposed to the shape being
+    # counted. `doctor` prints the difference instead of claiming a verification
+    # that did not happen.
+    WALLET_DECODED=0
 
     [ "$len" -ge 90 ] || return 1
     case "$wallet" in
@@ -486,14 +496,30 @@ validate_wallet() {
     case "$algo" in
         auto|rx/0|randomx|xmr|monero|"")
             case "$len" in
-                95)
-                    case "$wallet" in 4*|8*) return 0 ;; *) return 1 ;; esac ;;
-                106)
-                    case "$wallet" in 4*|8*) return 0 ;; *) return 1 ;; esac ;;
+                95|106) ;;
                 *) return 1 ;;
-            esac ;;
+            esac
+            case "$wallet" in 4*|8*) ;; *) return 1 ;; esac
+
+            bin=$(zmrig_bin 2>/dev/null || true)
+            if [ -n "$bin" ] && [ -x "$bin" ]; then
+                "$bin" --check-wallet "$wallet" >/dev/null 2>&1 || return 1
+                WALLET_DECODED=1
+            fi
+            return 0 ;;
         *) return 0 ;;
     esac
+}
+
+# The same check with the reason, for anything that wants to say what is wrong
+# rather than only refusing. Prints one line; returns 1 when the address is bad.
+explain_wallet() {
+    local wallet="$1" bin
+    bin=$(zmrig_bin 2>/dev/null || true)
+    if [ -n "$bin" ] && [ -x "$bin" ]; then
+        "$bin" --check-wallet "$wallet" 2>/dev/null | sed -n '2p' | sed 's/^  //' && return 0
+    fi
+    validate_wallet "$wallet" auto
 }
 
 # ------------------------------------------------------------------ modes
@@ -1048,7 +1074,10 @@ cmd_setup() {
 
     [ -n "$wallet" ] || die "a wallet address is required (--wallet)"
     if ! validate_wallet "$wallet" "${ALGO:-auto}"; then
-        die "that is not a valid Monero address: 95 characters, base58, starting with 4 or 8"
+        # Say which kind of wrong it is. "Not valid" makes an operator re-type a
+        # 95-character string hoping for the best; "checksum does not match" tells
+        # them the string is the right shape and one character is off.
+        die "that is not a valid Monero address: $(explain_wallet "$wallet" 2>/dev/null || printf '95 characters, base58, starting with 4 or 8')"
     fi
 
     WALLET="$wallet"
@@ -1350,7 +1379,8 @@ cmd_quickstart() {
         die "no wallet: pass --wallet 4... (or run this again after 'zmrig-os setup')"
 
     [ -z "$wallet" ] || WALLET="$wallet"
-    validate_wallet "$WALLET" "${coin:-$ALGO}" || die "that is not a valid address for ${coin:-$ALGO}"
+    validate_wallet "$WALLET" "${coin:-$ALGO}" ||
+        die "that is not a valid address for ${coin:-$ALGO}: $(explain_wallet "$WALLET" 2>/dev/null || printf 'wrong shape or alphabet')"
 
     if [ -n "$pool" ]; then
         case "$pool" in
@@ -1998,7 +2028,19 @@ cmd_doctor() {
     fi
 
     if [ -n "$WALLET" ]; then
-        if validate_wallet "$WALLET" "$ALGO"; then check ok wallet "$(wallet_short)"; else check fail wallet "invalid for $ALGO"; fi
+        # The checksum is verified by the miner, so this line means "a pool can
+        # pay this", not "it is the right length".
+        if validate_wallet "$WALLET" "$ALGO"; then
+            if [ "${WALLET_DECODED:-0}" = 1 ]; then
+                check ok wallet "$(wallet_short), checksum verified"
+            else
+                # No miner to ask: the shape is all this rig can check yet, and
+                # saying more would be a claim the tool cannot back.
+                check ok wallet "$(wallet_short), shape only (no miner to verify the checksum)"
+            fi
+        else
+            check fail wallet "$(explain_wallet "$WALLET" 2>/dev/null || printf 'invalid for %s' "$ALGO")"
+        fi
     else
         check fail wallet "not configured (zmrig-os setup)"
     fi
@@ -3214,6 +3256,15 @@ fleet_body() {
     fi
     reason=""
     [ -z "$WALLET" ] && reason="no wallet configured"
+    # The miner refuses to start under rx/0 on an address that fails its
+    # checksum, so "stopped" without a reason would send whoever reads the
+    # dashboard looking at the network. The reason is the wallet: this is the
+    # same verdict `doctor` prints, reduced to the characters a status field
+    # can carry.
+    if [ -z "$reason" ] && [ -n "$WALLET" ] && ! validate_wallet "$WALLET" "$ALGO"; then
+        reason="wallet address is not valid: $(explain_wallet "$WALLET" 2>/dev/null || printf 'wrong shape')"
+        reason=$(printf '%s' "$reason" | tr -c 'A-Za-z0-9.:/@_+ -' ' ' | cut -c1-160)
+    fi
 
     rate=$(last_rate)
     case "$rate" in ''|*[!0-9.]*) rate=0 ;; esac

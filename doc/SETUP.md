@@ -419,10 +419,14 @@ supply by hand is the wallet and the pool endpoint, because neither can be
 guessed:
 
 1. **A wallet address for that coin.** Copy it from the coin's own wallet, not
-   from a screenshot. `oneclick.sh` checks the shape — the base58 alphabet and a
-   plausible length, plus a prefix warning where this repository knows one — and
-   the pool verifies the checksum. A wrong address mines for somebody else, and
-   nothing on a screen can prove an address is yours.
+   from a screenshot, and check it before you mine: `zmrig --check-wallet ADDR`
+   decodes the address, verifies its Keccak-256 checksum and prints the kind and
+   the network. A Monero rig also refuses to start on a checksum that does not
+   match, so a typo costs a second instead of a week. `oneclick.sh` checks the
+   shape (the base58 alphabet and a plausible length, plus a prefix warning where
+   this repository knows one) because it runs before the miner is installed; for
+   the other six coins the pool is the only authority. A wrong address mines for
+   somebody else, and nothing on a screen can prove an address is yours.
 2. **The pool endpoint.** The seven presets in the builder are Monero pools;
    the smaller coins' endpoints and fees change too often to ship. Take
    `host:port` from the coin's own community page or pinned message. `--coin wow`

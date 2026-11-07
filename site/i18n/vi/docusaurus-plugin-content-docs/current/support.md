@@ -57,6 +57,19 @@ print(len(raw), body[0], "OK" if digest == checksum else "BAD")
 
 Checksum sai nghĩa là gõ nhầm, chép thiếu, hoặc đó chưa từng là địa chỉ Monero.
 
+Cách ngắn nhất để kiểm là chính miner, sau khi đã cài:
+
+```console
+$ zmrig --check-wallet 46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ
+valid   46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ
+  check checksum verified (Keccak-256)
+  kind  standard
+  net   mainnet
+```
+
+Bộ dựng lệnh trên trang tài liệu kiểm mọi địa chỉ Monero theo cùng cách trước khi
+đưa bạn một câu lệnh, và `zmrig-os setup` cũng vậy.
+
 ## Một khoản donate không mua gì
 
 - **Không ảnh hưởng gì tới miner.** Không gì đọc trang này lúc build hay lúc

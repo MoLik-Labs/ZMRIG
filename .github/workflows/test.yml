@@ -181,6 +181,28 @@ jobs:
       - name: The download helper
         run: bash tests/releases/latest-iso.test.sh
 
+  # The pool: share accounting, the address decoder that decides who can be paid,
+  # and the stratum protocol. These were the only tests in the repository that CI
+  # did not run, which meant a change to the payout path - the address check,
+  # the ledger, the share verifier - could break one and merge green.
+  pool:
+    name: pool (ledger, protocol, addresses)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Node
+        run: node --version
+
+      - name: Unit, protocol and address tests
+        run: node --test pool/tests/*.test.js
+
+      - name: The fee is 3 % and every document agrees
+        run: bash scripts/verify-fee.sh
+
   # The one service Render runs: bots, rigs and the documentation on one port.
   # The two halves are tested in their own jobs; what is tested here is that they
   # do not shadow each other, because that is the failure this deployment shape

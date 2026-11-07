@@ -11,6 +11,7 @@ const { Store } = require('../src/store');
 const ids = require('../src/ids');
 const commands = require('../src/commands');
 const { build } = require('../src/index');
+const { integrated, substitute } = require('../../tests/common/monero');
 
 const WALLET = '46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ';
 const OTHER = '888tNkZrPN6JsEgekjMnABU4TBzc2Dt29EPAvkRxbANsAnjyPbb3iQ1YBRk1UXcdRsiKc9dhwMVgN5S9cQUiyoogDavup3H';
@@ -89,9 +90,32 @@ test('the wallet is validated before it is queued', () => {
   const missing = say(store, `/wallet ${record.id}`);
   assert.match(missing.text, /usage/);
 
-  // 106 characters is a subaddress and must be accepted too.
-  const subaddress = `8${'A'.repeat(105)}`;
-  assert.match(say(store, `/wallet ${record.id} ${subaddress}`).text, /set to/);
+  // 106 characters - an address carrying a payment id - must be accepted too.
+  assert.match(say(store, `/wallet ${record.id} ${integrated(WALLET)}`).text, /set to/);
+});
+
+test('a wallet with one wrong character is refused before it reaches a rig', () => {
+  const { store, record, key } = fleet();
+  say(store, `/enroll ${record.id} ${ids.enrolCode(key)}`);
+
+  // The failure this exists for: every character is base58, the length is
+  // right, and the address belongs to nobody. Queued, it would make the rig
+  // mine for a week into a hole, and nothing on the rig would notice.
+  const typo = substitute(WALLET, 40);
+  const refused = say(store, `/wallet ${record.id} ${typo}`);
+
+  assert.match(refused.text, /checksum does not match/);
+  assert.match(refused.text, /at least one character is wrong/);
+  assert.equal(store.get(record.id).queue.length, 0, 'a typo is never queued');
+
+  // A testnet address is a real address on a chain that cannot pay; saying so
+  // is more useful than "invalid", which sends the operator looking for a typo
+  // that is not there.
+  const testnet = require('../../tests/common/monero').onNetwork(WALLET, 53);
+  const other = say(store, `/wallet ${record.id} ${testnet}`);
+  assert.match(other.text, /testnet/);
+  assert.match(other.text, /cannot pay/);
+  assert.equal(store.get(record.id).queue.length, 0);
 });
 
 test('pool, coin, mode, threads and worker each queue exactly one change', () => {

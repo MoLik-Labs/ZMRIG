@@ -10,6 +10,7 @@ const crypto = require('node:crypto');
 const { Store } = require('../src/store');
 const ids = require('../src/ids');
 const { createServer } = require('../src/http');
+const { MINER, substitute } = require('../../tests/common/monero');
 
 const CONFIG = {
   interval: 60,
@@ -243,6 +244,41 @@ test('alerts fire on heat, on a stop and on a return', async () => {
     const stopped = fleet.events.find((event) => event.kind === 'stopped');
     assert.ok(stopped);
     assert.match(stopped.text, /no wallet/);
+  } finally {
+    await fleet.close();
+  }
+});
+
+test('a rig that reports a wallet it cannot be paid on is reported once', async () => {
+  const fleet = await rig();
+  try {
+    const record = (await (await hello(fleet, { status: { state: 'mining', hashrate: 1000, temp: 60 } })).json(), fleet.store.get(ids.deviceId(fleet.key)));
+    fleet.store.enrol(record.id, 'tg:1');
+
+    // Every character base58, the right length, the wrong address: the rig is
+    // hashing into nothing and has no way to know. The control plane is the
+    // only place this can be noticed before the pool statement arrives.
+    fleet.advance(3000);
+    await (await hello(fleet, { status: { state: 'mining', hashrate: 1000, temp: 60, wallet: substitute(MINER, 20) } })).json();
+
+    const wallet = fleet.events.filter((event) => event.kind === 'wallet');
+    assert.equal(wallet.length, 1, 'one alert, not one per check-in');
+    assert.match(wallet[0].text, /invalid wallet address/);
+    assert.match(wallet[0].text, /checksum does not match/);
+    assert.match(wallet[0].text, /can be paid|Nothing mined/);
+
+    // The same broken address again is the same alert: an alert is an event.
+    fleet.advance(3000);
+    await (await hello(fleet, { status: { state: 'mining', hashrate: 1000, temp: 60, wallet: substitute(MINER, 20) } })).json();
+    assert.equal(fleet.events.filter((event) => event.kind === 'wallet').length, 1);
+
+    // A good address, a worker name and nothing at all say nothing - otherwise
+    // every rig in the fleet would page its owner on the first check-in.
+    fleet.advance(60_000 * 40);
+    for (const value of [MINER, `${MINER}.shed-1`, 'rig-1', '']) {
+      await (await hello(fleet, { status: { state: 'mining', hashrate: 1000, temp: 60, wallet: value } })).json();
+    }
+    assert.equal(fleet.events.filter((event) => event.kind === 'wallet').length, 1);
   } finally {
     await fleet.close();
   }

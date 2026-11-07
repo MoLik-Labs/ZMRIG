@@ -448,6 +448,45 @@ before the miner does. A wrong pool (`host` with no port), a wallet that is not
 an address, or a mode that does not exist is refused before anything is written,
 and a second run without `--wallet` re-uses the wallet already configured.
 
+## The wallet is decoded, not counted
+
+A Monero address is 95 characters (106 with a payment id) of base58 carrying a
+four-byte Keccak-256 checksum. Counting characters accepts one wrong character in
+fifty, which is the mistake somebody makes copying an address out of a wallet —
+and a rig mining to a wrong address hashes perfectly for a week and is paid
+nothing, because the spend key for that address belongs to nobody.
+
+So `zmrig-os` does not count. `validate_wallet` asks the miner:
+
+```console
+# zmrig --check-wallet 4AdUndXH…684Rge
+valid   4AdUndXH…684Rge
+  check checksum verified (Keccak-256)
+  kind  standard
+  net   mainnet
+  spend eda9fe8d…d11711
+  view  3076a02b…3f09
+```
+
+and `setup` refuses anything else with the reason, rather than "not valid":
+
+```console
+# zmrig-os setup --wallet 4AdUndXH…684Rgf
+zmrig-os: that is not a valid Monero address: checksum does not match: at
+least one character is wrong
+```
+
+The check is also the reason a rig with a bad address stops instead of
+reconnecting for ever: the miner refuses to start under `rx/0` when the checksum
+fails, so `zmrig-os status` shows `stopped`, `reason` says the wallet is not
+valid, and the fleet dashboard raises one alert. `--allow-bad-wallet` starts
+anyway, for the rare rig whose login is address-shaped without being a Monero
+address.
+
+When there is no miner on the machine yet (a first boot before the binary is
+installed, or an ISO being prepared), the tool falls back to the shape check and
+`doctor` says so instead of claiming a verification that did not happen.
+
 ## Keeping the kernel off the mining CPUs
 
 A mining thread that the scheduler moves onto the CPU serving the pool's
@@ -513,7 +552,9 @@ reserve anything".
 ## The doctor, in a script
 
 `zmrig-os doctor` prints one line per check and exits non-zero when anything
-failed. `--json` is the same list for a fleet, a dashboard or a `cron` job:
+failed. The wallet line says what was actually checked: `checksum verified` when
+the miner decoded the address, `shape only (no miner to verify the checksum)`
+when there is no binary on the machine yet. `--json` is the same list for a fleet, a dashboard or a `cron` job:
 
 ```bash
 zmrig-os doctor --json | jq -r '.checks[] | select(.status != "ok") | "\(.check): \(.detail)"'
@@ -537,7 +578,7 @@ config file cannot execute anything as root.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `WALLET` | — | Monero address (validated: 95/106 chars, base58, 4/8 prefix) |
+| `WALLET` | — | Monero address, decoded and checksum-verified by `zmrig --check-wallet` before it is written; see [The wallet is decoded, not counted](#the-wallet-is-decoded-not-counted) |
 | `POOL` | `gulf.moneroocean.stream:10001` | pool `host:port` |
 | `WORKER` | hostname | rig name in the pool's dashboard |
 | `MODE` | `max` | `max`/`balanced`/`eco`/`light` |
@@ -787,6 +828,7 @@ The image is rebuilt by the same workflow whenever `os/`, `zmrig/` or
 | console shows GRUB, then nothing | the entry needs `console=ttyS0` for headless; on a TV check the cable, not the image |
 | boots but never mines | `zmrig-os status`, then `zmrig-os logs 100`, then `zmrig-os doctor` |
 | "no wallet configured; waiting" | the wizard had no console; set `zmrig.os.wallet=` or run `zmrig-os setup` |
+| `wallet address is not valid: checksum does not match` in `status` | the address in `os.conf` has one wrong character, so the miner will not start under `rx/0`; re-run `zmrig-os setup --wallet <the address from your wallet>` |
 | hashrate below the table | `zmrig-os doctor` — THP policy, page reservation, and governor are the three lines that matter |
 | update fails | `zmrig-os update --check`; a checksum failure is reported and the binary is left alone |
 

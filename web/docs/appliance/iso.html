@@ -8,8 +8,8 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/assets/js/runtime~main.8a7950f5.js" defer="defer"></script>
-<script src="/ZMRIG/assets/js/main.ec0ef4b9.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/runtime~main.14d805ab.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/main.dda710d9.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -35,10 +35,14 @@ image is compiled for one level and the updater never offers the other one.</p>
 <li class="">The console shows the ZMRIG banner and asks for your Monero address.</li>
 <li class="">Paste it, press Enter, and the hashrate line starts within a few seconds.</li>
 </ol>
-<p>The address is checked before it is used: 95 or 106 characters, base58 alphabet,
-starting with <code>4</code> or <code>8</code>. A wallet typed with a <code>0</code> or an <code>l</code> — the two
-characters base58 drops precisely because they are misread — is refused instead
-of mining to nowhere.</p>
+<p>The address is decoded before it is used, not counted: length, base58 alphabet,
+network byte and the four-byte Keccak-256 checksum the address carries. A wallet
+typed with a <code>0</code> or an <code>l</code> is refused, and so is one with a single character
+swapped for another valid base58 character — the typo a character count cannot
+see and a payout cannot survive. The refusal says which one it is:</p>
+<div class="language-console codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-console codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token plain">zmrig-os: that is not a valid Monero address: checksum does not match: at least</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">one character is wrong</span><br></div></code></pre></div></div>
+<p><code>zmrig --check-wallet 4...</code> gives the same verdict without touching the machine&#x27;s
+configuration: it prints the kind, the network, and the spend and view keys.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="headless-and-fleets">Headless and fleets<a href="#headless-and-fleets" class="hash-link" aria-label="Direct link to Headless and fleets" title="Direct link to Headless and fleets" translate="no">​</a></h2>
 <p>A rig with no keyboard is configured from the kernel command line. Press <code>e</code> on
 the GRUB entry, or edit <code>grub.cfg</code> on a fleet image:</p>

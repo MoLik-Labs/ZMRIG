@@ -36,9 +36,19 @@ mức lệnh, và trình cập nhật không bao giờ đưa nhầm bản kia.
 2. Console hiện banner ZMRIG và hỏi địa chỉ Monero.
 3. Dán ví, Enter, và dòng hashrate bắt đầu sau vài giây.
 
-Địa chỉ được kiểm trước khi dùng: 95 hoặc 106 ký tự, bảng chữ base58, bắt đầu
-bằng `4` hoặc `8`. Ví gõ nhầm chữ `0` hay `l` — đúng hai ký tự mà base58 loại bỏ
-vì dễ đọc sai — sẽ bị từ chối thay vì đào vào hư không.
+Địa chỉ được **giải mã** trước khi dùng, không phải chỉ đếm ký tự: độ dài, bảng
+chữ base58, byte mạng, và checksum Keccak-256 bốn byte mà địa chỉ mang theo. Ví
+gõ nhầm `0` hay `l` bị từ chối, và ví bị đổi **một** ký tự sang một ký tự base58
+hợp lệ khác cũng bị từ chối — đúng kiểu gõ nhầm mà phép đếm ký tự không thấy và
+một lần trả thưởng không thể cứu. Câu từ chối nói rõ sai ở đâu:
+
+```console
+zmrig-os: that is not a valid Monero address: checksum does not match: at least
+one character is wrong
+```
+
+`zmrig --check-wallet 4...` cho cùng kết luận mà không cần đụng vào cấu hình máy:
+in ra loại địa chỉ, mạng, cùng khóa spend và view.
 
 ## Không bàn phím, và cả fleet
 

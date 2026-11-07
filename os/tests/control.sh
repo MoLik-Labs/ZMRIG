@@ -18,6 +18,20 @@ FAIL=0
 # shape. It is the developer wallet, which is public.
 WALLET="46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ"
 
+# The wallet check is only as strong as the miner behind it: with no binary,
+# `zmrig-os` can count characters but cannot verify a checksum, and it says so.
+# When a binary exists (a developer checkout, or the engine job in CI) the tool
+# is pointed at it so these tests exercise the decoder rather than the fallback.
+# ZMRIG_TEST_DECODER=none exercises the fallback deliberately, which is the
+# state of a fresh ISO and of the CI job that has no Zig toolchain.
+DECODER="${ZMRIG_TEST_DECODER:-${ROOT}/zmrig/out/zmrig}"
+if [ "$DECODER" != none ] && [ -x "$DECODER" ]; then
+    export ZMRIG_OS_BIN="$DECODER"
+    HAS_DECODER=1
+else
+    HAS_DECODER=0
+fi
+
 ok()   { PASS=$((PASS + 1)); printf '  PASS  %s\n' "$*"; }
 bad()  { FAIL=$((FAIL + 1)); printf '  FAIL  %s\n' "$*"; }
 
@@ -75,6 +89,39 @@ contains 'WALLET="46SQLW7D' "$(cat "$ROOTDIR/etc/zmrig/os.conf" 2>/dev/null)" &&
 expect_fail "a short address is refused" "$TOOL" setup --wallet "46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ys"
 expect_fail "a base58-illegal character is refused" "$TOOL" setup --wallet "0SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ"
 expect_fail "a wrong leading character is refused" "$TOOL" setup --wallet "9SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ"
+# The typo the alphabet check cannot see: every character is base58, the length
+# is right, and the last one is wrong. Without a checksum this rig installs and
+# hashes for nobody.
+TYPO="${WALLET%?}f"
+[ "$TYPO" = "$WALLET" ] && TYPO="${WALLET%?}g"
+if [ "$HAS_DECODER" = 1 ]; then
+    expect_fail "an address with one wrong character is refused" "$TOOL" setup --wallet "$TYPO" --pool pool.example.com:10001
+    contains "checksum" "$CHECK_MSG" && ok "the refusal names the checksum" || bad "the refusal names the checksum: $CHECK_MSG"
+else
+    # Without a miner the tool must not pretend: it accepts the shape and the
+    # miner refuses the checksum on first boot, which doctor explains.
+    expect_ok "the shape is accepted when there is no miner to ask" "$TOOL" setup --wallet "$WALLET" --pool pool.example.com:10001
+fi
+
+# doctor is the other place an operator looks, and it has to say exactly what
+# was checked: a decoded checksum, or a counted shape. Its exit status is about
+# the whole machine (a VM has no sensor and no MSR, so it exits 1 here), so what
+# is asserted is the wallet line, not the status.
+"$TOOL" setup --wallet "$WALLET" --pool pool.example.com:10001 >/dev/null 2>&1
+CHECK_MSG=$("$TOOL" doctor 2>&1)
+if contains "checksum verified" "$CHECK_MSG"; then
+    ok "doctor says the checksum was verified"
+elif contains "shape only" "$CHECK_MSG"; then
+    ok "doctor says it could only check the shape"
+else
+    bad "doctor says nothing about what was checked: $(printf '%s' "$CHECK_MSG" | grep wallet)"
+fi
+if [ "$HAS_DECODER" = 1 ]; then
+    contains "checksum verified" "$CHECK_MSG" || bad "with a miner, doctor must say the checksum was verified"
+else
+    contains "checksum verified" "$CHECK_MSG" && bad "without a miner, doctor must not claim a checksum check"
+fi
+
 expect_fail "an unknown mode is refused" "$TOOL" setup --wallet "$WALLET" --mode turbo
 expect_fail "a donat* typo is not silently accepted" "$TOOL" setup --wallet "$WALLET" --donate-level 5
 

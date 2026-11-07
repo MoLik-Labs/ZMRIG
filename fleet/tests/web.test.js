@@ -11,6 +11,7 @@ const { Store } = require('../src/store');
 const ids = require('../src/ids');
 const { createServer } = require('../src/http');
 const { Releases } = require('../src/releases');
+const { substitute } = require('../../tests/common/monero');
 
 const PASSWORD = 'correct horse battery staple';
 const WALLET = '46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ';
@@ -551,6 +552,13 @@ test('a wallet change is validated, queued once, and an empty form changes nothi
 
     const bad = await post({ wallet: 'not-a-wallet' });
     assert.match(bad.headers.get('location'), /err=/);
+    assert.equal(app.store.get(record.id).queue.length, 0);
+
+    // The shape is perfect and the checksum is not: the dashboard has to say
+    // which of the two it is, because "invalid" sends an operator looking for a
+    // length problem that is not there.
+    const typo = await post({ wallet: substitute(WALLET, 12) });
+    assert.match(decodeURIComponent(typo.headers.get('location')), /checksum does not match/);
     assert.equal(app.store.get(record.id).queue.length, 0);
 
     const nothing = await post({ wallet: WALLET, pool: 'pool:3333', coin: 'xmr', mode: 'max', threads: '8' });

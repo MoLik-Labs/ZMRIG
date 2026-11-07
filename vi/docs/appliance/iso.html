@@ -8,8 +8,8 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.f4963a47.js" defer="defer"></script>
-<script src="/ZMRIG/vi/assets/js/main.c62143c8.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/runtime~main.f7784977.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/main.6ebd84ff.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -35,9 +35,14 @@ mức lệnh, và trình cập nhật không bao giờ đưa nhầm bản kia.</
 <li class="">Console hiện banner ZMRIG và hỏi địa chỉ Monero.</li>
 <li class="">Dán ví, Enter, và dòng hashrate bắt đầu sau vài giây.</li>
 </ol>
-<p>Địa chỉ được kiểm trước khi dùng: 95 hoặc 106 ký tự, bảng chữ base58, bắt đầu
-bằng <code>4</code> hoặc <code>8</code>. Ví gõ nhầm chữ <code>0</code> hay <code>l</code> — đúng hai ký tự mà base58 loại bỏ
-vì dễ đọc sai — sẽ bị từ chối thay vì đào vào hư không.</p>
+<p>Địa chỉ được <strong>giải mã</strong> trước khi dùng, không phải chỉ đếm ký tự: độ dài, bảng
+chữ base58, byte mạng, và checksum Keccak-256 bốn byte mà địa chỉ mang theo. Ví
+gõ nhầm <code>0</code> hay <code>l</code> bị từ chối, và ví bị đổi <strong>một</strong> ký tự sang một ký tự base58
+hợp lệ khác cũng bị từ chối — đúng kiểu gõ nhầm mà phép đếm ký tự không thấy và
+một lần trả thưởng không thể cứu. Câu từ chối nói rõ sai ở đâu:</p>
+<div class="language-console codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-console codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token plain">zmrig-os: that is not a valid Monero address: checksum does not match: at least</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">one character is wrong</span><br></div></code></pre></div></div>
+<p><code>zmrig --check-wallet 4...</code> cho cùng kết luận mà không cần đụng vào cấu hình máy:
+in ra loại địa chỉ, mạng, cùng khóa spend và view.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="không-bàn-phím-và-cả-fleet">Không bàn phím, và cả fleet<a href="#không-bàn-phím-và-cả-fleet" class="hash-link" aria-label="Đường dẫn trực tiếp đến Không bàn phím, và cả fleet" title="Đường dẫn trực tiếp đến Không bàn phím, và cả fleet" translate="no">​</a></h2>
 <p>Dàn máy không có bàn phím thì cấu hình bằng dòng lệnh nhân. Nhấn <code>e</code> ở mục GRUB,
 hoặc sửa <code>grub.cfg</code> trên ảnh của fleet:</p>

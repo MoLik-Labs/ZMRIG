@@ -322,6 +322,11 @@ Two details worth knowing:
 
 * An empty wallet or pool field means **leave it alone**, never "clear it". The
   only way to change a wallet is to type a different one.
+* A wallet is **decoded before it is queued**, in the chat, in the browser and in
+  the roster: the checksum is verified and a typo is refused with the reason
+  (`that is not a Monero address - checksum does not match: at least one
+  character is wrong`). Sending a rig an address nobody can spend from would cost
+  a week of hashing that no screen would explain.
 * Enrolling from the browser ties the rig to the primary chat admin, not to
   "the web", so `/devices` in Telegram still lists everything you own.
 
@@ -422,6 +427,9 @@ Sent to every admin, once, with a cooldown:
 * temperature at or above `FLEET_ALERT_TEMP`
 * the miner stopped when it was mining
 * hashrate below half of the previous check-in
+* a rig reporting a wallet address that fails its checksum, or one on another
+  network: `💸 rig-1 has an invalid wallet address - checksum does not match: at
+  least one character is wrong. Nothing mined to it can be paid.`
 * every command result, including the refusals
 
 ## What is on the wire
@@ -451,8 +459,8 @@ Commands: `setup` (`wallet`, `pool`, `coin`, `mode`, `maxtemp`, `threads`,
 
 The rig validates everything again before applying it — the bot's validation is a
 convenience, not the security boundary. A wallet that fails `zmrig-os`'s own
-validator is refused on the machine, nothing is written, and the refusal is
-reported.
+validator (which asks the miner for a checksum, not a character count) is refused
+on the machine, nothing is written, and the refusal is reported.
 
 ## Security
 

@@ -73,11 +73,11 @@ gives you WebSocket over TLS on the Zig engine.
 
 ## What is checked, and what is not
 
-The builder validates a Monero address exactly: 95 characters, 106 for an
-integrated address, base58 alphabet only. For the other six coins it checks the
-alphabet and a plausible length, and warns when the prefix is not the one it
-knows — it does not claim to validate a checksum it does not compute. The pool
-does that, and it is the only party that can.
+The builder decodes a Monero address: 95 characters, 106 for an integrated
+address, the base58 alphabet, the network byte, and the Keccak-256 checksum. A
+single wrong character is refused, with the reason. For the other six coins it
+checks the alphabet and a plausible length, and warns when the prefix is not the
+one it knows — it does not claim to validate a checksum it does not compute.
 
 A wrong address mines for somebody else, and no page in a browser can prove an
 address is yours. Copy it from your own wallet, paste it, read the first and last

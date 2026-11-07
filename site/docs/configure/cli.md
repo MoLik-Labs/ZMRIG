@@ -34,6 +34,13 @@ show it in brackets.
     --ban-cooldown=N       seconds to skip a pool after a ban, a rejected
                            wallet or a full-pool message [900]
                            a rejected wallet is floored at 30 minutes
+    --check-wallet=ADDR    decode a Monero address - length, base58 alphabet,
+                           network byte, Keccak-256 checksum - print the kind,
+                           the network and the keys, and exit 1 if a mainnet
+                           pool could not pay it
+    --allow-bad-wallet     start anyway when the address fails its checksum.
+                           Under rx/0 a bad checksum is otherwise a refusal:
+                           the rig would mine and never be paid
     --idle-timeout=N       drop a silent connection after N s [300, 0 = off]
     --keepalive-interval=N [60, 0 = off]
 ```
@@ -55,6 +62,34 @@ show it in brackets.
     --thermal-file=PATH    read the temperature from PATH instead of sysfs
     --no-thermal           turn the governor off
 ```
+
+## The wallet address
+
+`-u/--user` takes the address the pool pays. For Monero it is decoded before the
+first share: 95 characters (106 with a payment id), base58, a network byte, and a
+four-byte Keccak-256 checksum. One wrong character is the failure that a
+character count cannot see — the rig hashes perfectly and the payout goes to an
+address whose spend key nobody holds — so under `rx/0` it is a refusal:
+
+```console
+$ zmrig -o gulf.moneroocean.stream:10001 -u 4AdUndXH...684Rgf
+error 4AdUndXH...684Rgf is not a valid Monero address: checksum does not match: at least one character is wrong
+error this rig would mine and never be paid; check it with `zmrig --check-wallet 4AdUndXH...684Rgf`
+error if that login is not a Monero address, pass --allow-bad-wallet
+```
+
+`--check-wallet ADDR` is the same check without a pool, and `--check` prints the
+verdict next to the rest of the configuration:
+
+```console
+$ zmrig -o gulf.moneroocean.stream:10001 -u 4... --check
+  wallet  standard mainnet checksum verified
+```
+
+Every other algorithm keeps the check advisory: this repository only claims to
+know Monero's format, and a login that is address-shaped but is another
+CryptoNote coin's address must not stop a rig from starting. `--allow-bad-wallet`
+turns the refusal into the old warning when that is what you have.
 
 ## Logging and lifecycle
 

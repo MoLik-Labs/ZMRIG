@@ -36,10 +36,19 @@ image is compiled for one level and the updater never offers the other one.
 2. The console shows the ZMRIG banner and asks for your Monero address.
 3. Paste it, press Enter, and the hashrate line starts within a few seconds.
 
-The address is checked before it is used: 95 or 106 characters, base58 alphabet,
-starting with `4` or `8`. A wallet typed with a `0` or an `l` — the two
-characters base58 drops precisely because they are misread — is refused instead
-of mining to nowhere.
+The address is decoded before it is used, not counted: length, base58 alphabet,
+network byte and the four-byte Keccak-256 checksum the address carries. A wallet
+typed with a `0` or an `l` is refused, and so is one with a single character
+swapped for another valid base58 character — the typo a character count cannot
+see and a payout cannot survive. The refusal says which one it is:
+
+```console
+zmrig-os: that is not a valid Monero address: checksum does not match: at least
+one character is wrong
+```
+
+`zmrig --check-wallet 4...` gives the same verdict without touching the machine's
+configuration: it prints the kind, the network, and the spend and view keys.
 
 ## Headless and fleets
 

@@ -20,6 +20,7 @@ const topology = @import("topology.zig");
 const health = @import("health.zig");
 const thermal = @import("thermal.zig");
 const verify = @import("verify.zig");
+const wallet = @import("wallet.zig");
 const util = @import("util.zig");
 
 pub const version = "6.48.0";
@@ -124,6 +125,9 @@ pub fn main() !void {
     // that reads that banner as a share reply drops the share that was in
     // flight. Everything from this point on belongs on stderr.
     if (opts.verify_share) log.global.stderr_sink = true;
+    // `--check-wallet` prints one verdict on stdout and exits; its log has no
+    // business in the middle of that.
+    if (opts.check_wallet != null) log.global.stderr_sink = true;
     stratum.user_agent = opts.user_agent;
     for (opts.pools.items) |pool| {
         if (!pool.tls_insecure) continue;
@@ -135,11 +139,43 @@ pub fn main() !void {
         break;
     }
 
+    // A wallet with one wrong character mines perfectly and is never paid. The
+    // pool refuses it too, but a rig that keeps reconnecting against a refusal
+    // that reads like a network problem can spend a week doing it, and nothing
+    // on the machine ever says why. So the address is decoded here, before the
+    // first share: a Monero rig whose address fails its checksum does not start.
+    //
+    // `--allow-bad-wallet` exists because a login can be address shaped without
+    // being a Monero address (another CryptoNote coin, a pool account name that
+    // happens to be 95 characters). For every algorithm except rx/0 the check is
+    // advisory, because this repository only claims to know Monero's format.
+    const wallet_fatal = firstAlgo(&opts) == .rx_0 and !opts.allow_bad_wallet;
+    for (opts.pools.items) |pool| {
+        const login = pool.user;
+        const cut = std.mem.indexOfAny(u8, login, "./") orelse login.len;
+        const address = login[0..cut];
+        if (address.len != 95 and address.len != 106) continue;
+
+        const verdict = wallet.check(address);
+        if (!verdict.ok) {
+            if (wallet_fatal) {
+                log.global.err("{s} is not a valid Monero address: {s}", .{ address, verdict.reason });
+                log.global.err("this rig would mine and never be paid; check it with `zmrig --check-wallet {s}`", .{address});
+                log.global.err("if that login is not a Monero address, pass --allow-bad-wallet", .{});
+                std.process.exit(1);
+            }
+            log.global.warn("{s} is not a valid Monero address: {s}", .{ address, verdict.reason });
+            log.global.warn("check it with: zmrig --check-wallet {s}", .{address});
+        } else if (verdict.net != .mainnet) {
+            log.global.warn("{s} is a {s} address: a mainnet pool cannot pay it", .{ address, wallet.netLabel(verdict.net) });
+        }
+    }
+
     // The fee is a policy decision, so it is stated before anything else runs:
     // what it costs, which coin it applies to, where it goes, how to stop it.
     if (opts.donate_percent == 0) {
         log.global.info("developer fee: off (--donate-level=0); nothing is mined for anyone but your wallet", .{});
-    } else if (opts.version or opts.benchmark or opts.report or opts.self_test or opts.check or opts.verify_share) {
+    } else if (opts.version or opts.benchmark or opts.report or opts.self_test or opts.check or opts.verify_share or opts.check_wallet != null) {
         // These paths never mine to a pool, and main prints the fee line in
         // --check. Saying it twice in a 3-second benchmark is noise.
     } else {
@@ -168,6 +204,35 @@ pub fn main() !void {
         }) catch "?";
 
         std.io.getStdOut().writer().print("zmrig {s} - ZMRIG by @nggkhaiz ({s}, {s})\n", .{ version, api.xmo_engine_name(), cpu }) catch {};
+
+        return;
+    }
+
+    if (opts.check_wallet) |address| {
+        // Prints and exits: this is what `zmrig-os doctor`, the fleet and a
+        // person pasting an address into a shell all need.
+        const verdict = wallet.check(address);
+        const out = std.io.getStdOut().writer();
+
+        if (verdict.ok) {
+            out.print("valid   {s}\n", .{address}) catch {};
+            // The property that was actually checked, said out loud: "valid" is
+            // the shape, "checksum verified" is why a pool can pay it.
+            out.print("  check checksum verified (Keccak-256)\n", .{}) catch {};
+            out.print("  kind  {s}\n", .{wallet.kindLabel(verdict.kind)}) catch {};
+            out.print("  net   {s}\n", .{wallet.netLabel(verdict.net)}) catch {};
+            out.print("  spend {s}\n  view  {s}\n", .{ verdict.spend, verdict.view }) catch {};
+            if (verdict.kind == .integrated or verdict.kind == .integrated_subaddress) {
+                out.print("  payment id {s}\n", .{verdict.payment_id}) catch {};
+            }
+            if (verdict.net != .mainnet) {
+                out.print("warning: a mainnet pool cannot pay this address\n", .{}) catch {};
+                std.process.exit(1);
+            }
+        } else {
+            out.print("invalid {s}\n  {s}\n", .{ address, verdict.reason }) catch {};
+            std.process.exit(1);
+        }
 
         return;
     }
@@ -1339,6 +1404,25 @@ fn printConfigSummary(opts: *const options.Options) !void {
         }
         if (pool.proxy_spec.kind != .none) {
             try out.print("  proxy   {s} {s}:{d}\n", .{ @tagName(pool.proxy_spec.kind), pool.proxy_spec.host, pool.proxy_spec.port });
+        }
+
+        // The address is the one field a `--check` can prove wrong without a
+        // network, so it is stated as a fact rather than left to the first
+        // rejected login.
+        const cut = std.mem.indexOfAny(u8, pool.user, "./") orelse pool.user.len;
+        const address = pool.user[0..cut];
+        if (address.len == 95 or address.len == 106) {
+            const verdict = wallet.check(address);
+            if (verdict.ok) {
+                try out.print("  wallet  {s} {s} {s}\n", .{
+                    wallet.kindLabel(verdict.kind),
+                    wallet.netLabel(verdict.net),
+                    if (verdict.net == .mainnet) "checksum verified" else "not payable on mainnet",
+                });
+            } else {
+                try out.print("  wallet  INVALID: {s}\n", .{verdict.reason});
+                try out.print("          this rig would mine and never be paid; zmrig --check-wallet {s}\n", .{address});
+            }
         }
     }
 
