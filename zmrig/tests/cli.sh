@@ -374,6 +374,20 @@ else
     record FAIL "--check states the wallet was verified" "no wallet line"
 fi
 
+# The same address means different things per algorithm, and the summary has to
+# say the true one: under rx/0 the rig will not start, under another coin's
+# algorithm it may be that coin's address and nothing is wrong at all.
+expect_exit 1 "--check refuses a typo under rx/0" -- \
+    "$BIN" -o pool.example.com:3333 -u "$TYPO" --check
+expect_exit 0 "--check accepts a typos-shaped login for another coin" -- \
+    "$BIN" -o pool.example.com:3333 -u "$TYPO" -a rx/wow --check
+wow_check=$("$BIN" -o pool.example.com:3333 -u "$TYPO" -a rx/wow --check 2>/dev/null)
+if printf '%s' "$wow_check" | grep -q 'if this is another coin'; then
+    record PASS "another coin gets the other sentence" "ok"
+else
+    record FAIL "another coin gets the other sentence" "$(printf '%s' "$wow_check" | grep -i wallet | head -2 | tr '\n' ' ')"
+fi
+
 if "$BIN" --help | grep -qF -- "--allow-bad-wallet"; then
     record PASS "--allow-bad-wallet is documented" ""
 else

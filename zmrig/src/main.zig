@@ -1421,7 +1421,16 @@ fn printConfigSummary(opts: *const options.Options) !void {
                 });
             } else {
                 try out.print("  wallet  INVALID: {s}\n", .{verdict.reason});
-                try out.print("          this rig would mine and never be paid; zmrig --check-wallet {s}\n", .{address});
+                // What it means depends on the algorithm, and saying the wrong
+                // one is worse than saying nothing: under rx/0 this rig mines
+                // for nobody and will not start; under another coin's algorithm
+                // the login may simply be that coin's address, which this
+                // repository does not claim to know.
+                if (firstAlgo(opts) == .rx_0) {
+                    try out.print("          this rig would mine and never be paid, so it will not start; zmrig --check-wallet {s}\n", .{address});
+                } else {
+                    try out.print("          not a Monero address: if this is another coin's address, mining is unaffected (--allow-bad-wallet silences the check)\n", .{});
+                }
             }
         }
     }
