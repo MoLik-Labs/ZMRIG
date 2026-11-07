@@ -51,6 +51,23 @@ class Verifier {
     child.stdout.on('data', (chunk) => {
       slot.buffer += chunk;
 
+      // One line in, one line out is the contract. A binary that writes without
+      // ever emitting a newline - a wrong build, a `cat` where the miner should
+      // be, a corrupted file - would otherwise grow this string for as long as
+      // the process lives. Resetting the slot is the honest response: the share
+      // in flight fails, the process is left to its timeout, and the restart
+      // path already exists for exactly this.
+      if (slot.buffer.length > 64 * 1024) {
+        slot.buffer = '';
+        const stuck = slot.pending;
+        slot.pending = null;
+        if (stuck) {
+          clearTimeout(stuck.timer);
+          stuck.reject(new Error('verifier wrote 64 KB without a newline'));
+        }
+        return;
+      }
+
       let newline;
       while ((newline = slot.buffer.indexOf('\n')) >= 0) {
         const line = slot.buffer.slice(0, newline).trim();

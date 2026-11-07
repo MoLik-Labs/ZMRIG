@@ -180,13 +180,27 @@ has **not been measured in this environment**: on this sandbox
 `echo 3 > /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages` returns
 success and the pool stays at 0, so the code path that uses a gigantic page has
 never executed here. What has been verified is the fallback and the step below
-it, 2026-11-05, same host, `--bench=2000`, one run each:
+it. 2026-11-07, same host, `--bench=3000`, alternating between the two
+configurations so that the box's own drift cannot be mistaken for a gain:
 
 | Pages | Startup line | H/s |
 |---|---|---:|
-| none, `--no-huge-pages` | `huge pages off` | 678.1 |
-| 1200 × 2 MiB reserved | `huge pages 2336 MB (explicit, 2 MiB pages)` | **913.2** (+34.7 %) |
+| none, `--no-huge-pages` | `huge pages off` | 900.1 / 897.5 |
+| 1200 × 2 MiB reserved | `huge pages 2336 MB (explicit, 2 MiB pages)` | **1090 / 1094** |
+| | | **+21.5 %** |
 | 1 GiB pool | `… (explicit, 1 GiB pages)` | not measurable here |
+
+An earlier pair on the same machine, measured back to back without alternating,
+read 678.1 against 913.2 H/s and would have claimed +34.7 %. That was the box,
+not the pages: this sandbox's throughput moves by up to 20 % between hours, so a
+non-interleaved comparison is worth nothing. The ratio above reproduces to 0.4 %
+because the two configurations take turns.
+
+The MSR preset is the same story with a different cause. As root on this host
+`--msr` reports `intel preset rejected by the kernel (Input/output error)`, which
+is what a virtual machine without MSR passthrough does, so the 5–15 % that
+`doc/CPU.md` quotes for bare metal is **not measurable here** and no number is
+claimed for it.
 
 The gigantic attempt runs first on every one of those rows and falls through to
 the 2 MiB pool, which is what the `explicit, 2 MiB pages` label proves: the label

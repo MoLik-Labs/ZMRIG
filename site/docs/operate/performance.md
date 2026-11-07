@@ -58,9 +58,17 @@ On most virtual machines the pool cannot be made at all — writing
 `nr_hugepages` under `hugepages-1048576kB` reports success and leaves it at 0 —
 and that is not a fault: the fallback to 2 MiB pages is automatic and the gain
 that matters (4 KiB to 2 MiB) is already there — measured on the test host on
-2026-11-05, `--bench=2000`, **678.1 H/s on 4 KiB pages against 913.2 H/s with a
-reserved 2 MiB pool (+34.7 %)**. The extra 1-3 % has not been measured in that
-environment: the write to `nr_hugepages` reports success and the pool stays at 0.
+2026-11-07, alternating between the two configurations so that the box's own
+drift cannot be mistaken for a gain: **897–900 H/s on 4 KiB pages against
+1090–1094 H/s with a reserved 2 MiB pool, +21.5 %**. An earlier pair measured
+without alternating read 678 against 913 and would have claimed +34.7 %; that
+was the machine's throughput moving 20 % between hours, not the pages.
+
+The extra 1-3 % has not been measured in that environment: the write to
+`nr_hugepages` reports success and the pool stays at 0. The MSR preset is the
+same — as root the kernel rejects it with `Input/output error`, which is what a
+virtual machine without MSR passthrough does, so the bare-metal 5–15 % is not
+claimed from this host.
 
 :::warning Measuring without huge pages
 Once 1234 pages are reserved, only about 1.2 GB of ordinary RAM is left. Running

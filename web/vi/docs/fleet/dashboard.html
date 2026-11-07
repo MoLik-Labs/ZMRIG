@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.a92b666a.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/runtime~main.fe24f59d.js" defer="defer"></script>
 <script src="/ZMRIG/vi/assets/js/main.c62143c8.js" defer="defer"></script>
 </head>
 <body>
@@ -78,7 +78,14 @@ là một bề mặt quá nhiều để giữ an toàn. Cần trang đó thì ch
 <ul>
 <li class="">mật khẩu được so bằng <code>timingSafeEqual</code> với <code>FLEET_WEB_PASSWORD</code>;</li>
 <li class="">mười lần đăng nhập sai từ một địa chỉ trong mười lăm phút ⇒ <code>429</code> cho địa chỉ
-đó;</li>
+đó. Địa chỉ là mục <strong>cuối</strong> của <code>X-Forwarded-For</code> — mục mà proxy thêm vào — và
+chỉ khi <code>FLEET_TRUST_PROXY</code> nói rằng có proxy. Trước đây nó lấy mục đầu, thứ do
+chính client viết: mỗi request một số khác nhau là mỗi lần một client mới, và
+chặn hoàn toàn bị đi vòng;</li>
+<li class="">một ngân sách thứ hai đếm số lần sai từ <strong>mọi</strong> địa chỉ, vì cái đầu chỉ tốt
+bằng địa chỉ: quá mười lần trong cửa sổ thì mỗi lần thử phải chờ tới hai giây
+trước khi so mật khẩu. Xoay địa chỉ chỉ mua được vài lần mỗi giây thay vì hàng
+nghìn; mật khẩu đúng vẫn vào được;</li>
 <li class="">mọi form mang một CSRF token gắn với phiên; form không có token là <code>403</code> và
 không đổi gì;</li>
 <li class="">cookie phiên là <code>HttpOnly</code>, <code>SameSite=Lax</code>, bảy ngày, và <code>Secure</code> khi request

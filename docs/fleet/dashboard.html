@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/assets/js/runtime~main.3779f1a0.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/runtime~main.4e181ea1.js" defer="defer"></script>
 <script src="/ZMRIG/assets/js/main.ec0ef4b9.js" defer="defer"></script>
 </head>
 <body>
@@ -78,7 +78,15 @@ when you want the page.</li>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="security">Security<a href="#security" class="hash-link" aria-label="Direct link to Security" title="Direct link to Security" translate="no">​</a></h2>
 <ul>
 <li class="">the password is compared with <code>timingSafeEqual</code> against <code>FLEET_WEB_PASSWORD</code>;</li>
-<li class="">ten failed logins from one address in fifteen minutes ⇒ <code>429</code> for that address;</li>
+<li class="">ten failed logins from one address in fifteen minutes ⇒ <code>429</code> for that address.
+The address is the <strong>last</strong> entry of <code>X-Forwarded-For</code> — the one the proxy
+appended — and only when <code>FLEET_TRUST_PROXY</code> says there is a proxy. It used to
+be the first entry, which the client writes: a different number per request
+made every attempt a new client and stepped around the block entirely;</li>
+<li class="">a second budget counts failures from every address, because the first one is
+only as good as the address: past ten in the window, each attempt waits up to
+two seconds before the password is compared. Rotating addresses buys a few
+attempts a second instead of thousands; the right password still gets in;</li>
 <li class="">every form carries a CSRF token bound to the session; a form without one is
 <code>403</code> and changes nothing;</li>
 <li class="">the session cookie is <code>HttpOnly</code>, <code>SameSite=Lax</code>, seven days, and <code>Secure</code> when

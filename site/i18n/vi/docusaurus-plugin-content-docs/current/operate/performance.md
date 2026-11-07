@@ -56,9 +56,16 @@ Log lúc boot và `zmrig-os tune` đều nói pool nào đang có hiệu lực.
 Trên phần lớn máy ảo, pool không tạo được — ghi `nr_hugepages` dưới
 `hugepages-1048576kB` báo thành công mà vẫn để 0 — và đó không phải lỗi: fallback
 về trang 2 MiB là tự động, và phần lợi ích lớn (4 KiB lên 2 MiB) đã có sẵn — đo
-trên máy kiểm thử ngày 2026-11-05, `--bench=2000`: **678,1 H/s trên trang 4 KiB so
-với 913,2 H/s khi đã đặt pool 2 MiB (+34,7 %)**. Phần thêm 1-3 % thì **chưa đo được
-trong môi trường đó**, vì ghi vào `nr_hugepages` báo thành công mà pool vẫn 0.
+trên máy kiểm thử ngày 2026-11-07, **đổi qua lại giữa hai cấu hình** để độ trôi
+của chính cái máy không bị nhầm thành lợi ích: **897–900 H/s trên trang 4 KiB so
+với 1090–1094 H/s khi đã đặt pool 2 MiB, +21,5 %**. Một cặp đo trước đó không đổi
+qua lại đọc ra 678 so với 913 và sẽ tuyên bố +34,7 % — đó là thông lượng của máy
+dao động 20 % giữa các giờ, không phải trang nhớ.
+
+Phần thêm 1-3 % thì **chưa đo được trong môi trường đó**, vì ghi vào
+`nr_hugepages` báo thành công mà pool vẫn 0. Preset MSR cũng vậy — chạy bằng root
+thì kernel từ chối bằng `Input/output error`, đúng như một máy ảo không có MSR
+passthrough, nên mức 5–15 % trên bare metal không được tuyên bố từ máy này.
 
 :::warning Đo khi không có huge pages
 Khi đã đặt 1234 trang, RAM thường chỉ còn khoảng 1.2 GB. Chạy `--no-huge-pages`
