@@ -43,6 +43,9 @@ async function rig(overrides = {}) {
     advance: (ms) => {
       clock += ms;
     },
+    // The sweep runs on a timer in the process; here it is called by hand, and
+    // it has to see the same clock the handler does.
+    now: () => clock,
     key: crypto.randomBytes(32).toString('hex'),
     close: () => new Promise((resolve) => server.close(resolve)),
   };
@@ -188,6 +191,38 @@ test('unknown paths, health and the landing page', async () => {
     // The page is public: it must never show an address or a key.
     assert.equal(page.includes(fleet.key), false);
     assert.equal(page.includes('4abc'), false);
+  } finally {
+    await fleet.close();
+  }
+});
+
+test('a rig that comes back after an outage says so', async () => {
+  const alerts = require('../src/alerts');
+  const fleet = await rig();
+  try {
+    await hello(fleet, { status: { state: 'mining', hashrate: 1000, temp: 60 } });
+    const record = fleet.store.get(ids.deviceId(fleet.key));
+    fleet.store.enrol(record.id, 'tg:1');
+
+    // Silence past the threshold: the sweep is the only thing that notices, and
+    // the rig's own last status still says it is mining - which is precisely
+    // the case the old condition treated as "nothing to say".
+    fleet.advance((CONFIG.offline_after + 60) * 1000);
+    const swept = alerts.sweep(fleet.store, CONFIG, fleet.now());
+    assert.equal(swept.length, 1);
+    assert.equal(swept[0].kind, 'offline');
+
+    fleet.advance(30_000);
+    await hello(fleet, { status: { state: 'mining', hashrate: 1000, temp: 60 } });
+
+    const back = fleet.events.find((event) => event.kind === 'online');
+    assert.ok(back, 'the check-in that ended the outage reports it');
+    assert.match(back.text, /is back after/);
+    assert.equal(record.offline_notified, false, 'and the flag is cleared, so it is said once');
+
+    fleet.advance(30_000);
+    await hello(fleet, { status: { state: 'mining', hashrate: 1000, temp: 60 } });
+    assert.equal(fleet.events.filter((event) => event.kind === 'online').length, 1);
   } finally {
     await fleet.close();
   }

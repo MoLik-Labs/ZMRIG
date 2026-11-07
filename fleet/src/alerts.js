@@ -33,7 +33,13 @@ function onHello(record, config, now, before) {
   const status = record.status || {};
   const previous = before || {};
 
-  if (previous.state === 'offline' || (record.offline_notified && previous.state !== 'mining')) {
+  // A rig cannot report that it is offline: it is silent, and `sweep` is what
+  // notices. So `offline_notified` is the only evidence that the humans were
+  // told, and a check-in carrying it is the recovery. This used to also require
+  // that the last status was not `mining` - which is what a rig that dropped
+  // out is almost always reporting - so the one case people care about, a rig
+  // that came back and is hashing again, was the one case that stayed quiet.
+  if (record.offline_notified) {
     out.push({ kind: 'online', level: 'info', text: `🟢 **${name(record)}** is back after ${format.duration((now - (record.last_gap || now)) / 1000)}` });
     record.offline_notified = false;
   }
