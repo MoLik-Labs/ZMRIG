@@ -115,6 +115,10 @@ zmrig -o pool.example.com:3333 -u 4YourMoneroAddress.rig1 -t 4
   `pool/src/operator.js`.
 - `--check` refuses configurations that cannot pay correctly: a fee outside
   0–10 %, an unknown mode, a PPLNS window that is too short.
+- `/stratum` faces the internet, so its framing is bounded: a frame over 1 MiB
+  closes the connection, a **message** over 256 KiB closes it too (a per-frame
+  limit alone leaves a client free to send continuation frames for ever), and a
+  second data frame inside an open message is a protocol error.
 
 Payouts via `monero-wallet-rpc`, the API and the security notes are in
 `pool/README.md`, and the deployment steps you must run yourself are in

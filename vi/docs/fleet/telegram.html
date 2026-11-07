@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.26529265.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/runtime~main.60ee2bd1.js" defer="defer"></script>
 <script src="/ZMRIG/vi/assets/js/main.c62143c8.js" defer="defer"></script>
 </head>
 <body>
@@ -89,6 +89,12 @@ thuộc về nó, và mã nhập chứng minh máy đang ở ngay trước mặt
 nối <em>vào</em> rig: rig gọi ra, mỗi phút một lần, mọi thứ khác chờ lần gọi đó.</p>
 <p>Trên USB live, khóa nằm trong RAM — cài lên ổ, hoặc tạo phân vùng <code>ZMRIGDATA</code>
 bằng <code>zmrig-os persist</code>, nếu không rig sẽ báo ID mới sau khi khởi động lại.</p>
+<p>Hai lần check-in không bao giờ chồng nhau: lần đang chạy giữ một lock có ghi PID
+của nó. Nếu agent bị giết thẳng — OOM killer, mất điện — lock đó sống lâu hơn
+tiến trình, và một lock không ai gỡ sẽ là một rig lặng lẽ thôi check-in trong khi
+vẫn đào. Vì vậy lock có chủ đã chết sẽ được tiếp quản, lock không ghi chủ bị phá
+sau năm phút, còn lock có chủ đang sống thì được tôn trọng. Một rig tự nhiên rơi
+khỏi fleet mà không có lý do rõ ràng thì nên chạy <code>zmrig-os status</code> trước tiên.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="khi-không-dùng-fleet">Khi không dùng fleet<a href="#khi-không-dùng-fleet" class="hash-link" aria-label="Đường dẫn trực tiếp đến Khi không dùng fleet" title="Đường dẫn trực tiếp đến Khi không dùng fleet" translate="no">​</a></h2>
 <p>Để trống <code>FLEET_URL</code> thì không có gì thay đổi: rig không liên lạc với ai, và
 <code>zmrig-os setup</code> vẫn là cách cấu hình. Control plane là phần thêm vào, không phải

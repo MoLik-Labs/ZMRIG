@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.26529265.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/runtime~main.60ee2bd1.js" defer="defer"></script>
 <script src="/ZMRIG/vi/assets/js/main.c62143c8.js" defer="defer"></script>
 </head>
 <body>
@@ -77,6 +77,10 @@ hoặc vào chính workspace này nếu bot không chạy ở đây.</p>
 <li class="">Đổi ví phí bằng <code>OPERATOR_ADDRESS</code>; mặc định nằm trong <code>pool/src/operator.js</code>.</li>
 <li class=""><code>--check</code> từ chối cấu hình không thể trả đúng: phí ngoài 0–10 %, mode lạ, cửa
 sổ PPLNS quá ngắn.</li>
+<li class=""><code>/stratum</code> là mặt tiếp xúc internet, nên khung truyền có giới hạn: khung quá
+1 MiB thì đóng kết nối, <strong>tin nhắn</strong> quá 256 KiB cũng vậy (chỉ giới hạn từng
+khung thì client vẫn gửi khung nối tiếp mãi được), và một khung dữ liệu thứ hai
+xuất hiện khi tin nhắn còn mở là lỗi giao thức.</li>
 </ul>
 <p>Payout qua <code>monero-wallet-rpc</code>, API và các lưu ý bảo mật nằm trong
 <code>pool/README.md</code>; những bước bạn phải tự chạy khi deploy ở

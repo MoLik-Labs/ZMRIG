@@ -111,6 +111,10 @@ zmrig -o pool.example.com:3333 -u 4YourMoneroAddress.rig1 -t 4
 - Đổi ví phí bằng `OPERATOR_ADDRESS`; mặc định nằm trong `pool/src/operator.js`.
 - `--check` từ chối cấu hình không thể trả đúng: phí ngoài 0–10 %, mode lạ, cửa
   sổ PPLNS quá ngắn.
+- `/stratum` là mặt tiếp xúc internet, nên khung truyền có giới hạn: khung quá
+  1 MiB thì đóng kết nối, **tin nhắn** quá 256 KiB cũng vậy (chỉ giới hạn từng
+  khung thì client vẫn gửi khung nối tiếp mãi được), và một khung dữ liệu thứ hai
+  xuất hiện khi tin nhắn còn mở là lỗi giao thức.
 
 Payout qua `monero-wallet-rpc`, API và các lưu ý bảo mật nằm trong
 `pool/README.md`; những bước bạn phải tự chạy khi deploy ở

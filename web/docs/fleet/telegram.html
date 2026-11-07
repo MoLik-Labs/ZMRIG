@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/assets/js/runtime~main.a88d1397.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/runtime~main.d43961e0.js" defer="defer"></script>
 <script src="/ZMRIG/assets/js/main.ec0ef4b9.js" defer="defer"></script>
 </head>
 <body>
@@ -97,6 +97,13 @@ minute, and everything else waits for that call.</p>
 <p>On a live stick the key lives in RAM — install to disk, or give the stick a
 <code>ZMRIGDATA</code> partition with <code>zmrig-os persist</code>, or the rig reports a new ID after
 a reboot.</p>
+<p>Two check-ins never overlap: the one that is running holds a lock that names its
+PID. If the agent is killed outright — the OOM killer, a power cut — the lock
+outlives it, and a lock nobody will ever release is a rig that quietly stops
+checking in while it keeps mining. So a lock whose owner is gone is taken over,
+one with no recorded owner is broken after five minutes, and one whose owner is
+alive is respected. A rig that has fallen out of the fleet for no visible reason
+is worth a <code>zmrig-os status</code> before anything else.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="without-a-fleet">Without a fleet<a href="#without-a-fleet" class="hash-link" aria-label="Direct link to Without a fleet" title="Direct link to Without a fleet" translate="no">​</a></h2>
 <p>Leave <code>FLEET_URL</code> empty and nothing changes: the rig never contacts anything, and
 <code>zmrig-os setup</code> remains the way to configure it. The control plane is an

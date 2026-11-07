@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/assets/js/runtime~main.a88d1397.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/runtime~main.d43961e0.js" defer="defer"></script>
 <script src="/ZMRIG/assets/js/main.ec0ef4b9.js" defer="defer"></script>
 </head>
 <body>
@@ -81,6 +81,10 @@ arrives from <code>monerod</code>.</li>
 <code>pool/src/operator.js</code>.</li>
 <li class=""><code>--check</code> refuses configurations that cannot pay correctly: a fee outside
 0–10 %, an unknown mode, a PPLNS window that is too short.</li>
+<li class=""><code>/stratum</code> faces the internet, so its framing is bounded: a frame over 1 MiB
+closes the connection, a <strong>message</strong> over 256 KiB closes it too (a per-frame
+limit alone leaves a client free to send continuation frames for ever), and a
+second data frame inside an open message is a protocol error.</li>
 </ul>
 <p>Payouts via <code>monero-wallet-rpc</code>, the API and the security notes are in
 <code>pool/README.md</code>, and the deployment steps you must run yourself are in
