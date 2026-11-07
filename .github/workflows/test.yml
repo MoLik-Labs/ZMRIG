@@ -150,6 +150,11 @@ jobs:
       - name: How an image is found
         run: bash tests/releases/latest-iso.test.sh
 
+      # Four files carry the release number. Two of them drifted in consecutive
+      # releases and a fourth was wrong for four of them.
+      - name: One version, in every file that carries it
+        run: bash tests/releases/version-consistency.test.sh
+
   # The control plane. Zero dependencies, so this is `node --test` and nothing
   # to install; the agent half runs against the same server in os/tests/fleet.sh.
   fleet:
