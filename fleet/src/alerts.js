@@ -27,9 +27,30 @@ function name(record) {
   return record.label || record.id;
 }
 
+/** How many rigs report this wallet, and whether one of them has already told
+ *  the chat inside the same cooldown window. */
+function farmOn(store, wallet, config, now, selfId) {
+  if (!store) return { count: 1, others: 0 };
+
+  let count = 0;
+  let others = 0;
+  for (const other of store.devices()) {
+    if (String((other.status && other.status.wallet) || '') !== wallet) continue;
+    count += 1;
+    if (other.id === selfId) continue;
+    const told = (other.alerts || {}).wallet;
+    if (told && now - told <= config.alert_cooldown * 1000) others += 1;
+  }
+
+  return { count: Math.max(count, 1), others };
+}
+
 /** Fires on a check-in, comparing what the rig says now with what it said at the
- *  last one. `before` is that previous status, or null on the first check-in. */
-function onHello(record, config, now, before) {
+ *  last one. `before` is that previous status, or null on the first check-in.
+ *  `store`, when given, is used for one thing: a bad wallet is a property of the
+ *  address, not of the rig, so the message says how many rigs it affects and is
+ *  sent once per cooldown instead of once per rig. */
+function onHello(record, config, now, before, store) {
   const out = [];
   const status = record.status || {};
   const previous = before || {};
@@ -71,12 +92,26 @@ function onHello(record, config, now, before) {
     const verdict = address.check(wallet);
     if (!verdict.ok || verdict.net !== 'mainnet') {
       mark(record, 'wallet', now);
+
+      // One farm, one wallet, one message. Every rig on the farm reports the
+      // same address, and they check in within seconds of each other, so the
+      // first version of this alert sent eleven identical warnings about one
+      // typo - and a chat that cries wolf eleven times is a chat people mute.
+      // The rig is still marked, so it will not alert again on its own later;
+      // what it does not do is repeat what another rig just said.
+      const farm = farmOn(store, wallet, config, now, record.id);
+      if (farm.others > 0) return out;
+
+      const plural = farm.count > 1;
+      const who = plural ? `${farm.count} rigs` : name(record);
       out.push({
         kind: 'wallet',
         level: 'warn',
         text: verdict.ok
-          ? `💸 **${name(record)}** mines to a ${verdict.net} address: a mainnet pool cannot pay it`
-          : `💸 **${name(record)}** has an invalid wallet address - ${verdict.reason}. Nothing mined to it can be paid.`,
+          ? `💸 **${who}** ${plural ? 'mine' : 'mines'} to a ${verdict.net} address: a mainnet pool cannot pay it`
+          : plural
+            ? `💸 **${who}** all mine to an address that cannot be paid - ${verdict.reason}. Nothing mined to it can be paid.`
+            : `💸 **${who}** has an invalid wallet address - ${verdict.reason}. Nothing mined to it can be paid.`,
       });
     }
   }

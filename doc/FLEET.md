@@ -433,7 +433,11 @@ Sent to every admin, once, with a cooldown:
 * hashrate below half of the previous check-in
 * a rig reporting a wallet address that fails its checksum, or one on another
   network: `💸 rig-1 has an invalid wallet address - checksum does not match: at
-  least one character is wrong. Nothing mined to it can be paid.`
+  least one character is wrong. Nothing mined to it can be paid.` The wallet is
+  the unit, not the rig: rigs that share an address are one message for the
+  whole farm (`💸 5 rigs all mine to an address that cannot be paid - …`), sent
+  once per cooldown, because eleven identical warnings about one typo is how a
+  chat gets muted.
 * every command result, including the refusals
 
 ## What is on the wire

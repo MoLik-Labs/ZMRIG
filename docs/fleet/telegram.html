@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/assets/js/runtime~main.7d34dd50.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/runtime~main.577f95f0.js" defer="defer"></script>
 <script src="/ZMRIG/assets/js/main.dda710d9.js" defer="defer"></script>
 </head>
 <body>
@@ -43,6 +43,10 @@ request to the control plane cannot talk a rig into a wallet it would reject.</p
 <li class="">hashrate below half of the rate the rig measured on itself, which catches the
 machine that has been sliding for a week rather than the one that fell over
 just now;</li>
+<li class="">a rig mining to a wallet address that fails its checksum, or that belongs to
+another network — the rig itself has no way to notice, and on a pool that only
+checks the alphabet nobody else does either. A farm shares one address, so
+this is one message per address (<code>💸 5 rigs all mine to an address that cannot be paid — …</code>), not one per rig;</li>
 <li class="">every command result, including refusals.</li>
 </ul>
 <p>Each kind has a cooldown per rig, so a hot machine does not shout every minute

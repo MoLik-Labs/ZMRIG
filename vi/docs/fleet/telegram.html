@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.306e10b3.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/runtime~main.67d59003.js" defer="defer"></script>
 <script src="/ZMRIG/vi/assets/js/main.6ebd84ff.js" defer="defer"></script>
 </head>
 <body>
@@ -41,6 +41,11 @@ control plane cũng không lừa được rig dùng ví mà nó sẽ từ chối
 <li class="">hashrate dưới một nửa lần check-in trước;</li>
 <li class="">hashrate dưới một nửa mức rig tự đo được trên chính nó — bắt được cái máy đã
 tụt dần cả tuần, chứ không phải cái vừa ngã trong một phút;</li>
+<li class="">rig đào vào địa chỉ ví sai checksum, hoặc địa chỉ của mạng khác — bản thân rig
+không thể nhận ra, và trên một pool chỉ kiểm tra bảng chữ cái thì cũng không ai
+nhận ra. Cả farm dùng chung một địa chỉ, nên đây là <strong>một tin cho mỗi địa chỉ</strong>
+(<code>💸 5 rigs all mine to an address that cannot be paid — …</code>), không phải một tin
+cho mỗi máy;</li>
 <li class="">mọi kết quả lệnh, kể cả bị từ chối.</li>
 </ul>
 <p>Mỗi loại có thời gian chờ riêng cho từng rig, nên máy nóng không hét lên mỗi

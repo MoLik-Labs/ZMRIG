@@ -204,7 +204,7 @@ function createHandler({
       record.want_log = false;
     }
 
-    const events = alerts.onHello(record, config, stamp, before);
+    const events = alerts.onHello(record, config, stamp, before, store);
     events.forEach((event) => onEvent(event, record));
 
     // Last thing before the queue is emptied: compare what the roster says this

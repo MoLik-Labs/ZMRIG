@@ -67,6 +67,11 @@ request to the control plane cannot talk a rig into a wallet it would reject.
 * hashrate below half of the rate the rig measured on itself, which catches the
   machine that has been sliding for a week rather than the one that fell over
   just now;
+* a rig mining to a wallet address that fails its checksum, or that belongs to
+  another network — the rig itself has no way to notice, and on a pool that only
+  checks the alphabet nobody else does either. A farm shares one address, so
+  this is one message per address (`💸 5 rigs all mine to an address that cannot
+  be paid — …`), not one per rig;
 * every command result, including refusals.
 
 Each kind has a cooldown per rig, so a hot machine does not shout every minute

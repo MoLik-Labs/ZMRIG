@@ -65,6 +65,11 @@ control plane cũng không lừa được rig dùng ví mà nó sẽ từ chối
 * hashrate dưới một nửa lần check-in trước;
 * hashrate dưới một nửa mức rig tự đo được trên chính nó — bắt được cái máy đã
   tụt dần cả tuần, chứ không phải cái vừa ngã trong một phút;
+* rig đào vào địa chỉ ví sai checksum, hoặc địa chỉ của mạng khác — bản thân rig
+  không thể nhận ra, và trên một pool chỉ kiểm tra bảng chữ cái thì cũng không ai
+  nhận ra. Cả farm dùng chung một địa chỉ, nên đây là **một tin cho mỗi địa chỉ**
+  (`💸 5 rigs all mine to an address that cannot be paid — …`), không phải một tin
+  cho mỗi máy;
 * mọi kết quả lệnh, kể cả bị từ chối.
 
 Mỗi loại có thời gian chờ riêng cho từng rig, nên máy nóng không hét lên mỗi

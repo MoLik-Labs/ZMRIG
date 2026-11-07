@@ -372,3 +372,42 @@ test('a stranger cannot fill the state file with unenrolled devices', async () =
     await fleet.close();
   }
 });
+
+test('one typo on a shared wallet is one message, not one per rig', async () => {
+  const fleet = await rig();
+  try {
+    // A farm: five rigs, one wallet, and the wallet has a typo in it. They
+    // check in within seconds of each other because that is what rigs do.
+    const keys = [fleet.key, ...Array.from({ length: 4 }, () => crypto.randomBytes(32).toString('hex'))];
+    for (const key of keys) fleet.store.claim(key);
+
+    const typo = substitute(MINER, 20);
+    // The check-in rate limiter is per rig, so each rig gets its own minute;
+    // they are still all inside one cooldown window, which is the point.
+    for (const [index, key] of keys.entries()) {
+      fleet.advance(CONFIG.interval * 1000 + 1000);
+      await hello(fleet, { status: { state: 'mining', hashrate: 1000, temp: 60 } }, { key });
+      fleet.advance(CONFIG.interval * 1000 + 1000);
+      const answer = await hello(fleet, { status: { state: 'mining', hashrate: 1000, temp: 60, wallet: typo } }, { key });
+      assert.equal(answer.status, 200, `rig ${index + 1} check-in`);
+      assert.equal(
+        fleet.events.filter((event) => event.kind === 'wallet').length,
+        1,
+        `rig ${index + 1} of 5 must not repeat the warning`
+      );
+    }
+
+    // The first rig's message is honest about its own rig; the ones that follow
+    // are still marked, so after the cooldown the message says "5 rigs" instead
+    // of naming a single machine that happens to have spoken first.
+    fleet.advance(CONFIG.alert_cooldown * 1000 + 60_000);
+    await hello(fleet, { status: { state: 'mining', hashrate: 1000, temp: 60, wallet: typo } }, { key: keys[0] });
+
+    const wallet = fleet.events.filter((event) => event.kind === 'wallet');
+    assert.equal(wallet.length, 2, 'one per cooldown, not one per rig');
+    assert.match(wallet[1].text, /5 rigs/);
+    assert.match(wallet[1].text, /checksum does not match/);
+  } finally {
+    await fleet.close();
+  }
+});
