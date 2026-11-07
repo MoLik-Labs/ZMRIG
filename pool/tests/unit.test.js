@@ -345,3 +345,48 @@ test('the ledger survives a restart', () => {
   assert.strictEqual(second.balanceOf(MINER).pending, before);
   assert.strictEqual(second.stats().blocks, 1);
 });
+
+// --- packaging ------------------------------------------------------------
+//
+// The image is the only place where "it works on my machine" is a deployment
+// bug: `deploy/Dockerfile` copies a subset of the repository, and a file that
+// is missing from that subset only fails when the code path that reads it runs
+// for the first time. `pool/src/address.js` re-exports `lib/address.js`, was
+// required lazily on login, and shipped missing: the image built, started, and
+// answered /api/config, and the first rig to connect crashed it. This walks the
+// requires in `pool/src` and asserts the image copies what they reach.
+test('the image copies every file the pool requires from outside pool/', () => {
+  const root = path.join(__dirname, '..', '..');
+  const dockerfile = fs.readFileSync(path.join(root, 'deploy', 'Dockerfile'), 'utf8');
+
+  // `COPY <src>... <dest>` only; the builder stage copies the miner's sources.
+  const copied = [];
+  for (const line of dockerfile.split('\n')) {
+    const match = line.match(/^\s*COPY\s+(?:--\S+\s+)?(.+)$/);
+    if (!match) continue;
+    const parts = match[1].trim().split(/\s+/);
+    copied.push(...parts.slice(0, -1));
+  }
+
+  const escapes = new Set();
+  for (const file of fs.readdirSync(path.join(root, 'pool', 'src'))) {
+    if (!file.endsWith('.js')) continue;
+    const source = fs.readFileSync(path.join(root, 'pool', 'src', file), 'utf8');
+    for (const match of source.matchAll(/require\(['"]\.\.\/\.\.\/([^'"]+)['"]\)/g)) {
+      escapes.add(match[1]);
+    }
+  }
+
+  assert.ok(escapes.size > 0, 'expected the pool to share code with the rest of the repository');
+  for (const target of escapes) {
+    const top = target.split('/')[0];
+    assert.ok(
+      copied.some((entry) => entry === top || entry === `./${top}` || entry.startsWith(`${top}/`)),
+      `deploy/Dockerfile does not copy ${top}/, which pool/src requires (${target})`
+    );
+  }
+
+  // The decoder itself, so the assertion above cannot pass on a Copy of the
+  // directory that happens to be empty in the image.
+  assert.match(dockerfile, /^COPY lib \.\/lib$/m);
+});

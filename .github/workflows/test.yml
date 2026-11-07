@@ -283,6 +283,24 @@ jobs:
           docker run --rm --entrypoint /usr/local/bin/zmrig ocean-pool:ci --version
           docker run --rm --entrypoint /usr/local/bin/zmrig ocean-pool:ci --self-test=light
 
+      # Every `require` the pool makes at startup has to resolve *inside the
+      # image*. `pool/src/address.js` re-exports `lib/address.js`, and for a
+      # while the Dockerfile did not copy `lib/`: the image built, started and
+      # answered /api/config, and the first miner to log in crashed it. This
+      # asserts the decoder is there, decodes a real address, and refuses a typo.
+      - name: The address decoder inside the image
+        run: |
+          docker run --rm --entrypoint node ocean-pool:ci -e '
+            const { check } = require("./pool/src/address");
+            const good = "46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ";
+            const typo = good.slice(0, -1) + "f";
+            const ok = check(good);
+            if (!ok.ok || ok.net !== "mainnet") { console.error("the image cannot decode a real address", ok); process.exit(1); }
+            const bad = check(typo);
+            if (bad.ok) { console.error("the image accepted a typo"); process.exit(1); }
+            console.log("decoder in the image: %s ok, typo refused (%s)", ok.net, bad.reason);
+          '
+
       - name: The pool answers, with nothing mounted
         run: |
           docker run -d --name pool -p 18080:8080 \
