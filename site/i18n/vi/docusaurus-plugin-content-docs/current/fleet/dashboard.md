@@ -97,7 +97,14 @@ ngay thay vì chờ tối đa một phút.
 
 * mật khẩu được so bằng `timingSafeEqual` với `FLEET_WEB_PASSWORD`;
 * mười lần đăng nhập sai từ một địa chỉ trong mười lăm phút ⇒ `429` cho địa chỉ
-  đó;
+  đó. Địa chỉ là mục **cuối** của `X-Forwarded-For` — mục mà proxy thêm vào — và
+  chỉ khi `FLEET_TRUST_PROXY` nói rằng có proxy. Trước đây nó lấy mục đầu, thứ do
+  chính client viết: mỗi request một số khác nhau là mỗi lần một client mới, và
+  chặn hoàn toàn bị đi vòng;
+* một ngân sách thứ hai đếm số lần sai từ **mọi** địa chỉ, vì cái đầu chỉ tốt
+  bằng địa chỉ: quá mười lần trong cửa sổ thì mỗi lần thử phải chờ tới hai giây
+  trước khi so mật khẩu. Xoay địa chỉ chỉ mua được vài lần mỗi giây thay vì hàng
+  nghìn; mật khẩu đúng vẫn vào được;
 * mọi form mang một CSRF token gắn với phiên; form không có token là `403` và
   không đổi gì;
 * cookie phiên là `HttpOnly`, `SameSite=Lax`, bảy ngày, và `Secure` khi request

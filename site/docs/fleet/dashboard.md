@@ -97,7 +97,15 @@ immediately instead of within a minute.
 ## Security
 
 * the password is compared with `timingSafeEqual` against `FLEET_WEB_PASSWORD`;
-* ten failed logins from one address in fifteen minutes ⇒ `429` for that address;
+* ten failed logins from one address in fifteen minutes ⇒ `429` for that address.
+  The address is the **last** entry of `X-Forwarded-For` — the one the proxy
+  appended — and only when `FLEET_TRUST_PROXY` says there is a proxy. It used to
+  be the first entry, which the client writes: a different number per request
+  made every attempt a new client and stepped around the block entirely;
+* a second budget counts failures from every address, because the first one is
+  only as good as the address: past ten in the window, each attempt waits up to
+  two seconds before the password is compared. Rotating addresses buys a few
+  attempts a second instead of thousands; the right password still gets in;
 * every form carries a CSRF token bound to the session; a form without one is
   `403` and changes nothing;
 * the session cookie is `HttpOnly`, `SameSite=Lax`, seven days, and `Secure` when

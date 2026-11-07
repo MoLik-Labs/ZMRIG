@@ -65,12 +65,12 @@ function fakeGitHub() {
   };
 }
 
-async function fleet({ password = PASSWORD, fetchImpl, roster = null } = {}) {
+async function fleet({ password = PASSWORD, fetchImpl, roster = null, trustProxy = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zmrig-web-'));
   const store = new Store(path.join(dir, 'state.json')).load();
   const releases = new Releases({ fetchImpl: fetchImpl || fakeGitHub(), log: () => {} });
   const { server, web } = createServer({
-    config: { ...CONFIG, web_password: password, web_enabled: Boolean(password) },
+    config: { ...CONFIG, web_password: password, web_enabled: Boolean(password), trust_proxy: trustProxy },
     store,
     log: () => {},
     releases,
@@ -95,10 +95,10 @@ async function fleet({ password = PASSWORD, fetchImpl, roster = null } = {}) {
     return response;
   }
 
-  async function signIn(password = PASSWORD) {
+  async function signIn(password = PASSWORD, options = {}) {
     const response = await request('/login', {
       method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      headers: { 'content-type': 'application/x-www-form-urlencoded', ...(options.headers || {}) },
       body: new URLSearchParams({ password }).toString(),
     });
     return response;
@@ -183,6 +183,77 @@ test('a wrong password is refused, a right one gets a hardened cookie', async ()
     assert.equal(response.status, 303);
   } finally {
     await app.close();
+  }
+});
+
+test('a spoofed X-Forwarded-For does not buy a fresh throttle budget', async () => {
+  // The throttle is keyed by the caller's address, and the address used to come
+  // from the *first* entry of X-Forwarded-For — a value the caller writes. Ten
+  // wrong passwords from one machine with a different header on each request
+  // therefore arrived as ten different clients, and the block never happened.
+  const app = await fleet({ trustProxy: true });
+  try {
+    for (let index = 0; index < 10; index += 1) {
+      await app.signIn(`wrong-${index}`, { headers: { 'x-forwarded-for': `10.0.0.${index}, 203.0.113.7` } });
+    }
+    const blocked = await app.signIn(PASSWORD, { headers: { 'x-forwarded-for': '10.0.0.99, 203.0.113.7' } });
+    assert.equal(blocked.status, 429, 'the address the proxy appended is the one counted');
+
+    // The header is also not believed when there is no proxy: a client talking
+    // to this process directly sets it itself.
+    const direct = await fleet({ trustProxy: false });
+    try {
+      for (let index = 0; index < 10; index += 1) {
+        await direct.signIn(`wrong-${index}`, { headers: { 'x-forwarded-for': `198.51.100.${index}` } });
+      }
+      const refused = await direct.signIn(PASSWORD, { headers: { 'x-forwarded-for': '198.51.100.250' } });
+      assert.equal(refused.status, 429, 'without a proxy the socket address is counted');
+    } finally {
+      await direct.close();
+    }
+  } finally {
+    await app.close();
+  }
+});
+
+test('wrong passwords from many addresses are slowed down for everybody', async () => {
+  // Rotating the address defeats a per-address counter whatever the header
+  // says, so there is a second budget that does not depend on who is asking:
+  // past ten failures in the window, each attempt pays a delay first. The owner
+  // with the right password still gets in — it just takes a second.
+  const app = await fleet({ trustProxy: true });
+  try {
+    // Both ends of the header change, which is what a botnet or a proxy pool
+    // looks like: the per-address counter legitimately sees twelve strangers.
+    for (let index = 0; index < 12; index += 1) {
+      await app.signIn(`wrong-${index}`, { headers: { 'x-forwarded-for': `10.1.0.${index}, 203.0.113.${index}` } });
+    }
+    const started = Date.now();
+    const correct = await app.signIn(PASSWORD, { headers: { 'x-forwarded-for': '10.9.9.9, 203.0.113.7' } });
+    const waited = Date.now() - started;
+    assert.equal(correct.status, 303, 'the right password is still accepted');
+    assert.ok(waited >= 100, `a delayed attempt waited (${waited} ms)`);
+  } finally {
+    await app.close();
+  }
+});
+
+test('the Secure flag follows the proxy setting, not a header anyone can send', async () => {
+  const proxied = await fleet({ trustProxy: true });
+  try {
+    const response = await proxied.signIn(PASSWORD, { headers: { 'x-forwarded-proto': 'https' } });
+    assert.match(response.headers.get('set-cookie'), /; Secure/, 'a declared proxy is believed');
+  } finally {
+    await proxied.close();
+  }
+
+  const direct = await fleet({ trustProxy: false });
+  try {
+    const response = await direct.signIn(PASSWORD, { headers: { 'x-forwarded-proto': 'https' } });
+    assert.equal(response.status, 303);
+    assert.doesNotMatch(response.headers.get('set-cookie'), /; Secure/, 'an undeclared header is ignored');
+  } finally {
+    await direct.close();
   }
 });
 

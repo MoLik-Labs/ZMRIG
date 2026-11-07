@@ -159,6 +159,30 @@ Any other host works the same way: Node 20+, one port, the environment.
 | `FLEET_RATE_LIMIT` | `30` | commands per window per operator |
 | `FLEET_QUEUE_LIMIT` | `10` | instructions a rig may have waiting |
 | `FLEET_WEB_PASSWORD` | - | password for the browser dashboard; empty means no dashboard |
+| `FLEET_TRUST_PROXY` | on where the platform says so | believe `X-Forwarded-For` and `X-Forwarded-Proto` |
+
+`FLEET_TRUST_PROXY` decides two things the dashboard does with headers, and both
+are wrong in a way nobody notices until it matters:
+
+* **who is asking.** The login throttle is keyed by address. `X-Forwarded-For`
+  is a list the client starts — a request with `X-Forwarded-For: 1.2.3.4` reaches
+  a proxied service as `1.2.3.4, <the address the proxy saw>` — so reading the
+  first entry (which is what this did, until 6.48.1) lets anybody be a new client
+  on every request and step around the block. The **last** entry is the one the
+  proxy appended, and that is what is used. With no proxy declared the header is
+  ignored entirely and the socket address is used, because a directly connected
+  client writes that header itself.
+* **whether the cookie is `Secure`.** A proxy terminates TLS and says so in
+  `X-Forwarded-Proto`; a direct client says whatever it likes. The default is on
+  for Render and Fly (both set an environment variable naming the platform) and
+  off everywhere else, so `FLEET_TRUST_PROXY=1` is what to set behind nginx,
+  Caddy or Cloudflare.
+
+Whatever the header says, a second budget counts wrong passwords from *every*
+address: past ten in fifteen minutes, each attempt pays a delay of up to two
+seconds first. Rotating addresses buys an attacker a few attempts a second
+instead of thousands, and the owner's correct password still works on the first
+try.
 
 With no admin id the process refuses to start: a bot nobody owns would accept
 commands from an Internet stranger.

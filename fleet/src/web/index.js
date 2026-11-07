@@ -27,6 +27,10 @@ const commands = require('../commands');
 const MAX_FORM = 16 * 1024;
 const LOGIN_WINDOW = 15 * 60 * 1000;
 const LOGIN_LIMIT = 10;
+// Wrong passwords, from any address, before every further attempt pays a delay.
+// The first ten are free because ten typos in a quarter of an hour is a person.
+const GLOBAL_FREE_ATTEMPTS = 10;
+const GLOBAL_MAX_DELAY = 2000;
 const CACHE_ENTRIES = 256;
 
 const SECURITY = {
@@ -93,16 +97,47 @@ function createWeb({ config, store, releases = null, log = () => {}, now = () =>
 
   /** ip -> how many wrong passwords, since when, blocked until */
   const attempts = new Map();
+  /** Every wrong password anywhere in the window, whoever typed it. */
+  const global = { failedInWindow: 0, since: 0 };
   /** what a GET renders, keyed by everything it depends on */
   const cache = new Map();
 
+  /**
+   * Who is asking.
+   *
+   * `X-Forwarded-For` is a list the client can start: `X-Forwarded-For: 1.2.3.4`
+   * sent to a proxied service arrives as `1.2.3.4, <the address the proxy saw>`,
+   * and reading the *first* entry — which is what this did — let anybody rotate
+   * a header and be a new client on every request. Since that value is the key
+   * of the login throttle, the throttle could be stepped around entirely by
+   * sending a different number each time.
+   *
+   * The rightmost entry is the one the nearest trusted proxy appended, so that
+   * is the value used when a proxy is in front. When nothing is (a LAN board, a
+   * Tailscale address, `node host/server.js` on a VPS), the header is ignored
+   * because a directly connected client sets it itself.
+   */
   function clientIp(request) {
-    const forwarded = String(request.headers['x-forwarded-for'] || '').split(',')[0].trim();
-    return forwarded || request.socket.remoteAddress || 'unknown';
+    const socket = request.socket.remoteAddress || 'unknown';
+    if (!config.trust_proxy) return socket;
+    const header = String(request.headers['x-forwarded-for'] || '');
+    const last = header.split(',').map((part) => part.trim()).filter(Boolean).pop();
+    return last || socket;
   }
 
+  /**
+   * Was this request carried over TLS?
+   *
+   * The same trust question as `clientIp`: a proxy terminates TLS and says so in
+   * `X-Forwarded-Proto`, and a client talking to this process directly says
+   * whatever it likes. Believing an untrusted header here does not expose the
+   * cookie — it *removes* it, because a browser will not send a `Secure` cookie
+   * back over http — but it silently breaks the login of anybody behind a proxy
+   * that is not declared, which is worse than saying so.
+   */
   function isSecure(request) {
-    return Boolean(request.socket.encrypted) || String(request.headers['x-forwarded-proto'] || '') === 'https';
+    if (request.socket.encrypted) return true;
+    return config.trust_proxy && String(request.headers['x-forwarded-proto'] || '') === 'https';
   }
 
   function negotiate(entry, request) {
@@ -200,6 +235,26 @@ function createWeb({ config, store, releases = null, log = () => {}, now = () =>
     }
     attempts.set(ip, record);
     if (attempts.size > 2000) attempts.delete(attempts.keys().next().value);
+
+    // A budget that does not depend on who is asking. Per-address throttling is
+    // a politeness measure; it stops a script, not somebody with a list of
+    // proxy addresses, and the password protects a fleet. Once this many wrong
+    // passwords have been typed in the window, from anywhere, every attempt
+    // waits — a few per second instead of thousands, and the owner with the
+    // right password still gets in on the first try.
+    global.failedInWindow += 1;
+    if (stamp - global.since > LOGIN_WINDOW) {
+      global.since = stamp;
+      global.failedInWindow = 1;
+    }
+  }
+
+  /** What to wait before checking a password, in milliseconds. */
+  function loginDelay() {
+    if (now() - global.since > LOGIN_WINDOW) return 0;
+    if (global.failedInWindow <= GLOBAL_FREE_ATTEMPTS) return 0;
+    const over = global.failedInWindow - GLOBAL_FREE_ATTEMPTS;
+    return Math.min(GLOBAL_MAX_DELAY, over * 100);
   }
 
   async function handleLogin(request, response) {
@@ -211,6 +266,12 @@ function createWeb({ config, store, releases = null, log = () => {}, now = () =>
     }
 
     const form = await readForm(request).catch(() => ({}));
+
+    // Paid before the comparison, so the delay cannot be used to guess faster:
+    // an attacker who knows it is coming still has to wait it out per attempt.
+    const delay = loginDelay();
+    if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+
     if (!sessions.check(form.password || '')) {
       noteFailure(ip);
       log(`web: wrong password from ${ip}`);
@@ -219,6 +280,10 @@ function createWeb({ config, store, releases = null, log = () => {}, now = () =>
     }
 
     attempts.delete(ip);
+    // A correct password says the person is the owner, so the global budget
+    // starts again; otherwise a stranger's noise would keep slowing the owner
+    // down for a quarter of an hour after they had already got in.
+    global.failedInWindow = 0;
     const { token } = sessions.issue();
     const next = typeof form.next === 'string' && form.next.startsWith('/') && !form.next.startsWith('//') ? form.next : '/';
     redirect(response, next, sessions.cookie(token, { secure: isSecure(request) }));

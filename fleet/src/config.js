@@ -9,6 +9,13 @@ function text(env, name, fallback = '') {
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : fallback;
 }
 
+/** A boolean from the environment: 1/true/yes/on and 0/false/no/off. */
+function flag(env, name, fallback) {
+  const raw = text(env, name, '');
+  if (raw === '') return fallback;
+  return /^(1|true|yes|on)$/i.test(raw);
+}
+
 function number(env, name, fallback) {
   const value = Number.parseInt(text(env, name, ''), 10);
   return Number.isFinite(value) ? value : fallback;
@@ -76,6 +83,14 @@ function load(env = process.env) {
     rate_limit: number(env, 'FLEET_RATE_LIMIT', 30),
     rate_window: number(env, 'FLEET_RATE_WINDOW', 60),
     queue_limit: number(env, 'FLEET_QUEUE_LIMIT', 10),
+
+    // Is there a reverse proxy in front, and may its `X-Forwarded-For` be
+    // believed? It decides what the login throttle counts, so the default is
+    // "only where we know there is one": Render and Fly both put one there and
+    // both set an environment variable that says so. Anywhere else the header is
+    // written by whoever is connecting, and believing it would let them be a new
+    // client on every request.
+    trust_proxy: flag(env, 'FLEET_TRUST_PROXY', Boolean(env.RENDER || env.FLY_APP_NAME || env.RENDER_EXTERNAL_URL)),
     quiet: text(env, 'FLEET_QUIET', '') === '1',
   };
 
