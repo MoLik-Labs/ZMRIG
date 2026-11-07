@@ -107,6 +107,13 @@ jobs:
       - name: Thermal governor against a real process
         run: ./zmrig/tests/thermal.sh
 
+      # The fee audit, with the binary: the rate, the one wallet inside it, the
+      # switch that turns it off, and the prose that states it. The constants
+      # are checked in the `pool` job as well, without a toolchain - this is the
+      # half that can only run where a miner was built.
+      - name: The developer fee, in the source and in the binary
+        run: ./scripts/verify-fee.sh
+
   # The installer and the tuner: the two things a person runs on a machine they
   # own, before any image exists. They were only ever run by hand, which is how
   # `oneclick.sh update` managed to silently do nothing on a shallow clone for
@@ -200,8 +207,12 @@ jobs:
       - name: Unit, protocol and address tests
         run: node --test pool/tests/*.test.js
 
+      # --source-only: this job has no Zig toolchain and no miner binary. The
+      # check that matters here is the one that needs no build - the constant,
+      # the prose, the appliance default and the single wallet - and the binary
+      # half runs in the `zmrig engine` job, which does build one.
       - name: The fee is 3 % and every document agrees
-        run: bash scripts/verify-fee.sh
+        run: bash scripts/verify-fee.sh --source-only
 
   # The one service Render runs: bots, rigs and the documentation on one port.
   # The two halves are tested in their own jobs; what is tested here is that they
