@@ -3481,6 +3481,44 @@ cmd_fleet() {
     fi
 }
 
+# The check-in lock, and what to do when its owner is gone.
+#
+# A lock left behind is a rig that never checks in again until somebody reboots
+# it. There are two ways to leave one: the OOM killer (or any SIGKILL) takes the
+# agent between `mkdir` and its trap, and a power cut lands in the same window.
+# `/run` is tmpfs, so the directory outlives the process that made it and there
+# is nothing on the other side to notice.
+sync_take_lock() {
+    if mkdir "${RUN}/sync.lock" 2>/dev/null; then
+        printf '%s\n' "$$" >"${RUN}/sync.lock/pid" 2>/dev/null || true
+        return 0
+    fi
+
+    local owner age now
+    owner=$(cat "${RUN}/sync.lock/pid" 2>/dev/null || true)
+    case "$owner" in ''|*[!0-9]*) owner="" ;; esac
+
+    now=$(date +%s)
+    age=$(stat -c %Y "${RUN}/sync.lock" 2>/dev/null || true)
+    case "$age" in ''|*[!0-9]*) age="$now" ;; esac
+
+    # Longer than any check-in can take: the request is bounded by --max-time,
+    # and five minutes is already three times the longest configured one. The
+    # age check is also what protects against a reused PID, which is how a dead
+    # owner can look alive.
+    if [ $((now - age)) -lt 300 ]; then
+        [ -n "$owner" ] || return 1
+        kill -0 "$owner" 2>/dev/null && return 1
+    fi
+
+    printf 'fleet: taking over a stale check-in lock (pid %s, %s s old)\n' \
+        "${owner:-unknown}" "$((now - age))" >>"$OSLOG" 2>/dev/null || true
+    rm -rf "${RUN}/sync.lock"
+    mkdir "${RUN}/sync.lock" 2>/dev/null || return 1
+    printf '%s\n' "$$" >"${RUN}/sync.lock/pid" 2>/dev/null || true
+    return 0
+}
+
 cmd_sync() {
     local quiet=0 force=0 url resp interval cmds line count=0
     local next="" now=""
@@ -3506,10 +3544,13 @@ cmd_sync() {
 
     # One check-in at a time. Two crons, a boot script and an impatient operator
     # must not become two hellos and two applications of the same command.
-    if ! mkdir "${RUN}/sync.lock" 2>/dev/null; then
+    if ! sync_take_lock; then
         return 0
     fi
-    trap 'rmdir "${RUN}/sync.lock" 2>/dev/null || true' EXIT HUP INT TERM
+    # `rm -rf`, not `rmdir`: the lock holds the owner's pid, and rmdir on a
+    # non-empty directory would leave the lock behind for ever - the very
+    # failure this lock is now careful to recover from.
+    trap 'rm -rf "${RUN}/sync.lock" 2>/dev/null || true' EXIT HUP INT TERM
 
     if [ "$force" = 0 ] && [ -f "${RUN}/sync.next" ]; then
         next=$(cat "${RUN}/sync.next" 2>/dev/null || echo 0)

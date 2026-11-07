@@ -171,6 +171,14 @@ On a live stick the key lives in RAM — install to disk, or give the stick a
 `ZMRIGDATA` partition with `zmrig-os persist`, or the rig reports a new ID after
 a reboot.
 
+Two check-ins never overlap: the one that is running holds a lock that names its
+PID. If the agent is killed outright — the OOM killer, a power cut — the lock
+outlives it, and a lock nobody will ever release is a rig that quietly stops
+checking in while it keeps mining. So a lock whose owner is gone is taken over,
+one with no recorded owner is broken after five minutes, and one whose owner is
+alive is respected. A rig that has fallen out of the fleet for no visible reason
+is worth a `zmrig-os status` before anything else.
+
 ## Without a fleet
 
 Leave `FLEET_URL` empty and nothing changes: the rig never contacts anything, and

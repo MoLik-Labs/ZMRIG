@@ -163,6 +163,13 @@ nối *vào* rig: rig gọi ra, mỗi phút một lần, mọi thứ khác chờ
 Trên USB live, khóa nằm trong RAM — cài lên ổ, hoặc tạo phân vùng `ZMRIGDATA`
 bằng `zmrig-os persist`, nếu không rig sẽ báo ID mới sau khi khởi động lại.
 
+Hai lần check-in không bao giờ chồng nhau: lần đang chạy giữ một lock có ghi PID
+của nó. Nếu agent bị giết thẳng — OOM killer, mất điện — lock đó sống lâu hơn
+tiến trình, và một lock không ai gỡ sẽ là một rig lặng lẽ thôi check-in trong khi
+vẫn đào. Vì vậy lock có chủ đã chết sẽ được tiếp quản, lock không ghi chủ bị phá
+sau năm phút, còn lock có chủ đang sống thì được tôn trọng. Một rig tự nhiên rơi
+khỏi fleet mà không có lý do rõ ràng thì nên chạy `zmrig-os status` trước tiên.
+
 ## Khi không dùng fleet
 
 Để trống `FLEET_URL` thì không có gì thay đổi: rig không liên lạc với ai, và

@@ -193,6 +193,38 @@ OUTPUT=$(sh "$TOOL" sync 2>&1)
 
 check "status shows the device and the server" bash -c "sh '$TOOL' status | grep -q '$ID' && sh '$TOOL' status | grep -q '$DEVICE'"
 
+# --------------------------------------------------------- a stale lock
+#
+# The failure this covers: SIGKILL (the OOM killer on a 512 MB rig) takes the
+# agent between `mkdir sync.lock` and its trap. The directory stays in /run for
+# as long as the machine is up, and every later check-in returns silently - the
+# rig keeps mining and quietly falls out of the fleet for weeks.
+
+LOCK="${ROOTDIR}/run/zmrig/sync.lock"
+LAST="${ROOTDIR}/run/zmrig/sync.last"
+mkdir -p "$LOCK"
+printf '999999\n' >"$LOCK/pid"
+rm -f "${ROOTDIR}/run/zmrig/sync.next" "$LAST"
+zig_tool sync --now --quiet >/dev/null 2>&1
+[ -s "$LAST" ] && ok "a lock left by a dead process is taken over" || bad "a lock left by a dead process is taken over"
+[ -d "$LOCK" ] && bad "the taken-over lock is released" || ok "the taken-over lock is released"
+
+# A live owner is still respected: two crons must not become two hellos.
+rm -f "${ROOTDIR}/run/zmrig/sync.next" "$LAST"
+mkdir -p "$LOCK"
+printf '%s\n' "$$" >"$LOCK/pid"
+zig_tool sync --now --quiet >/dev/null 2>&1
+[ -s "$LAST" ] && bad "a lock held by a live process is respected" || ok "a lock held by a live process is respected"
+rm -rf "$LOCK"
+
+# No pid at all, and old: the power-cut case, where nothing was ever written.
+rm -f "${ROOTDIR}/run/zmrig/sync.next" "$LAST"
+mkdir -p "$LOCK"
+touch -d '10 minutes ago' "$LOCK"
+zig_tool sync --now --quiet >/dev/null 2>&1
+[ -s "$LAST" ] && ok "an old lock with no owner is taken over" || bad "an old lock with no owner is taken over"
+rm -rf "$LOCK"
+
 # ---------------------------------------------------------- wrong server
 
 zig_tool fleet --url http://127.0.0.1:1 >/dev/null 2>&1

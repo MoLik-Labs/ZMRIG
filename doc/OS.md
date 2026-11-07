@@ -606,6 +606,15 @@ Everything the bot sends is validated again on the machine (`zmrig-os`'s own
 wallet validator, its own mode list), so a malformed or hostile instruction is
 refused there and the refusal is reported back.
 
+Only one check-in runs at a time, and the lock that guarantees it records its
+owner's PID. A lock whose owner is gone — the OOM killer on a 512 MB box, a power
+cut between `mkdir` and the trap — is taken over instead of being honoured
+forever: `/run` is tmpfs, so a stale directory would otherwise keep the rig out
+of the fleet until somebody rebooted it, while it kept mining and looked
+healthy in every other way. A lock whose owner is alive is respected; one with
+no recorded owner is broken after five minutes, which is already longer than any
+check-in can take.
+
 ## Persistence
 
 The image is read-only, so `/etc/zmrig` (and `/root/.ssh`) live in RAM and are
