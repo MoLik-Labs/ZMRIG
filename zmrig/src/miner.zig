@@ -371,14 +371,17 @@ pub const Engine = struct {
             // huge pages are off as well. With THP in `madvise` (or `always`)
             // the mapping still comes back in 2 MiB pages, and the difference
             // between that and the reserved pool is small; the difference
-            // between a 2 MiB page and a 4 KiB page is not - 800.6 H/s against
-            // 614.8 H/s on the validation host, measured by switching the
-            // MADV_HUGEPAGE hint off rather than by believing the manual.
+            // between a 2 MiB page and a 4 KiB page is not - 1088-1095 H/s
+            // against 892-900 H/s on the validation host, measured 2026-11-07
+            // by alternating THP on and off in one session, because that box
+            // moves by 20 % between hours and a back-to-back pair is worth
+            // nothing. An earlier back-to-back pair read 800.6 against 614.8
+            // and put this warning at 28 %.
             switch (hugepages_mod.thp()) {
                 .never, .unknown => {
                     const need_pages = (huge_total + (2 * 1024 * 1024) - 1) / (2 * 1024 * 1024);
 
-                    self.logger.warn("transparent huge pages are {s} and no huge pages are reserved: RandomX will read 4 KiB pages, ~28% slower (measured 614.8 H/s against 800.6 H/s on 2 vCPU)", .{hugepages_mod.thp().label()});
+                    self.logger.warn("transparent huge pages are {s} and no huge pages are reserved: RandomX will read 4 KiB pages, ~20% slower (measured 892-900 H/s against 1088-1095 H/s, alternating, on 2 vCPU)", .{hugepages_mod.thp().label()});
                     self.logger.warn("fix it once as root: echo {d} > /proc/sys/vm/nr_hugepages, or boot with transparent_hugepage=madvise (sudo zmrig-tune does both)", .{need_pages});
                 },
                 .always, .madvise => {},

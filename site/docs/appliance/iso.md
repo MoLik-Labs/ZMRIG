@@ -360,7 +360,8 @@ package upgrade or a systemd unit. Here they are the defaults:
   fragmented memory. That is the +4–6 % on top of transparent huge pages, and it
   is the one tuning step that is nearly impossible to do later in the day.
 - **Transparent huge pages stay enabled** (`always` on the max entries). Turning
-  them off costs about 28 % — measured, see [Performance](/docs/operate/performance).
+  them off costs about a fifth — measured by alternating the two in one session,
+  see [Performance](/docs/operate/performance).
 - **The CPU governor is `performance`**, set by the same step that reserves
   memory, before the miner starts.
 - **`swappiness=1`**, so the 2.3 GiB dataset is never paged out; **write-back

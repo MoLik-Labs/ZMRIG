@@ -154,7 +154,7 @@ validation host, with 3.9 GiB free and nothing else running, writing
 `/sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages` returns success and
 leaves the pool at 0. That is the normal answer from a virtualised host and it is
 why the fallback is silent rather than a warning: **the rig is not misconfigured
-when there is no 1 GiB pool, it is on 2 MiB pages, which is where the +28 % lives
+when there is no 1 GiB pool, it is on 2 MiB pages, which is where the +21 % lives
 anyway.**
 
 Where the pool does exist, it is a kernel parameter:
@@ -220,8 +220,20 @@ session):
 | none reserved | THP collapsed 99 % of the mapping | 785.9 / 786.1 |
 | none reserved, no `MADV_HUGEPAGE` | 4 KiB | 614.8 / 626.3 |
 
-4 KiB → 2 MiB is the step that matters (≈ +28 %); the reserved pool adds 4–6 %
-on top. So `zmrig` now:
+Those three rows were measured back to back on 2026-11-05, and their ratio
+(+28 %) turned out to be the host drifting rather than the pages: it moves by up
+to 20 % between hours. Re-measured 2026-11-07 by alternating THP on and off in
+one session, no reservation either way:
+
+| Pages | Backing | H/s |
+|---|---|---:|
+| THP `always` | 99 % of the mapping collapsed | 1088 / 1095 |
+| THP `never` | 4 KiB | 892.8 / 900.5 |
+
+**4 KiB → 2 MiB is worth +21 %**, and the reserved pool adds a few per cent on
+top of that (1090 / 1094 against 1088 / 1095 here — inside the noise). The rule
+of thumb that survives both sessions is "about a fifth", which is also what the
+miner's own warning says now. So `zmrig` now:
 
 * prints the kernel's own figure after the dataset is built —
   `huge pages: 2332 MB via THP (99 % of the 2336 MB mapping, measured by the

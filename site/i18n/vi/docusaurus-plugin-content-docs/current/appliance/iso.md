@@ -340,7 +340,8 @@ hoặc một unit systemd. Ở đây chúng là mặc định:
   nào làm phân mảnh bộ nhớ. Đó là +4–6 % cộng thêm trên transparent huge pages,
   và là bước gần như không thể làm lại vào cuối ngày.
 - **Transparent huge pages vẫn bật** (`always` ở các mục max). Tắt nó mất khoảng
-  28 % — đã đo, xem [Hiệu năng](/docs/operate/performance).
+  một phần năm — đo bằng cách bật/tắt xen kẽ trong cùng một phiên, xem
+  [Hiệu năng](/docs/operate/performance).
 - **CPU governor là `performance`**, do đúng bước đặt trước bộ nhớ thiết lập,
   trước khi miner chạy.
 - **`swappiness=1`** để dataset 2,3 GiB không bao giờ bị đẩy ra swap; **giới hạn

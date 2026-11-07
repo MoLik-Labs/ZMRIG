@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.e69a44d4.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/runtime~main.b87c7649.js" defer="defer"></script>
 <script src="/ZMRIG/vi/assets/js/main.c62143c8.js" defer="defer"></script>
 </head>
 <body>
@@ -214,7 +214,8 @@ hoặc một unit systemd. Ở đây chúng là mặc định:</p>
 nào làm phân mảnh bộ nhớ. Đó là +4–6 % cộng thêm trên transparent huge pages,
 và là bước gần như không thể làm lại vào cuối ngày.</li>
 <li class=""><strong>Transparent huge pages vẫn bật</strong> (<code>always</code> ở các mục max). Tắt nó mất khoảng
-28 % — đã đo, xem <a class="" href="/ZMRIG/vi/docs/operate/performance">Hiệu năng</a>.</li>
+một phần năm — đo bằng cách bật/tắt xen kẽ trong cùng một phiên, xem
+<a class="" href="/ZMRIG/vi/docs/operate/performance">Hiệu năng</a>.</li>
 <li class=""><strong>CPU governor là <code>performance</code></strong>, do đúng bước đặt trước bộ nhớ thiết lập,
 trước khi miner chạy.</li>
 <li class=""><strong><code>swappiness=1</code></strong> để dataset 2,3 GiB không bao giờ bị đẩy ra swap; <strong>giới hạn

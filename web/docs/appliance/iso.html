@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/assets/js/runtime~main.91c4bd91.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/runtime~main.6a624fd4.js" defer="defer"></script>
 <script src="/ZMRIG/assets/js/main.ec0ef4b9.js" defer="defer"></script>
 </head>
 <body>
@@ -234,7 +234,8 @@ board with a NIC outside the keep list.</li>
 fragmented memory. That is the +4–6 % on top of transparent huge pages, and it
 is the one tuning step that is nearly impossible to do later in the day.</li>
 <li class=""><strong>Transparent huge pages stay enabled</strong> (<code>always</code> on the max entries). Turning
-them off costs about 28 % — measured, see <a class="" href="/ZMRIG/docs/operate/performance">Performance</a>.</li>
+them off costs about a fifth — measured by alternating the two in one session,
+see <a class="" href="/ZMRIG/docs/operate/performance">Performance</a>.</li>
 <li class=""><strong>The CPU governor is <code>performance</code></strong>, set by the same step that reserves
 memory, before the miner starts.</li>
 <li class=""><strong><code>swappiness=1</code></strong>, so the 2.3 GiB dataset is never paged out; <strong>write-back

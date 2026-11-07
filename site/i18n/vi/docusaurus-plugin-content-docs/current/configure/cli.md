@@ -193,7 +193,7 @@ như toàn bộ lợi ích nằm ở trang 2 MiB.
 Dòng `memory` là cỡ của chính coin đó — `panthera maps 192 MB, 96 pages` — và
 dòng `thp` trả lời câu hỏi mà nó đặt ra: `madvise` và `always` nghĩa là kernel
 cấp trang 2 MiB cho mapping mà không cần bước nào bằng root, `never` nghĩa là
-không, và miner sẽ chậm khoảng 28 % cho tới khi bạn đặt trang.
+không, và miner sẽ chậm khoảng 20 % cho tới khi bạn đặt trang.
 
 `--check` đọc file và in ra; nó không mở socket và không cấp phát dataset. Nếu
 file chỉ root đọc được thì chạy bằng `sudo`, không thì bạn nhận

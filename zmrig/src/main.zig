@@ -1641,7 +1641,7 @@ fn autoReserveHugePages(opts: *const options.Options, logger: *@import("log.zig"
         // rx/0 mapping), and the miner verifies that figure after the dataset
         // is built. With THP off, the warning is real and worth acting on.
         switch (hugepages_mod.thp()) {
-            .never, .unknown => logger.warn("huge pages: {d} reserved, {d} needed for {d} MB, and transparent huge pages are {s}: RandomX is ~28% slower on 4 KiB pages. Run as root or set vm.nr_hugepages={d}", .{
+            .never, .unknown => logger.warn("huge pages: {d} reserved, {d} needed for {d} MB, and transparent huge pages are {s}: RandomX is ~20% slower on 4 KiB pages. Run as root or set vm.nr_hugepages={d}", .{
                 before.reserved, want, need_mb, hugepages_mod.thp().label(), want,
             }),
             .always, .madvise => logger.info("huge pages: {d} of {d} reserved; transparent huge pages ({s}) will back the {d} MB mapping instead", .{
@@ -1722,7 +1722,7 @@ fn hugePageStatus(opts: *const options.Options) []const u8 {
         return if (thp_ok)
             "no pages reserved; transparent huge pages collapse the mapping instead"
         else
-            "no huge pages and THP off -> 4 KiB pages, ~28% slower; see --help";
+            "no huge pages and THP off -> 4 KiB pages, ~20% slower; see --help";
     }
 
     return "fewer pages reserved than this mode needs; see --help";
@@ -1799,7 +1799,7 @@ fn thpStatus() []const u8 {
     return switch (hugepages_mod.thp()) {
         .always => "always: the kernel collapses anonymous memory into 2 MiB pages without being asked",
         .madvise => "madvise (default): the hint this miner sets is honoured, so no root step is needed",
-        .never => "never: nothing backs the mapping with 2 MiB pages; reserve pages as root or boot with transparent_hugepage=madvise (~28% hashrate)",
+        .never => "never: nothing backs the mapping with 2 MiB pages; reserve pages as root or boot with transparent_hugepage=madvise (~20% hashrate)",
         .unknown => "unknown: this kernel does not report a THP policy; reserve pages as root",
     };
 }
