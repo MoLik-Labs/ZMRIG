@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.fe24f59d.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/runtime~main.26529265.js" defer="defer"></script>
 <script src="/ZMRIG/vi/assets/js/main.c62143c8.js" defer="defer"></script>
 </head>
 <body>
@@ -93,7 +93,14 @@ không đổi gì;</li>
 <li class=""><code>Content-Security-Policy: default-src &#x27;none&#x27;</code> — không script, font hay ảnh của
 bên thứ ba nào tải được, nên một CDN bị chiếm cũng không nhìn được fleet;</li>
 <li class="">mật khẩu nằm trong biến môi trường, không bao giờ trong repo, không bao giờ
-trong file trạng thái, và không in ra lúc khởi động.</li>
+trong file trạng thái, và không in ra lúc khởi động;</li>
+<li class="">một máy chưa được ghi danh vẫn phải gõ cửa được, nên bất kỳ khoá 64 hex nào
+cũng tạo ra một bản ghi — nghĩa là ai có <code>curl</code> cũng tạo được. Bản ghi của máy
+chưa ghi danh bị chặn ở <code>FLEET_UNOWNED_LIMIT</code> (200) và hết hạn sau
+<code>FLEET_UNOWNED_TTL</code> (một ngày). Quá mức đó thì bản ghi <strong>lâu không thấy nhất</strong>
+bị đẩy ra, không phải máy mới bị từ chối, vì một lần gõ cửa đầu tiên bị từ chối
+là một máy bạn không thể ghi danh được. Năm nghìn lần gõ cửa vô danh mỗi giây
+để lại 200 bản ghi và một file trạng thái 118 KB.</li>
 </ul>
 <p>Hãy chạy nó qua HTTPS. Trên Render là tự động; ở nơi khác thì đặt sau reverse
 proxy, vì mật khẩu gõ vào HTTP thường là mật khẩu nằm trên dây.</p>

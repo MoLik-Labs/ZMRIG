@@ -113,7 +113,14 @@ immediately instead of within a minute.
 * `Content-Security-Policy: default-src 'none'` — no third-party script, font or
   image can load, so a compromised CDN cannot watch your fleet;
 * the password lives in the environment, never in the repository, never in the
-  state file, and it is not printed at startup.
+  state file, and it is not printed at startup;
+* a rig that has never been enrolled still has to be able to knock, so any
+  64-hex key creates a record — and that means anybody with `curl` can make one.
+  Records for unenrolled rigs are capped at `FLEET_UNOWNED_LIMIT` (200) and
+  expire after `FLEET_UNOWNED_TTL` (a day). Past the cap the least recently seen
+  unenrolled record is evicted, not the new arrival turned away, because a
+  refused first check-in is a rig you cannot enroll. Five thousand anonymous
+  check-ins a second leave 200 records and a 118 KB state file.
 
 Serve it over HTTPS. On Render that is automatic; anywhere else, put it behind a
 reverse proxy, because a password typed into plain HTTP is a password on the

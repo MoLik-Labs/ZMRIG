@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/assets/js/runtime~main.4e181ea1.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/runtime~main.a88d1397.js" defer="defer"></script>
 <script src="/ZMRIG/assets/js/main.ec0ef4b9.js" defer="defer"></script>
 </head>
 <body>
@@ -94,7 +94,14 @@ the request arrived over HTTPS;</li>
 <li class=""><code>Content-Security-Policy: default-src &#x27;none&#x27;</code> — no third-party script, font or
 image can load, so a compromised CDN cannot watch your fleet;</li>
 <li class="">the password lives in the environment, never in the repository, never in the
-state file, and it is not printed at startup.</li>
+state file, and it is not printed at startup;</li>
+<li class="">a rig that has never been enrolled still has to be able to knock, so any
+64-hex key creates a record — and that means anybody with <code>curl</code> can make one.
+Records for unenrolled rigs are capped at <code>FLEET_UNOWNED_LIMIT</code> (200) and
+expire after <code>FLEET_UNOWNED_TTL</code> (a day). Past the cap the least recently seen
+unenrolled record is evicted, not the new arrival turned away, because a
+refused first check-in is a rig you cannot enroll. Five thousand anonymous
+check-ins a second leave 200 records and a 118 KB state file.</li>
 </ul>
 <p>Serve it over HTTPS. On Render that is automatic; anywhere else, put it behind a
 reverse proxy, because a password typed into plain HTTP is a password on the

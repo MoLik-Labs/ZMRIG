@@ -112,7 +112,14 @@ ngay thay vì chờ tối đa một phút.
 * `Content-Security-Policy: default-src 'none'` — không script, font hay ảnh của
   bên thứ ba nào tải được, nên một CDN bị chiếm cũng không nhìn được fleet;
 * mật khẩu nằm trong biến môi trường, không bao giờ trong repo, không bao giờ
-  trong file trạng thái, và không in ra lúc khởi động.
+  trong file trạng thái, và không in ra lúc khởi động;
+* một máy chưa được ghi danh vẫn phải gõ cửa được, nên bất kỳ khoá 64 hex nào
+  cũng tạo ra một bản ghi — nghĩa là ai có `curl` cũng tạo được. Bản ghi của máy
+  chưa ghi danh bị chặn ở `FLEET_UNOWNED_LIMIT` (200) và hết hạn sau
+  `FLEET_UNOWNED_TTL` (một ngày). Quá mức đó thì bản ghi **lâu không thấy nhất**
+  bị đẩy ra, không phải máy mới bị từ chối, vì một lần gõ cửa đầu tiên bị từ chối
+  là một máy bạn không thể ghi danh được. Năm nghìn lần gõ cửa vô danh mỗi giây
+  để lại 200 bản ghi và một file trạng thái 118 KB.
 
 Hãy chạy nó qua HTTPS. Trên Render là tự động; ở nơi khác thì đặt sau reverse
 proxy, vì mật khẩu gõ vào HTTP thường là mật khẩu nằm trên dây.
