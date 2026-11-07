@@ -743,3 +743,41 @@ test('rendering is fast enough to be worth the word', async () => {
     await app.close();
   }
 });
+
+test('the dashboard marks a rig that cannot be paid, before the chat is read', async () => {
+  const app = await fleet();
+  try {
+    const key = crypto.randomBytes(32).toString('hex');
+    const record = app.store.claim(key);
+    record.owner = 'tg:1';
+    record.label = 'shed';
+    record.status = { state: 'mining', hashrate: 1200, temp: 63, wallet: substitute(WALLET, 20), coin: 'xmr' };
+    record.last_seen = Date.now();
+
+    await app.signIn();
+    const rigPage = await (await app.request(`/rig/${record.id}`)).text();
+    assert.match(rigPage, /wallet ✗/, 'the rig page marks the address');
+    assert.match(rigPage, /fails its checksum/, 'and says why, in words');
+    assert.match(rigPage, /will not start/, 'and what the rig does about it');
+
+    const list = await (await app.request('/rigs')).text();
+    assert.match(list, /wallet ✗/);
+
+    // A rig with a good address carries no mark: the tag has to mean something.
+    // The store, not the object `claim` returned, and then `touch()`: pages are
+    // cached against `store.revision`, so a change nobody told the store about
+    // is a change the next request legitimately does not see.
+    app.store.get(record.id).status.wallet = WALLET;
+    app.store.touch();
+    const clean = await (await app.request(`/rig/${record.id}`)).text();
+    assert.doesNotMatch(clean, /wallet ✗/);
+    assert.doesNotMatch(clean, /fails its checksum/);
+
+    // A plain login is not a wallet and is not a problem: test rigs use names.
+    app.store.get(record.id).status.wallet = 'rig-1';
+    app.store.touch();
+    assert.doesNotMatch(await (await app.request(`/rig/${record.id}`)).text(), /wallet ✗/);
+  } finally {
+    await app.close();
+  }
+});

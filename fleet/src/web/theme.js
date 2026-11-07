@@ -65,6 +65,7 @@ td.num,th.num{text-align:right}
 .dot.warn{background:var(--warn)}
 .tag{display:inline-block;font-size:.72rem;font-weight:650;padding:.06em .45em;border-radius:999px;border:1px solid var(--line);color:var(--muted);background:var(--code)}
 .tag.on{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,var(--line))}
+.tag.bad{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 45%,var(--line));cursor:help}
 .forms{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
 label{display:block;font-size:.82rem;color:var(--muted);margin-bottom:.2rem}
 input,select,button{font:inherit;color:inherit}

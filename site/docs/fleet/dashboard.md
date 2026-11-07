@@ -51,6 +51,13 @@ as a rig of the farm. A rig that has not reported a wallet yet gets its own row,
 last in the table — a machine mining into the wrong address is exactly the
 mistake that view exists to make visible.
 
+An address that cannot be paid is marked where it is read, not only in the chat:
+a rig whose wallet fails its checksum carries a red **wallet ✗** tag in the rig
+list, its page says why and what the rig does about it (it refuses to start under
+`rx/0`), and it is counted under *needs attention* until it is fixed. The tag is
+about the last address the rig reported — the alert in the chat fires once, the
+mark stays.
+
 Two rules that surprise people:
 
 * An empty wallet or pool field means **leave it alone**, never "clear it".

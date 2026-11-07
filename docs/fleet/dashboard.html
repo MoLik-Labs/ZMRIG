@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/assets/js/runtime~main.14d805ab.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/runtime~main.8c47c051.js" defer="defer"></script>
 <script src="/ZMRIG/assets/js/main.dda710d9.js" defer="defer"></script>
 </head>
 <body>
@@ -43,6 +43,12 @@ adds an hour-old number to a fresh one is lying by omission. It is still counted
 as a rig of the farm. A rig that has not reported a wallet yet gets its own row,
 last in the table — a machine mining into the wrong address is exactly the
 mistake that view exists to make visible.</p>
+<p>An address that cannot be paid is marked where it is read, not only in the chat:
+a rig whose wallet fails its checksum carries a red <strong>wallet ✗</strong> tag in the rig
+list, its page says why and what the rig does about it (it refuses to start under
+<code>rx/0</code>), and it is counted under <em>needs attention</em> until it is fixed. The tag is
+about the last address the rig reported — the alert in the chat fires once, the
+mark stays.</p>
 <p>Two rules that surprise people:</p>
 <ul>
 <li class="">An empty wallet or pool field means <strong>leave it alone</strong>, never &quot;clear it&quot;.

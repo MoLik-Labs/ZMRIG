@@ -322,6 +322,10 @@ Two details worth knowing:
 
 * An empty wallet or pool field means **leave it alone**, never "clear it". The
   only way to change a wallet is to type a different one.
+* A rig whose reported address fails its checksum is marked in the dashboard
+  (a red **wallet ✗** in the rig list, the reason on its page, and it appears
+  under *needs attention*), not only in the one alert the chat sent. The mark
+  describes the last address the rig reported; the alert fires once.
 * A wallet is **decoded before it is queued**, in the chat, in the browser and in
   the roster: the checksum is verified and a typo is refused with the reason
   (`that is not a Monero address - checksum does not match: at least one

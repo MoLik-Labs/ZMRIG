@@ -37,6 +37,12 @@ check-in sau, mặc định 60 giây, rồi báo kết quả về cả trang và
 đẩy xuống qua kết nối thường trực, nên một cú bấm trên trình duyệt không thể làm
 kẹt miner giữa một share.
 
+Địa chỉ không thể nhận tiền được đánh dấu ngay nơi người ta đọc, không chỉ trong
+chat: rig có ví sai checksum mang thẻ đỏ **wallet ✗** trong danh sách rig, trang
+của nó nói rõ vì sao và máy sẽ làm gì (với `rx/0` là từ chối khởi động), và nó
+được tính vào mục *cần chú ý* cho tới khi sửa xong. Thẻ này nói về địa chỉ cuối
+cùng mà rig báo — cảnh báo trong chat chỉ báo một lần, còn dấu thì ở lại.
+
 Hai điều dễ bất ngờ:
 
 * Ô ví hay pool để trống nghĩa là **giữ nguyên**, không bao giờ là "xoá". Muốn
