@@ -136,6 +136,18 @@ expect_fail "a temperature below the floor is refused" "$TOOL" mode safe 30
 expect_fail "a temperature above the ceiling is refused" "$TOOL" mode safe 120
 expect_fail "a temperature that is not a number is refused" "$TOOL" mode safe warm
 
+# --- the same field through setup -------------------------------------------
+# `setup --max-temp` parsed into $SAFE_TEMP, and load_conf() put the file's
+# value straight back: the flag was accepted, printed as ignored, and written
+# as the old value. Nobody noticed because `mode safe 65` works.
+"$TOOL" mode safe 72 >/dev/null 2>&1
+expect_ok "setup takes a heat cap" "$TOOL" setup --wallet "$WALLET" --mode safe --max-temp 77
+contains "SAFE_TEMP=\"77\"" "$(cat "$ROOTDIR/etc/zmrig/os.conf")" && ok "the heat cap from setup reaches the file" || bad "the heat cap from setup reaches the file (got '$(grep SAFE_TEMP "$ROOTDIR/etc/zmrig/os.conf")')"
+expect_ok "setup still builds a command line" "$TOOL" args
+contains "--max-temp 77" "$CHECK_MSG" && ok "the heat cap from setup reaches the miner" || bad "the heat cap from setup reaches the miner"
+expect_fail "setup refuses a heat cap outside 45..95" "$TOOL" setup --wallet "$WALLET" --max-temp 200
+expect_fail "setup refuses a heat cap that is not a number" "$TOOL" setup --wallet "$WALLET" --max-temp warm
+
 "$TOOL" mode safe 72 >/dev/null 2>&1
 
 # `status` has to show the number the governor is working from, and say so when

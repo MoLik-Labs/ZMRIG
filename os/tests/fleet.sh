@@ -193,6 +193,19 @@ OUTPUT=$(sh "$TOOL" sync 2>&1)
 
 check "status shows the device and the server" bash -c "sh '$TOOL' status | grep -q '$ID' && sh '$TOOL' status | grep -q '$DEVICE'"
 
+# The heat cap is part of the status, because the roster reconciles it: without
+# it the server cannot see that a rig holds the wrong cap and never sends one.
+zig_tool setup --wallet "$WALLET" --mode safe --max-temp 77 >/dev/null 2>&1
+zig_tool sync --now >/dev/null 2>&1
+CAP_SEEN=$(curl -fsS "${CONTROL}/state?id=${ID}" | node -e "
+let data='';process.stdin.on('data',(d)=>data+=d).on('end',()=>{
+  const parsed=JSON.parse(data);
+  process.stdout.write(parsed.device ? String(parsed.device.status.maxtemp) : 'none');
+});")
+[ "$CAP_SEEN" = "77" ] && ok "the check-in reports the heat cap (77)" ||
+    bad "the check-in reports the heat cap (got '$CAP_SEEN')"
+zig_tool setup --wallet "$WALLET" --mode max >/dev/null 2>&1
+
 # --------------------------------------------------------- a stale lock
 #
 # The failure this covers: SIGKILL (the OOM killer on a 512 MB rig) takes the

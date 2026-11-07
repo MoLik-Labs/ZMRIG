@@ -394,3 +394,19 @@ test('--check says where the roster came from, and fails only when it is unreada
   assert.equal(broken.ok, false);
   assert.match(broken.text, /problem {4}the roster is not valid JSON/);
 });
+
+test('the heat cap is reconciled on its own, not only with a mode change', () => {
+  // The roster entry only turns the cap down. The rig is already in safe mode
+  // and reports the cap it is holding, so the diff has to see 72 against 78.
+  const desired = { mode: 'safe', maxtemp: 72 };
+  const args = reconcile.diff({ mode: 'safe', maxtemp: 78 }, desired);
+  assert.deepStrictEqual(args, { maxtemp: 72 });
+
+  const matches = reconcile.diff({ mode: 'safe', maxtemp: '72' }, desired);
+  assert.deepStrictEqual(matches, {}, 'the rig reports it as text, the roster as a number');
+
+  // An agent old enough not to report the field must not be told about it every
+  // five minutes for ever: nothing is queued when the field is absent.
+  const old = reconcile.diff({ mode: 'safe' }, desired);
+  assert.deepStrictEqual(old, {});
+});

@@ -998,7 +998,7 @@ supervise() {
 # --------------------------------------------------------------- commands
 
 cmd_setup() {
-    local wallet="" pool="" mode="" threads="" worker="" donate="" start=0 interactive=1
+    local wallet="" pool="" mode="" threads="" worker="" donate="" maxtemp="" start=0 interactive=1
 
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -1007,8 +1007,12 @@ cmd_setup() {
             --pool)    pool="${2:?}"; shift ;;
             --pool=*)  pool="${1#*=}" ;;
             --mode)    mode="${2:?}"; shift ;;
-            --max-temp) SAFE_TEMP="${2:?}"; shift ;;
-            --max-temp=*) SAFE_TEMP="${1#*=}" ;;
+            # Into a local, not into $SAFE_TEMP: load_conf() runs after this
+            # loop and would put the file's value straight back, which is what
+            # made `setup --max-temp 77` print "safe (holding 72 C)" and write
+            # 72. Same trap as --donate below.
+            --max-temp) maxtemp="${2:?}"; shift ;;
+            --max-temp=*) maxtemp="${1#*=}" ;;
             --mode=*)  mode="${1#*=}" ;;
             --threads|--threads=*) threads="${1#*=}"; [ "$threads" = "$1" ] && { threads="${2:?}"; shift; } ;;
             --worker)  worker="${2:?}"; shift ;;
@@ -1051,13 +1055,14 @@ cmd_setup() {
     [ -n "$pool" ] && POOL="$pool"
     [ -n "$worker" ] && WORKER="$worker"
     [ -n "$mode" ] && MODE="$mode"
-    case "$SAFE_TEMP" in
-        ""|*[!0-9]*) : ;;
-        *)
-            [ "$SAFE_TEMP" -ge 45 ] && [ "$SAFE_TEMP" -le 95 ] ||
-                die "--max-temp must be 45..95 degrees Celsius"
-            ;;
-    esac
+    if [ -n "$maxtemp" ]; then
+        case "$maxtemp" in
+            *[!0-9]*) die "--max-temp must be a whole number of degrees Celsius" ;;
+        esac
+        [ "$maxtemp" -ge 45 ] && [ "$maxtemp" -le 95 ] ||
+            die "--max-temp must be 45..95 degrees Celsius"
+        SAFE_TEMP="$maxtemp"
+    fi
     if [ -n "$threads" ]; then
         THREADS="$threads"
         # A hand-picked count is not a measurement, and leaving one behind
@@ -3240,7 +3245,7 @@ fleet_body() {
     log=$(log_payload)
 
     cat <<EOF
-{"device":"$(device_id 2>/dev/null || echo unknown)","version":"$(image_version)","status":{"state":"$state","reason":"$reason","hashrate":${rate:-0},"measured":${measured:-0},"temp":${temp:-0},"uptime":${up:-0},"mode":"$(printf '%s' "$MODE" | safe_value)","wallet":"$(printf '%s' "$WALLET" | safe_value)","pool":"$(printf '%s' "$POOL" | safe_value)","worker":"$(printf '%s' "$WORKER" | safe_value)","coin":"$(printf '%s' "$coin" | safe_value)","threads":"$threads","version":"$(image_version)","slot":"$slot","installed":$installed},"acks":$(acks_payload),"log":$log}
+{"device":"$(device_id 2>/dev/null || echo unknown)","version":"$(image_version)","status":{"state":"$state","reason":"$reason","hashrate":${rate:-0},"measured":${measured:-0},"temp":${temp:-0},"uptime":${up:-0},"mode":"$(printf '%s' "$MODE" | safe_value)","wallet":"$(printf '%s' "$WALLET" | safe_value)","pool":"$(printf '%s' "$POOL" | safe_value)","worker":"$(printf '%s' "$WORKER" | safe_value)","coin":"$(printf '%s' "$coin" | safe_value)","threads":"$threads","maxtemp":"${SAFE_TEMP:-}","version":"$(image_version)","slot":"$slot","installed":$installed},"acks":$(acks_payload),"log":$log}
 EOF
 }
 
