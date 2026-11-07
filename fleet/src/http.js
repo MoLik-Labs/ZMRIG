@@ -163,8 +163,22 @@ function createHandler({
       return json(response, 403, { ok: false, error: 'device key rejected' });
     }
 
-    const record = store.claim(secret, { address: request.socket.remoteAddress });
+    // A key nobody has enrolled still gets a record, and that is the door a
+    // stranger can walk through with curl: random 64-hex tokens, one record
+    // each, each one a full rewrite of the state file. Enrolment is what makes
+    // a device worth keeping, so the unenrolled ones are bounded and expire.
     const stamp = now();
+    // A rig the roster names is expected, so its record is created even when the
+    // door is full: the operator has already decided this machine is theirs.
+    const expected = Boolean(roster && roster.rigs && roster.rigs.has(claimedId));
+    if (!existing && !expected) {
+      const { unowned_limit: limit = 200, unowned_ttl: ttl = 86400 } = config;
+      if (ttl > 0) store.pruneUnowned(ttl * 1000, stamp);
+      const evicted = store.makeRoom(limit, stamp);
+      if (evicted) log(`hello ${claimedId}: evicted ${evicted} unenrolled device(s) to stay under ${limit}`);
+    }
+
+    const record = store.claim(secret, { address: request.socket.remoteAddress });
 
     // A check-in every second is a loop that forgot to sleep, not a fleet.
     const last = lastHello.get(record.id) || 0;

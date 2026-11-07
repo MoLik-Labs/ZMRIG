@@ -20,7 +20,7 @@ const CONFIG = {
   alert_hashrate_drop: 0.5,
 };
 
-async function rig() {
+async function rig(overrides = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zmrig-http-'));
   const store = new Store(path.join(dir, 'state.json')).load();
   const events = [];
@@ -28,7 +28,7 @@ async function rig() {
   // the suite does not sleep through the rate limiter and the alert windows.
   let clock = 1_700_000_000_000;
   const { server } = createServer({
-    config: CONFIG,
+    config: { ...CONFIG, ...overrides },
     store,
     log: () => {},
     now: () => clock,
@@ -254,6 +254,49 @@ test('a command result is reported back to the operators', async () => {
     const failure = fleet.events.find((event) => event.kind === 'ack');
     assert.ok(failure);
     assert.match(failure.text, /wallet rejected/);
+  } finally {
+    await fleet.close();
+  }
+});
+
+test('a stranger cannot fill the state file with unenrolled devices', async () => {
+  // Any 64-hex Bearer token produces a record, because a rig that has never been
+  // enrolled still has to be able to knock. That is also an open door on a host
+  // with a public URL: curl in a loop, a record each, and every one of them is a
+  // full rewrite of the JSON file the fleet keeps its state in — which on Render
+  // is /tmp, so it is RAM, and a free instance has 512 MB of it.
+  const fleet = await rig({ unowned_limit: 20, unowned_ttl: 3600 });
+  try {
+    for (let index = 0; index < 60; index += 1) {
+      const key = crypto.randomBytes(32).toString('hex');
+      const response = await hello(fleet, { status: { state: 'mining' } }, { key });
+      assert.equal(response.status, 200, 'a stranger is still answered, it is the table that is bounded');
+    }
+    assert.ok(fleet.store.unowned() <= 20, `the table stays under the cap, found ${fleet.store.unowned()}`);
+
+    // A real rig is not locked out by the cap, which is the whole reason this
+    // evicts instead of refusing: an operator cannot enrol a machine whose first
+    // check-in was refused, because the enrolment code is checked against the
+    // record that check-in would have made.
+    const fresh = crypto.randomBytes(32).toString('hex');
+    const checkingIn = async () => {
+      fleet.advance(61_000);
+      return hello(fleet, { status: { state: 'mining' } }, { key: fresh });
+    };
+    assert.equal((await hello(fleet, { status: { state: 'starting' } }, { key: fresh })).status, 200);
+    for (let index = 0; index < 5; index += 1) {
+      assert.equal((await checkingIn()).status, 200, 'a rig that keeps checking in keeps its record');
+    }
+    assert.ok(fleet.store.get(ids.deviceId(fresh)), 'the rig waiting to be enrolled survived the flood');
+
+    // Enrolled, it is out of the pool entirely.
+    fleet.store.enrol(ids.deviceId(fresh), 'tg:1');
+    assert.equal((await checkingIn()).status, 200, 'and an owned rig checks in whatever the cap says');
+
+    // Which rigs were evicted is the oldest by last check-in, which is what keeps
+    // the flood from ever touching the ones that are waiting to be enrolled.
+    const survivor = fleet.store.get(ids.deviceId(fresh));
+    assert.ok(survivor.owner, 'the survivor is the one that was enrolled');
   } finally {
     await fleet.close();
   }

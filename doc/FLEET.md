@@ -160,6 +160,23 @@ Any other host works the same way: Node 20+, one port, the environment.
 | `FLEET_QUEUE_LIMIT` | `10` | instructions a rig may have waiting |
 | `FLEET_WEB_PASSWORD` | - | password for the browser dashboard; empty means no dashboard |
 | `FLEET_TRUST_PROXY` | on where the platform says so | believe `X-Forwarded-For` and `X-Forwarded-Proto` |
+| `FLEET_UNOWNED_LIMIT` | `200` | records kept for rigs nobody has enrolled yet |
+| `FLEET_UNOWNED_TTL` | `86400` | seconds before an unenrolled record expires |
+
+Any 64-hex `Authorization: Bearer` token produces a device record, because a rig
+that has never been enrolled still has to be able to knock — and that means
+anybody with `curl` can make one. Each record is memory plus a rewrite of the
+state file, which on Render lives in `/tmp` and is therefore RAM, so the
+unenrolled ones are bounded: past `FLEET_UNOWNED_LIMIT` the **least recently seen
+unenrolled record** is evicted, and one that has been silent for
+`FLEET_UNOWNED_TTL` is dropped on the next check-in from anyone.
+
+Eviction rather than refusal is deliberate. An operator cannot enrol a machine
+whose first check-in was refused: `/enroll` checks the enrolment code against the
+record that check-in would have created. A rig waiting to be enrolled is checking
+in every minute, so it is never the oldest, and a flood of strangers can only
+displace other strangers. Measured: 5 000 anonymous check-ins leave 200 records
+and a 78 KB state file, where before the file grew by one record per request.
 
 `FLEET_TRUST_PROXY` decides two things the dashboard does with headers, and both
 are wrong in a way nobody notices until it matters:
