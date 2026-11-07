@@ -107,6 +107,11 @@ The extra 1-3 % is **not measured here** — no 1 GiB page can be reserved in th
 environment, so that path has never run on it. The fallback path has, and so has
 the composition of the kernel parameters.
 
+The fleet's version now has one home. The dashboard footer was printing 6.44.0
+and the Discord user agent 6.37 while the release was 6.48, because a constant in
+source only moves when somebody remembers; both now read `package.json` once, and
+a test fails on any version literal left in `fleet/src`.
+
 The measurement that goes with it: 2026-11-07, `--bench=3000`, alternating
 between the two configurations on the same host, 897–900 H/s on 4 KiB pages
 against 1090–1094 with a reserved 2 MiB pool, **+21.5 %**. A back-to-back pair
