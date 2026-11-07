@@ -28,7 +28,7 @@ miner ──stratum/tcp:3333──────────────┐
 | Pool fee             | **1.0 %**, taken from each block reward, rounded *down* |
 | Hidden fees          | none                                                   |
 | Where it goes        | published at `/api/config` and on the status page       |
-| Miner-side dev fee   | 0 % (`zmrig` has none, and the pool is GPL-3.0)         |
+| Miner-side dev fee   | 3 % of Monero time on `zmrig` (`--donate-level=0` turns it off) |
 | Payout threshold     | 0.01 XMR, paid in the network fee                       |
 
 The fee is deducted from the block reward before the PPLNS split, never from a
@@ -315,8 +315,11 @@ rejected and nothing is credited. It skips itself if `zmrig` is not built.
 * **The audit log is append-only.** Rotate it with `logrotate`, never rewrite it;
   miners check their own numbers against it.
 * **A pool with zero miners makes zero money.** The fee is only as good as the
-  hashrate behind it; the miner side of this repository (`zmrig`) is where the
-  users come from, which is why it has no developer fee of its own.
+  hashrate behind it, and the miner side of this repository (`zmrig`) is where
+  the users come from. That miner takes 3 % of Monero mining time for the
+  developer — stated in its banner, in `--check`, and switchable off with
+  `--donate-level=0` — and none of that reaches the pool: the pool fee below is
+  the operator's, from the block, and the two are unrelated.
 
 ## License
 
