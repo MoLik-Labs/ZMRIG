@@ -178,6 +178,12 @@ in every minute, so it is never the oldest, and a flood of strangers can only
 displace other strangers. Measured: 5 000 anonymous check-ins leave 200 records
 and a 78 KB state file, where before the file grew by one record per request.
 
+Through real HTTP the same handler took **4 662 anonymous check-ins per second**
+for five seconds (23 313 requests, 16 keep-alive sockets, one core): 200 records
+afterwards, a 118 KB state file, 13 debounced writes, 101 MB resident. The
+per-device rate limiter cannot slow this down, because every request arrives
+with a different key — the cap is what bounds it, and the cap does its job.
+
 `FLEET_TRUST_PROXY` decides two things the dashboard does with headers, and both
 are wrong in a way nobody notices until it matters:
 
