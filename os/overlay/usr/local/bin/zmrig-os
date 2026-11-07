@@ -1062,8 +1062,27 @@ cmd_setup() {
     # command line, so it must never end up waiting at a prompt.
     if [ -z "$wallet" ] && [ -z "$pool" ] && [ -z "$mode" ] && [ "$interactive" = "1" ] && [ -c /dev/tty ]; then
         printf '\n ZMRIG OS setup\n ---------------\n\n'
-        printf 'Monero wallet address: '
-        read -r wallet < /dev/tty
+        # Three tries, with the reason. A person plugging in a screen and a
+        # keyboard is the one operator who can fix a typo, and `die` on the
+        # first one means they reboot the machine to try again - or worse, walk
+        # away from a rig that sits at "no wallet configured" for a week. The
+        # decode happens here, so a wrong character is refused at the console
+        # rather than after the first rejected login.
+        attempt=0
+        while :; do
+            printf 'Monero wallet address: '
+            read -r wallet < /dev/tty || wallet=""
+            [ -n "$wallet" ] || die "a wallet address is required (--wallet)"
+            if validate_wallet "$wallet" "${ALGO:-auto}"; then
+                break
+            fi
+            attempt=$((attempt + 1))
+            printf '\n That address cannot be paid: %s\n' "$(explain_wallet "$wallet" 2>/dev/null || printf 'wrong shape')"
+            if [ "$attempt" -ge 3 ]; then
+                die "giving up after three attempts; run 'zmrig-os setup' again when you have the address"
+            fi
+            printf ' Try again (ctrl-c to stop).\n\n'
+        done
         printf 'Pool host:port [%s]: ' "$POOL_DEFAULT"
         read -r pool < /dev/tty
         printf 'Worker name [%s]: ' "$(hostname 2>/dev/null || echo rig)"

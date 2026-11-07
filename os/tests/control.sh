@@ -26,7 +26,6 @@ WALLET="46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3
 # state of a fresh ISO and of the CI job that has no Zig toolchain.
 DECODER="${ZMRIG_TEST_DECODER:-${ROOT}/zmrig/out/zmrig}"
 if [ "$DECODER" != none ] && [ -x "$DECODER" ]; then
-    export ZMRIG_OS_BIN="$DECODER"
     HAS_DECODER=1
 else
     HAS_DECODER=0
@@ -65,6 +64,11 @@ newroot() {
     mkdir -p "$ROOTDIR/etc/zmrig" "$ROOTDIR/usr/local/bin" "$ROOTDIR/run/zmrig" "$ROOTDIR/var/log"
     export ZMRIG_OS_ROOT="$ROOTDIR"
     export ZMRIG_OS_DRYRUN=1
+    # Not ZMRIG_OS_BIN: several sections below install their own stub miner in
+    # $ROOTDIR/usr/local/bin to drive autotune and update, and an environment
+    # override would shadow it. The wallet tests ask for the real decoder
+    # explicitly, with `env`.
+    unset ZMRIG_OS_BIN
 }
 
 rmroot() { [ -n "${ROOTDIR:-}" ] && rm -rf "$ROOTDIR"; ROOTDIR=""; }
@@ -95,7 +99,8 @@ expect_fail "a wrong leading character is refused" "$TOOL" setup --wallet "9SQLW
 TYPO="${WALLET%?}f"
 [ "$TYPO" = "$WALLET" ] && TYPO="${WALLET%?}g"
 if [ "$HAS_DECODER" = 1 ]; then
-    expect_fail "an address with one wrong character is refused" "$TOOL" setup --wallet "$TYPO" --pool pool.example.com:10001
+    expect_fail "an address with one wrong character is refused" \
+        env ZMRIG_OS_BIN="$DECODER" "$TOOL" setup --wallet "$TYPO" --pool pool.example.com:10001
     contains "checksum" "$CHECK_MSG" && ok "the refusal names the checksum" || bad "the refusal names the checksum: $CHECK_MSG"
 else
     # Without a miner the tool must not pretend: it accepts the shape and the
@@ -108,7 +113,7 @@ fi
 # the whole machine (a VM has no sensor and no MSR, so it exits 1 here), so what
 # is asserted is the wallet line, not the status.
 "$TOOL" setup --wallet "$WALLET" --pool pool.example.com:10001 >/dev/null 2>&1
-CHECK_MSG=$("$TOOL" doctor 2>&1)
+CHECK_MSG=$(env ZMRIG_OS_BIN="$DECODER" "$TOOL" doctor 2>&1 || true)
 if contains "checksum verified" "$CHECK_MSG"; then
     ok "doctor says the checksum was verified"
 elif contains "shape only" "$CHECK_MSG"; then
@@ -120,6 +125,34 @@ if [ "$HAS_DECODER" = 1 ]; then
     contains "checksum verified" "$CHECK_MSG" || bad "with a miner, doctor must say the checksum was verified"
 else
     contains "checksum verified" "$CHECK_MSG" && bad "without a miner, doctor must not claim a checksum check"
+fi
+
+# The interactive prompt is the one place a typo can be fixed by the person who
+# made it. Dying on the first wrong character means a reboot - or a rig that sits
+# at "no wallet configured" - so it asks three times, says why, and accepts the
+# corrected address. This needs a pty, which `script` provides.
+if [ "$HAS_DECODER" = 1 ] && command -v script >/dev/null 2>&1; then
+    PROMPT_ROOT=$(mktemp -d)
+    mkdir -p "$PROMPT_ROOT/etc/zmrig" "$PROMPT_ROOT/usr/local/bin" "$PROMPT_ROOT/run/zmrig" "$PROMPT_ROOT/var/log"
+    prompt_out=$(printf '%s\n%s\n%s\n%s\n%s\n' "$TYPO" "$WALLET" "pool.example.com:10001" "rig1" "max" |
+        ZMRIG_OS_ROOT="$PROMPT_ROOT" ZMRIG_OS_BIN="$DECODER" script -qec "$TOOL setup" /dev/null 2>&1 || true)
+    contains "cannot be paid: checksum does not match" "$prompt_out" &&
+        ok "the prompt says why the address was refused" || bad "the prompt says why the address was refused"
+    contains "Monero wallet address" "$prompt_out" &&
+        ok "the prompt asks again" || bad "the prompt asks again"
+    if [ -f "$PROMPT_ROOT/etc/zmrig/os.conf" ] && grep -q "$WALLET" "$PROMPT_ROOT/etc/zmrig/os.conf"; then
+        ok "the corrected address is what gets saved"
+    else
+        bad "the corrected address is what gets saved"
+    fi
+
+    # Three wrong answers in a row is a person who does not have the address to
+    # hand: say so once and stop, rather than asking for ever.
+    give_up=$(printf '%s\n%s\n%s\n' "$TYPO" "$TYPO" "$TYPO" |
+        ZMRIG_OS_ROOT="$PROMPT_ROOT" ZMRIG_OS_BIN="$DECODER" script -qec "$TOOL setup" /dev/null 2>&1 || true)
+    contains "giving up after three attempts" "$give_up" &&
+        ok "three wrong answers stop the prompt" || bad "three wrong answers stop the prompt"
+    rm -rf "$PROMPT_ROOT"
 fi
 
 expect_fail "an unknown mode is refused" "$TOOL" setup --wallet "$WALLET" --mode turbo
