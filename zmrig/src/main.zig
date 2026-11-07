@@ -118,6 +118,12 @@ pub fn main() !void {
     }
 
     log.global = log.Logger.init(opts.colors, opts.verbose);
+    // `--verify-share` writes a protocol on stdout: one JSON line per share,
+    // nothing else. The sink has to be set here rather than just before
+    // `verify.run`, because the fee banner below is printed first - and a pool
+    // that reads that banner as a share reply drops the share that was in
+    // flight. Everything from this point on belongs on stderr.
+    if (opts.verify_share) log.global.stderr_sink = true;
     stratum.user_agent = opts.user_agent;
     for (opts.pools.items) |pool| {
         if (!pool.tls_insecure) continue;
@@ -133,7 +139,7 @@ pub fn main() !void {
     // what it costs, which coin it applies to, where it goes, how to stop it.
     if (opts.donate_percent == 0) {
         log.global.info("developer fee: off (--donate-level=0); nothing is mined for anyone but your wallet", .{});
-    } else if (opts.version or opts.benchmark or opts.report or opts.self_test or opts.check) {
+    } else if (opts.version or opts.benchmark or opts.report or opts.self_test or opts.check or opts.verify_share) {
         // These paths never mine to a pool, and main prints the fee line in
         // --check. Saying it twice in a 3-second benchmark is noise.
     } else {

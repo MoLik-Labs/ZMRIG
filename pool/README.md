@@ -132,6 +132,21 @@ address in `wallet` mode).
 
 `GET /api/audit?limit=20` returns the same records, newest first.
 
+### Verifying shares
+
+`zmrig --verify-share` is a line protocol: one JSON object in, one out, and
+**its log goes to stderr** — `stdout` belongs to the protocol. The pool keeps one
+verifier per core alive and re-uses it, so the 256 MB RandomX cache is built
+once per round rather than once per share. Measured on 2 vCPU with two
+verifiers: the first share costs 530 ms (cache build) and the next 200 run at
+**103 shares per second**. A rig at 1 kH/s on difficulty 300 submits about one
+share every 0.3 s, so the verifier is idle at the scale this pool is for.
+
+Shares queued behind a busy verifier are dispatched as each one frees, not when
+the next share happens to arrive; a share that cannot be verified within
+`verify_timeout` is dropped with `verification unavailable` rather than accepted
+on trust.
+
 ### What the WebSocket transport refuses
 
 The pool's `/stratum` endpoint is the one that faces the internet through a

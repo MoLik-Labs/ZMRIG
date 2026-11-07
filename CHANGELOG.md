@@ -107,6 +107,19 @@ The extra 1-3 % is **not measured here** — no 1 GiB page can be reserved in th
 environment, so that path has never run on it. The fallback path has, and so has
 the composition of the kernel parameters.
 
+The pool's share verifier had two faults that only show up with the binary it
+ships with. `zmrig --verify-share` printed its fee banner on **stdout** before
+switching the log to stderr, and stdout is the protocol: the first share after a
+verifier was restarted came back as "unreadable verifier output" and was
+dropped. The binary now sets the sink before the banner, and the pool treats a
+`[timestamp]` line on that pipe as noise rather than as a reply.
+
+The second one is worse and would have shown up as a slow pool: the queue was
+only drained when a caller arrived, so with the default one verifier per core,
+shares queued behind a busy slot waited for the *next* share to arrive — and
+timed out. Measured after the fix: 103 shares/s on 2 vCPU with two verifiers,
+530 ms for the first (cache build).
+
 The fleet's version now has one home. The dashboard footer was printing 6.44.0
 and the Discord user agent 6.37 while the release was 6.48, because a constant in
 source only moves when somebody remembers; both now read `package.json` once, and
