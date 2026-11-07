@@ -132,6 +132,22 @@ address in `wallet` mode).
 
 `GET /api/audit?limit=20` returns the same records, newest first.
 
+### What the WebSocket transport refuses
+
+The pool's `/stratum` endpoint is the one that faces the internet through a
+CDN, so its framing is bounded on purpose:
+
+* a frame over 1 MiB closes the connection, before anything is allocated for it;
+* a *message* over 256 KiB closes it too, and that is the bound that matters.
+  RFC 6455 lets a client open a 1 MiB frame with FIN clear and then send
+  continuation frames for ever; a per-frame limit alone leaves the assembler
+  growing by a megabyte per frame from a single socket;
+* a second data frame arriving while a message is still open is a protocol
+  error. Half a login parsed as a message is worse than a closed connection.
+
+Stratum messages are under a kilobyte, plus a few for a job list; the caps are
+two orders of magnitude above anything a miner sends.
+
 ### Forty rigs, one wallet
 
 A miner logs in as `wallet.rig` or `wallet/rig`, and the wallet is the account:

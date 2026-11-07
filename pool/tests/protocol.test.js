@@ -317,3 +317,40 @@ test('HTTP endpoints answer and never leak the payout destination by accident', 
     });
   }
 });
+
+test('a fragmented message cannot grow past the message cap', () => {
+  // The frame cap is not a memory bound: RFC 6455 allows one 1 MB frame with
+  // FIN clear followed by continuation frames for ever, and before this cap
+  // every one of them was kept. One socket, a few seconds, no pool.
+  const closed = [];
+  const connection = new ws.WebSocketConnection(fakeSocket(), () => {});
+  connection.on('close', () => closed.push(true));
+
+  const megabyte = Buffer.alloc(1024 * 1024, 0x41);
+  connection.feed(maskedFrame(0x1, megabyte, { fin: false }));
+  assert.strictEqual(closed.length, 1, 'the first fragment is already over the cap');
+
+  const second = new ws.WebSocketConnection(fakeSocket(), () => {});
+  let secondClosed = false;
+  second.on('close', () => { secondClosed = true; });
+
+  // Small fragments, but enough of them: 300 KB in a 100 KB opening frame
+  // followed by four 50 KB continuations.
+  second.feed(maskedFrame(0x1, Buffer.alloc(100 * 1024, 0x42), { fin: false }));
+  for (let i = 0; i < 4 && !secondClosed; i++) {
+    second.feed(maskedFrame(0x0, Buffer.alloc(50 * 1024, 0x42), { fin: false }));
+  }
+  assert.strictEqual(secondClosed, true, 'continuations stop at the cap');
+});
+
+test('a second data frame inside an open message is a protocol error', () => {
+  const closed = [];
+  const connection = new ws.WebSocketConnection(fakeSocket(), () => {});
+  connection.on('close', () => closed.push(true));
+  connection.on('message', () => { throw new Error('half a message was handed over'); });
+
+  connection.feed(maskedFrame(0x1, '{"id":', { fin: false }));
+  connection.feed(maskedFrame(0x1, '3}', { fin: false }));
+
+  assert.strictEqual(closed.length, 1);
+});
