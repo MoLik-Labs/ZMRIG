@@ -702,6 +702,31 @@ Rules:
 
 ---
 
+## 8b. Memory does not drift
+
+A rig runs for weeks, so a leak of a few megabytes a minute is a rig that dies
+three days after it was installed, and nothing in the log says why. Measured on
+the test host, 2026-11-07: eight minutes at 1.2 kH/s against a fake pool that
+changes the seed and the algorithm underneath it, `-t 2`, 1 422 shares accepted,
+0 rejected.
+
+| t (s) | RSS | VmData | VmPeak |
+|---:|---:|---:|---:|
+| 30 | 2 407 764 KB | 2 422 496 KB | 2 622 108 KB |
+| 240 | 2 417 300 KB | 2 430 176 KB | 2 622 108 KB |
+| 480 | 2 428 824 KB | 2 437 856 KB | 2 622 108 KB |
+
+RSS moves by about 20 MB in total, in steps, and it moves both ways — it is the
+dataset being re-touched after a seed change, not growth. `VmData` and `VmPeak`
+are the honest test for the allocator and they do not move. A second run sampling
+every ten seconds for six minutes showed the same: heap flat, RSS oscillating
+around the dataset, no trend.
+
+Eight minutes is not a week. What it does rule out is the failure mode that
+matters — an allocation per share, per job or per reconnect that is never
+returned, which is visible within a few hundred shares and is what the RSS steps
+would look like if they only ever went up.
+
 ## 9. Troubleshooting
 
 | Symptom | Cause | Fix |

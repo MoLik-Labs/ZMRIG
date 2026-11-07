@@ -157,6 +157,16 @@ là phần dùng được.
 Engine C++ trên cùng host, để tham chiếu: **1075.7 H/s**. Khoảng cách tới engine
 Zig còn nhỏ hơn khoảng cách giữa hai lần chạy.
 
+## Bộ nhớ theo thời gian
+
+Rò rỉ vài megabyte mỗi phút là một rig chết ba ngày sau khi cài, và log không nói
+gì. Tám phút trên máy kiểm thử ở 1,2 kH/s, qua hai lần đổi seed và một lần đổi
+thuật toán: RSS đi từ 2 408 lên 2 429 MB theo từng bước **và đi cả hai chiều**
+(dataset được chạm lại), còn `VmData` và `VmPeak` thì không nhúc nhích — đó mới là
+phép thử thật cho allocator. 1 422 share được nhận, 0 bị từ chối. Tám phút không
+phải một tuần, nhưng nó loại bỏ được kiểu lỗi quan trọng: một cấp phát cho mỗi
+share hoặc mỗi job mà không bao giờ trả lại.
+
 ## Tự đo
 
 ```bash

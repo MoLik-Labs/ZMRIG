@@ -161,6 +161,16 @@ useless, and why the ratios above are the useful part.
 C++ engine on the same host, for reference: **1075.7 H/s**. The gap to the Zig
 engine is smaller than the gap between two runs.
 
+## Memory over time
+
+A leak of a few megabytes a minute is a rig that dies three days after it was
+installed, and the log says nothing. Eight minutes on the test host at 1.2 kH/s,
+across two seed changes and an algorithm switch: RSS moved 2 408 → 2 429 MB in
+steps that go both ways (the dataset being re-touched), while `VmData` and
+`VmPeak` did not move at all — which is the honest test for the allocator.
+1 422 shares accepted, 0 rejected. Eight minutes is not a week, but it does rule
+out an allocation per share or per job that is never returned.
+
 ## Measuring it yourself
 
 ```bash
