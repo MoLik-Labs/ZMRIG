@@ -90,6 +90,13 @@ zmrig ... --donate-level=0      # off; nothing is mined for anyone but you
 zmrig ... --no-donate           # same
 ```
 
+With the installer, the same switch, so nobody has to edit JSON:
+
+```bash
+sudo ./oneclick.sh --wallet 4... --donate-level 0   # a fresh install, no fee
+sudo ./oneclick.sh config --donate-level 5          # rewrite the config, keep the service
+```
+
 In a config file: `"donate-level": 3`. On an appliance, one key:
 
 ```bash
@@ -98,6 +105,8 @@ zmrig-os setup --donate 1       # or 0, or 5, or anything up to 10
 
 The installer writes the value explicitly, so it is visible in `config.json`
 rather than implied, and `zmrig-os doctor` prints what the rig will actually run.
+`11` and `three` are refused before anything is written: the miner would reject
+the config at boot, which is the worst possible time to find out.
 
 ## Checking it
 

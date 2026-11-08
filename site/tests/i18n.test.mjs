@@ -29,6 +29,7 @@ const viPages = walk(VI);
 test("the site has the pages the documentation promises", () => {
   const expected = [
     "intro.md",
+    "install/setup.md",
     "install/quickstart.md",
     "install/builder.mdx",
     "install/installer.md",

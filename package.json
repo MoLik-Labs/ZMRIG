@@ -1,7 +1,7 @@
 {
   "name": "zmrig",
   "version": "6.48.0",
-  "description": "ZMRIG - RandomX miner with a 1% developer fee that is printed and switchable off, by @nggkhaiz",
+  "description": "ZMRIG - RandomX miner with a 3% developer fee that is printed and switchable off, by @nggkhaiz",
   "main": "index.js",
   "directories": {
     "doc": "doc"
@@ -16,7 +16,7 @@
     "test:releases": "bash tests/releases/latest-iso.test.sh && bash tests/releases/version-consistency.test.sh",
     "test:serve": "cd serve && npm test",
     "test:host": "node --test host/tests/*.test.js",
-    "test:docs": "bash tests/docs/links.sh && bash tests/docs/pages.sh && bash tests/docs/identity.sh",
+    "test:docs": "bash tests/docs/links.sh && bash tests/docs/pages.sh && bash tests/docs/identity.sh && bash tests/docs/setup-page.sh",
     "test:pages": "bash tests/docs/pages.sh",
     "build:site": "cd site && npm run build",
     "publish:site": "bash scripts/publish-site.sh",

@@ -1,3 +1,85 @@
+# Unreleased — the page a first-time rig owner reads
+
+_Not a release: no tag, no image. This lands on `BETA` and becomes a version when
+the release is cut._
+
+## One page instead of five
+
+Setting up a rig meant reading `doc/INSTALL.md` for the installer, `doc/DOCKER.md`
+for the container, `doc/OS.md` for the image and `doc/FEE.md` for the fee - four
+documents written for four audiences, and nothing that answered the question a new
+owner actually asks: *which one, and how do I know it worked?*
+
+There is a page for that now, in both languages:
+[Setup from zero](https://molik-labs.github.io/ZMRIG/docs/install/setup) ·
+[Dựng rig từ đầu](https://molik-labs.github.io/ZMRIG/vi/docs/install/setup). It
+puts the three routes in one table, then five checks that each answer a different
+question, then the update matrix, the fee audit, naming the second rig, and the
+failure modes with the log line that identifies each one.
+
+The Vietnamese version is the point of the exercise: a first-time owner reading
+`zmrig-os doctor` output in English is one thing, and a first-time owner reading
+the instructions to get there in Vietnamese is another.
+
+## The commands were checked, not remembered
+
+A setup guide is the one page nobody rereads. Write `zmrig-os restrat`, and it
+reads perfectly, reviews perfectly, and fails in the reader's terminal.
+
+`tests/docs/setup-page.sh` (19 checks) parses both locales the way a reader uses
+them. Every `zmrig-os <command>` must be in the dispatcher's `case`. Every `zmrig
+<flag>` must be in the binary's own usage text. Every `oneclick.sh <subcommand>`
+must be dispatched, and every container command must be handled by the shim. The
+fee it quotes must equal `fee.default_percent`. Both locales must have the same
+sections, the page must be in the sidebar, and the quickstart must link to it.
+
+It found three things on its first run: `plan` and `purge` were implemented but
+missing from `--help`, because the help printed a fixed line range of its own
+header; and `doc/SETUP.md` still quoted a 1 % fee.
+
+## `--donate-level`, because "switchable" is not a switch
+
+The fee was documented as switchable and implemented as switchable, but the only
+way to switch it was to edit `config.json` - or to pass `DONATE=0` to the
+container, or `zmrig-os setup --donate 0` to the appliance. The installer, the one
+route most people take, had no flag at all.
+
+```console
+$ sudo ./oneclick.sh --wallet 4... --donate-level 0      # a fresh install, no fee
+$ sudo ./oneclick.sh config --donate-level 5             # rewrite the config
+$ sudo ./oneclick.sh --donate-level 11
+    xx --donate-level takes 0..10 (the miner's own ceiling), got 11
+```
+
+The value is written into `config.json` explicitly, so the file says what the rig
+pays rather than implying it, and a typo fails at setup instead of at boot.
+
+## The fee sweep now reads the whole tree
+
+`scripts/verify-fee.sh` used to compare the constant against four files. That is
+how the landing page kept "1 % developer fee" for a release after the constant
+moved to 3: the files that were checked were correct. The sweep now reads every
+Markdown, script, JSON and Zig file in the repository - with narrow patterns, so a
+pool's 0.6 % and a `--donate-level=5` example are not mistaken for the developer
+fee - and fails on any percentage that disagrees with the source. 67 statements in
+33 files, including the Vietnamese pages. A separate check fails a page that calls
+the Zig engine fee-free: the C++ engine is the one with no fee code.
+
+It immediately found six stale statements, in `oneclick.sh`, `package.json`,
+`doc/SETUP.md`, `os/build-iso.sh`, `zmrig/src/main.zig` and `zmrig/tests/cli.sh`.
+
+## Links are checked inside a page, too
+
+`tests/docs/links.sh` skipped `#anchor` links that stay on the page, and its
+slugger dropped non-ASCII letters - so every Vietnamese in-page link was
+unverifiable by construction (`#chạy-được-chưa` came out as `#chy-c`). It now
+checks same-page anchors and keeps the accents, uses the archived site's own
+folding rule for `legacy/content/`, and accepts a legacy page slug where the old
+renderer routes `#slug` to another document. 189 links, and it found a dead badge
+anchor in the README on the way.
+
+---
+
 # 6.48.0 — the boot that comes back configured
 
 ## There was no container to pull

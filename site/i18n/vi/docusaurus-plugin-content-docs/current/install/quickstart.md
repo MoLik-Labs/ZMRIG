@@ -6,6 +6,10 @@ image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 
 # Cài trong một lệnh
 
+Chưa chắc đây là cách bạn muốn? [Dựng rig từ đầu](/docs/install/setup) so sánh
+cách này với container và ảnh boot trong một bảng, kèm năm bước kiểm tra để biết
+đã cài xong thật chưa.
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MoLik-Labs/ZMRIG/BETA/oneclick.sh \
   | sudo bash -s -- --wallet 4YourMoneroAddress

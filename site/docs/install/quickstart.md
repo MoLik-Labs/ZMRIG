@@ -6,6 +6,10 @@ image: https://molik-labs.github.io/ZMRIG/img/og-en.png
 
 # Install in one command
 
+Not sure this is the route you want? [Setup from zero](/docs/install/setup)
+compares it with the container and the bootable image in one table, and has the
+five checks that prove the install worked.
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MoLik-Labs/ZMRIG/BETA/oneclick.sh \
   | sudo bash -s -- --wallet 4YourMoneroAddress

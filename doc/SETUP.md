@@ -561,7 +561,7 @@ Then:
 
 ```bash
 sudo ./oneclick.sh status      # service, hashrate, accepted shares
-sudo ./oneclick.sh verify      # self-test + fee audit (1% of Monero time, switchable off)
+sudo ./oneclick.sh verify      # self-test + fee audit (3% of Monero time, switchable off)
 sudo ./oneclick.sh report --power 95   # ZMRIG1. code for the fleet calculator
 ```
 

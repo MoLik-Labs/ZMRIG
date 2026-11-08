@@ -80,6 +80,7 @@ sudo ./oneclick.sh purge      # remove everything, config included (asks first)
 | `--autotune[=SEC]` | search for the best thread count after the build, `SEC` seconds per candidate (default 8). On by default for `zmrig`. |
 | `--no-autotune` | keep the built-in `L3 / 2 MiB` heuristic |
 | `--dry-run` | with `purge`: print what would be removed, delete nothing |
+| `--donate-level N` | developer fee in percent, `0`..`10` (default `3`; `0` turns it off). Written into `config.json` as `donate-level`, printed by `--check`, audited by `scripts/verify-fee.sh`. |
 | `--no-health-restart` | never exit to recover from a stalled miner (default: exit after 15 min of `stalled`/`rejected` so systemd restarts it) |
 | `--ban-cooldown N` | seconds a pool is left alone after it bans this IP (default `900`). A wrong wallet is clamped to at least 30 minutes, because waiting does not fix it. |
 | `--tls` | TLS stratum |

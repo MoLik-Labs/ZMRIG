@@ -1,5 +1,5 @@
 //! zmrig - a RandomX miner written in Zig on top of the RandomX engine shipped
-//! in this repository. 1% of Monero mining time goes to the developer wallet
+//! in this repository. 3% of Monero mining time goes to the developer wallet
 //! (`zmrig/src/fee.zig`), stated in the banner, in `--check` and in the log
 //! whenever a fee session opens; `--donate-level=0` turns it off.
 

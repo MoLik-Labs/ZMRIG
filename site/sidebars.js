@@ -17,6 +17,7 @@ const sidebars = {
       collapsible: true,
       collapsed: false,
       items: [
+        "install/setup",
         "install/quickstart",
         "install/builder",
         "install/installer",

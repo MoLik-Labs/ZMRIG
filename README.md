@@ -11,7 +11,7 @@ by **[@nggkhaiz](https://github.com/NggKhaiz)**
 [![release](https://img.shields.io/badge/release-6.48.0-f2763f)](CHANGELOG.md)
 [![licence](https://img.shields.io/badge/licence-GPL--3.0-blue)](LICENSE)
 [![dev fee](https://img.shields.io/badge/developer%20fee-3%25%20%C2%B7%20off%20switch-f2763f)](doc/FEE.md)
-[![platform](https://img.shields.io/badge/platform-Linux%20x86--64%20%C2%B7%20macOS%20%C2%B7%20Windows-lightgrey)](#build-from-source)
+[![platform](https://img.shields.io/badge/platform-Linux%20x86--64%20%C2%B7%20macOS%20%C2%B7%20Windows-lightgrey)](doc/INSTALL.md)
 [![tests](https://img.shields.io/badge/tests-17%20suites-46b17b)](#tests)
 [![stars](https://img.shields.io/github/stars/MoLik-Labs/ZMRIG?style=flat&color=f2763f)](https://github.com/MoLik-Labs/ZMRIG/stargazers)
 [![last commit](https://img.shields.io/github/last-commit/MoLik-Labs/ZMRIG)](https://github.com/MoLik-Labs/ZMRIG/commits/BETA)
@@ -619,10 +619,11 @@ checks while two of the rows are wrong.
 | `tests/docs/identity.sh` | 25 | the repository knows its own name: owner and repository derived from the git remote, then checked against `package.json`, the site config, the install command and every published copy, with no file outside `legacy/` naming the previous owner |
 | `os/tests/plan.sh` | 120 | the boot arithmetic on its own: memory plans per algorithm and mode, thread counts, page counts against a machine's RAM, isolated-CPU groups picked from real topology, the GRUB environment block merged and padded to exactly 1024 bytes, and the rollback decision at its boundary |
 | `deploy/docker` `node --test 'deploy/docker/tests/*.test.js'` | 55 | the container: the environment mapped onto the miner's command line (the four modes, the fee always explicit, a donation of 11 % refused, `EXTRA_ARGS` never reaching a shell), the cgroup quota capping the thread count from both v2 and v1, the registry checker against a fake registry that demands a token (index → per-architecture manifest → version label, current/available/cannot-tell as 0/3/2), the host updater against a fake `docker` (no pull when current, no recreate after a failed pull), every environment variable on the page matching the one the code reads, and the Dockerfile itself: every `COPY` source present and not hidden by `.dockerignore`, every `--from` naming a stage, every `${ARG}` declared |
+| `tests/docs/setup-page.sh` | 19 | the setup guide only names things that exist, in both languages: every `zmrig-os` command is in the dispatcher, every `zmrig` flag is in the binary's usage text, every `oneclick.sh` subcommand and option is real, every container command is handled by the shim, the fee it quotes is `fee.default_percent`, both locales have the same sections, the page is in the sidebar and linked from the quickstart, and `oneclick.sh --help` lists every subcommand it dispatches |
 | `tests/docs/config-keys.sh` | 18 | every setting in `os.conf.example` appears in the `doc/OS.md` table with the same default — the seven keys that had gone missing were the performance ones |
-| `tests/docs/links.sh` | 108 | every relative link and every `#anchor` in the documentation resolves, including `/docs/…` site routes |
+| `tests/docs/links.sh` | 189 | every relative link, every `#anchor` into another file, and every same-page `#anchor` resolves — including `/docs/…` site routes, and the Vietnamese headings, whose anchors keep their accents |
 | `site` `npm test` | 68 | command builder and its blocked states, calculator arithmetic against hand-computed numbers including break-even, pool table vs `oneclick.sh` and `doc/POOLS.md`, coin matrix and ranking (a missing number is never a zero, no invented pool or price), en/vi key parity and no dead or duplicated message |
-| `tests/docs/pages.sh` | 22 | the published site as Pages serves it: Docusaurus entry point, 27 sidebar pages in both locales, all 2958 local `href`/`src`, both sitemaps, language and theme controls, one localised social card per page, a title/description/lang on every page with no leaked placeholder, old-URL redirects, committed build not stale |
+| `tests/docs/pages.sh` | 22 | the published site as Pages serves it: Docusaurus entry point, 28 sidebar pages in both locales, all 3130 local `href`/`src`, both sitemaps, language and theme controls, one localised social card per page, a title/description/lang on every page with no leaked placeholder, old-URL redirects, committed build not stale |
 | `zmrig/tests/thermal.sh` | 10 | the safe mode against a real process and a real pool: cool is not throttled, heat sheds threads, one thread and hot stops hashing, cooling resumes, no sensor changes nothing |
 | `os/tests/control.sh` | 282 | the appliance tool: wallet validation (length, base58 alphabet, **checksum**, decoded by the miner when there is one), the interactive wizard asking again after a typo, a command line per mode, kernel-command-line overrides, the supervisor waiting for a wallet, an updater that refuses a checksum mismatch, the installer's partition table and its refusals, A/B slot arithmetic and the 1024-byte GRUB environment block, an install that carries the config keys and the kernel parameters onto the disk, the tuner running before the measurement, a mode change invalidating it, the physical-core topology read from a fake 8-core/16-thread sysfs (`-t 7`, mask `0xff`, `AFFINITY=off`, a machine that reports no topology at all), the hardware verdict for a Ryzen, a 2 GB box, a CPU without AVX2 and a machine too small to mine, and every version string in the repository agreeing — all with no root, no miner, no disk and no network |
 | `tests/oneclick/tune-targets.sh` | 7 | the two kernel settings a miner wants that are not the CPU: NUMA balancing turned off by path, every writable IRQ moved to CPU 0, unbound workqueues pinned there, `keep` leaving both alone, and a two-core machine keeping its interrupts spread — driven against a fake `/proc` and `/sys`, so it needs no root and no reboot |
@@ -637,7 +638,10 @@ checks while two of the rows are wrong.
   published, searched (Algolia DocSearch) and translated.
 * **[The site itself](https://molik-labs.github.io/ZMRIG/docs/intro)** —
   [English](https://molik-labs.github.io/ZMRIG/docs/intro) ·
-  [Tiếng Việt](https://molik-labs.github.io/ZMRIG/vi/docs/intro): install guide,
+  [Tiếng Việt](https://molik-labs.github.io/ZMRIG/vi/docs/intro): the
+  [setup guide](https://molik-labs.github.io/ZMRIG/vi/docs/install/setup)
+  ([en](https://molik-labs.github.io/ZMRIG/docs/install/setup)) — three install
+  routes, the checks, the fee audit — plus the install guide,
   command builder, [profitability calculator](https://molik-labs.github.io/ZMRIG/docs/economics/profitability),
   pools, fleet, benchmarks, architecture, testing.
 * [`doc/DOCKER.md`](doc/DOCKER.md) — the published image: every environment
