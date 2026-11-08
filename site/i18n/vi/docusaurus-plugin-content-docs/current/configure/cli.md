@@ -86,7 +86,15 @@ $ zmrig -o gulf.moneroocean.stream:10001 -u 4... --check
 Với mọi thuật toán khác, phép kiểm chỉ là cảnh báo: kho này chỉ nhận là biết định
 dạng của Monero, và một login có dạng địa chỉ nhưng là địa chỉ của đồng CryptoNote
 khác thì không được phép ngăn máy khởi động. `--allow-bad-wallet` biến lý do từ
-chối trở lại thành cảnh báo như trước, cho trường hợp đó.
+chối trở lại thành cảnh báo như trước, cho trường hợp đó. Dòng tóm tắt nói rõ đang
+ở trường hợp nào, để một lần chạy thử của rig Wownero không bị đọc thành "rig này
+sẽ không khởi động":
+
+```console
+$ zmrig -o gulf.moneroocean.stream:10001 -u 4AdUndXH...684Rgf -a rx/wow --check
+  wallet  INVALID: checksum does not match: at least one character is wrong
+          not a Monero address: if this is another coin's address, mining is unaffected (--allow-bad-wallet silences the check)
+```
 
 ## Log và vòng đời
 

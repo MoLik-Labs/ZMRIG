@@ -388,6 +388,22 @@ else
     record FAIL "another coin gets the other sentence" "$(printf '%s' "$wow_check" | grep -i wallet | head -2 | tr '\n' ' ')"
 fi
 
+# The site quotes these two messages verbatim, and a page that quotes output the
+# binary no longer prints is a page that lies in the calmest possible tone. Both
+# languages, because the console block is not translated - it is what the tool
+# printed.
+stale=""
+for page in site/docs/configure/cli.md \
+            site/i18n/vi/docusaurus-plugin-content-docs/current/configure/cli.md; do
+    grep -qF 'if this is another coin' "$ROOT/$page" || stale="$stale $page"
+    grep -qF 'this rig would mine and never be paid' "$ROOT/$page" || stale="$stale $page"
+done
+if [ -z "$stale" ]; then
+    record PASS "the docs quote the message the binary prints" "ok"
+else
+    record FAIL "the docs quote the message the binary prints" "stale:$stale"
+fi
+
 if "$BIN" --help | grep -qF -- "--allow-bad-wallet"; then
     record PASS "--allow-bad-wallet is documented" ""
 else

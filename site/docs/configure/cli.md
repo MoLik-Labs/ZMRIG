@@ -89,7 +89,15 @@ $ zmrig -o gulf.moneroocean.stream:10001 -u 4... --check
 Every other algorithm keeps the check advisory: this repository only claims to
 know Monero's format, and a login that is address-shaped but is another
 CryptoNote coin's address must not stop a rig from starting. `--allow-bad-wallet`
-turns the refusal into the old warning when that is what you have.
+turns the refusal into the old warning when that is what you have. The summary
+line says which case it is, so a dry run of a Wownero rig is not read as a rig
+that will not start:
+
+```console
+$ zmrig -o gulf.moneroocean.stream:10001 -u 4AdUndXH...684Rgf -a rx/wow --check
+  wallet  INVALID: checksum does not match: at least one character is wrong
+          not a Monero address: if this is another coin's address, mining is unaffected (--allow-bad-wallet silences the check)
+```
 
 ## Logging and lifecycle
 
