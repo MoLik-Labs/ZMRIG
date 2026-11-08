@@ -364,8 +364,10 @@ pub fn run(allocator: std.mem.Allocator, logger: *log.Logger, settings: Settings
         if (std.mem.eql(u8, text, "quit")) break;
 
         // Keep the pipeline fed but bounded: this waits for the oldest share
-        // only when the queue is already full.
-        if (driver.in_flight >= driver.max_in_flight) try driver.flushAll(&stdout_buf);
+        // only when the queue is already full, so backpressure costs one reply
+        // rather than a whole batch (a client that pipes 32 shares at a
+        // 2-thread verifier used to be answered eight at a time).
+        if (driver.in_flight >= driver.max_in_flight) try driver.flush(&stdout_buf, true);
         try driver.flush(&stdout_buf, false);
 
         var request = parseRequest(allocator, text) catch |e| {
