@@ -1,0 +1,19 @@
+# Once a day, at a random minute past three, so a fleet of rigs does not all pull
+# the same tag at the same second.
+#
+# Persistent=false: a rig that was off at 03:00 should not start a pull the
+# moment it comes back, while it is busy catching up on its shares. The next
+# window is tomorrow, and an image one day old is not a problem.
+
+[Unit]
+Description=Daily check for a newer zmrig container image
+
+[Timer]
+OnCalendar=*-*-* 03:17
+RandomizedDelaySec=3600
+AccuracySec=1min
+Persistent=false
+Unit=zmrig-docker-update.service
+
+[Install]
+WantedBy=timers.target

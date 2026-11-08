@@ -33,6 +33,7 @@ test("the site has the pages the documentation promises", () => {
     "install/builder.mdx",
     "install/installer.md",
     "install/engines.md",
+    "install/docker.md",
     "appliance/iso.md",
     "appliance/web.md",
     "configure/config-file.md",

@@ -1,5 +1,58 @@
 # 6.48.0 — the boot that comes back configured
 
+## There was no container to pull
+
+Everything in this repository assumed the machine. The installer builds on the
+machine, the image boots the machine, and the pool needs a host with Node on it.
+Anyone who wanted to try a rig for ten minutes had to start by compiling.
+
+There is a published image now, `ghcr.io/molik-labs/zmrig`, built by CI from the
+same commit as the release binaries:
+
+```console
+$ docker run --rm -e WALLET=4YourAddress... -e POOL=gulf.moneroocean.stream:10001 \
+    ghcr.io/molik-labs/zmrig
+```
+
+One image, two jobs. The miner is the default; `pool` runs the Ocean Pool from the
+same bytes, so a rig and the pool it mines to cannot be built from different
+commits. The variables are the ones `zmrig-os` writes to `/etc/zmrig/os.conf`, and
+`docker inspect` answers which commit built what is running.
+
+Three things were not obvious until the image existed:
+
+**A CPU quota is not an affinity mask.** `docker run --cpus=2` limits the group,
+but the process still sees every CPU on the host, so a miner that sizes itself
+from the CPU count asks for one thread per physical core and then has all of them
+throttled together — when the quota is spent the whole group stops, and a thread
+with a dataset page in cache sits idle for the rest of the period. The image reads
+the cgroup quota (v2 `cpu.max`, v1 `cpu.cfs_quota_us`) and caps the automatic
+thread count to it. An explicit `THREADS` is always respected; it is only
+mentioned when it is above the quota.
+
+**A wallet with no default is a refusal, not a convenience.** `WALLET` and `POOL`
+have none: a placeholder wallet hashes for nobody and a default pool would be
+choosing a custodian on the operator's behalf. The shim names the missing variable
+and exits 2. The wallet is then checked at startup by the miner itself, so the
+verdict is in the log of every container whether or not anyone asked for it, and
+`ghcr.io/molik-labs/zmrig check` asks on demand.
+
+**An update needs two halves.** A container cannot replace its own image without
+a Docker socket, and handing a miner the ability to start any container on the
+machine is not a trade worth making. So `update --check` runs *inside* the image
+(the same code whether the host has Node or not) and resolves the published tag
+over anonymous HTTPS, comparing the release label with the version baked into the
+running container; `zmrig-docker-update --apply` runs on the host, pulls, and only
+then recreates. A failed pull leaves the running miner alone. The exit codes are
+`zmrig-os update`'s: 0 current, 3 available, 2 cannot tell — and the daily timer
+treats 2 as a notice, because a unit that goes red when GitHub is unreachable is a
+unit that gets masked.
+
+`deploy/Dockerfile` (the Render/Fly pool service) is unchanged and stays
+deliberately minimal; `deploy/docker/` is the thing people pull. Both build the
+engine out of `src/` and `zmrig/` in the first stage, so neither can ship a
+verifier that does not match the miner.
+
 ## The wallet address is decoded now, not counted
 
 Every address check in this repository was a regex on the alphabet: 95

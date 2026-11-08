@@ -16,6 +16,7 @@ and you move on.
 | 3 | CI for the site (`site.yml`) | 5 min | GitHub **Actions** write (token scope `workflows`) |
 | 4 | Publish the documentation site | 10 min | GitHub Pages, or Cloudflare/Vercel account |
 | 5 | Deploy the pool | 15 min | a `monerod` you control + Render/Fly account |
+| 5e | Make the container image public | 1 min | GitHub **Packages** settings |
 | 5b | Mine a different coin | 10 min | that coin's wallet + a pool endpoint it publishes |
 | 6 | Point one miner at it | 5 min | a Linux box with root |
 | 7 | Optional: releases, custom domain, protection | 10 min | — |
@@ -399,6 +400,39 @@ Worker cannot reach a private address, so `POOL_HOST` must be publicly routable.
 
 `pool/data/` (ledger + `audit.jsonl`) is gitignored on purpose. Keep it that way:
 a ledger in git is a payout history in public, and a bad merge is a wrong payout.
+
+### 5e. Make the container image public
+
+`.github/workflows/image.yml` publishes `ghcr.io/molik-labs/zmrig` on a `v*` tag
+and `edge` from `BETA`/`master`, using the workflow's own `GITHUB_TOKEN` — no
+personal access token is involved, and nothing is built on a laptop.
+
+A **new GHCR package is private**, even in a public repository, and the first
+`docker pull` outside CI then asks for a login that most people will not have.
+This cannot be automated: the API for changing package visibility needs a token
+scope this repository's workflow deliberately does not have.
+
+1. Open `https://github.com/users/MoLik-Labs/packages/container/zmrig/settings`
+   (or **Your profile → Packages → zmrig → Package settings**).
+2. **Danger zone → Change visibility → Public**, and confirm the name.
+3a. Under **Manage access**, the repository `ZMRIG` should be listed as connected,
+   so the package inherits the repository's permissions and a future publish
+   keeps working.
+3b. On the repository page, the package appears under **Packages** on the right;
+   if it does not, use **Connect repository** in the package settings.
+
+Check, from a machine with no GitHub login:
+
+```bash
+docker pull ghcr.io/molik-labs/zmrig:latest
+docker run --rm ghcr.io/molik-labs/zmrig version
+```
+
+Anonymous pulls are what `deploy/docker/update.js` relies on: the container
+resolves its own published tag over public HTTPS, which is why the image can tell
+you a newer release exists without a socket or a token. If the package is private,
+that check answers "cannot tell" (exit 2) instead of failing, and the update
+script reports it as a notice rather than an error.
 
 ---
 

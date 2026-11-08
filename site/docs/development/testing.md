@@ -121,6 +121,24 @@ The link check is the point of `npm run build`: `onBrokenLinks` and
 `onBrokenMarkdownLinks` are both set to `throw`, so a renamed page cannot ship as
 a 404.
 
+## The container, without a daemon
+
+```bash
+node --test 'deploy/docker/tests/*.test.js'
+sh -n deploy/docker/zmrig-docker-update
+```
+
+Everything the image decides is a pure function of its environment, so the
+container is tested with no Docker in it: the variable-to-flag mapping (the four
+modes, a donation of 11 % refused, `EXTRA_ARGS` never reaching a shell), the
+cgroup quota capping the thread count from both cgroup versions, the registry
+checker against a fake registry that demands a token, and the host updater against
+a fake `docker` — no pull when current, never a recreate after a failed pull.
+
+The image itself is built in CI on every pull request (`Published image`), because
+the failures that matter there are the ones only a real image can have: a missing
+`lib/`, a label that was not set, an entrypoint that does not forward SIGTERM.
+
 ## Running tests on a mining machine
 
 The network suite uses its own ports and a fake pool, so it does not touch the

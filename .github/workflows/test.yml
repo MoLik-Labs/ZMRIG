@@ -328,6 +328,83 @@ jobs:
           docker logs pool | tail -20
           docker rm -f pool
 
+  # The environment shim, the registry checker and the host updater. None of
+  # them need a Docker daemon - that is the point of splitting them out of the
+  # image - so the interesting failures (a mode that is not one of the four, a
+  # registry challenge that throws, a pull that recreates a container anyway)
+  # are found in seconds instead of in a fifteen-minute image build.
+  container-shim:
+    name: Container shim (no daemon)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: The environment -> the miner command line, the update checker, the host script
+        run: node --test 'deploy/docker/tests/*.test.js'
+
+      # `zmrig-docker-update` is POSIX sh and runs on machines with no bash; the
+      # suite already parses it with both shells, and this catches the case where
+      # a later edit uses a bashism in a file whose shebang says sh.
+      - name: The host script is shell, not bash
+        run: |
+          sh -n deploy/docker/zmrig-docker-update
+          command -v shellcheck >/dev/null && shellcheck -s sh deploy/docker/zmrig-docker-update || true
+
+  # The image people pull. `deploy/Dockerfile` (the Render pool service) has its
+  # own job below; this one is the two-job package, so a pull request that breaks
+  # its entrypoint or its labels fails here rather than in a release.
+  published-image:
+    name: Published image (docker build)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Build it the way the release does
+        run: |
+          version=$(sed -n 's/^pub const version = "\(.*\)";/\1/p' zmrig/src/main.zig | head -1)
+          docker build -f deploy/docker/Dockerfile \
+            --build-arg "ZMRIG_VERSION=$version" \
+            --build-arg "ZMRIG_REVISION=$GITHUB_SHA" \
+            --build-arg "ZMRIG_TAG=edge" \
+            --build-arg "ZMRIG_JOBS=$(nproc)" \
+            -t zmrig:ci .
+
+      - name: The miner in it runs
+        run: |
+          docker run --rm zmrig:ci version
+          docker run --rm --entrypoint sh zmrig:ci -c 'zmrig --self-test=light'
+          docker run --rm --entrypoint sh zmrig:ci -c 'zmrig --version | grep -q "$ZMRIG_VERSION"'
+
+      - name: The shim refuses, and shows the fee
+        run: |
+          code=0
+          docker run --rm zmrig:ci mine >/tmp/out 2>/tmp/err || code=$?
+          test "$code" = "2" || { echo "expected 2 without a wallet, got $code"; cat /tmp/err; exit 1; }
+          grep -q 'no wallet' /tmp/err
+
+          wallet=46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ
+          docker run --rm -e WALLET="$wallet" -e POOL=p.example:3333 zmrig:ci args | tee /tmp/args
+          grep -q -- '--donate-level 3' /tmp/args
+
+          # The wallet verdict is the binary's own, and a typo is refused.
+          docker run --rm -e WALLET="$wallet" zmrig:ci check | tee /tmp/check
+          grep -q 'OK' /tmp/check
+          code=0
+          docker run --rm -e "WALLET=${wallet%?}f" zmrig:ci check >/tmp/bad 2>&1 || code=$?
+          test "$code" != "0" || { echo "a typo'd address was accepted"; cat /tmp/bad; exit 1; }
+
+      - name: It says which commit it is
+        run: |
+          got=$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' zmrig:ci)
+          test -n "$got" && test "$got" != "0.0.0-dev"
+          docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' zmrig:ci | grep -q "$GITHUB_SHA"
+
   macos:
     name: macOS ${{ matrix.arch }} build and hash tests
     runs-on: ${{ matrix.runner }}
