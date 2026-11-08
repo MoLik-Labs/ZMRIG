@@ -8,8 +8,8 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/assets/js/runtime~main.0f62316f.js" defer="defer"></script>
-<script src="/ZMRIG/assets/js/main.a6a3e851.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/runtime~main.78b771ed.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/main.a7ca145f.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -89,9 +89,21 @@ does not decode.</li>
 long-lived <code>zmrig --verify-share</code> per core so the 256 MB cache is built once
 per round. <code>pool/tests/bench-verify.mjs</code> measures it on your machine; on a
 2 vCPU test box with two verifiers and 200 shares per round the first share
-costs 0.85 s (cache build) and the steady state is 43 shares/s — a rig at
+costs 0.58 s (cache build) and the steady state is 46 shares/s — a rig at
 1 kH/s on difficulty 300 submits about 3.3 shares/s, so that box verifies
 roughly a dozen of them.</li>
+<li class=""><code>VERIFIER_MODE=fast</code> builds the 2 GiB dataset once and reads it per share:
+<strong>2.9 ms a share instead of 22 ms</strong> (349 shares/s per verifier), measured on
+the same box, for 2336 MB of RAM <em>per verifier process</em> and 21 s of startup.
+It is opt-in, and the pool adds that up against <code>/proc/meminfo</code> at startup —
+<code>fast</code> with the default two verifiers is 4.6 GiB, which a 4 GB VPS does not
+have. A verifier that cannot get the dataset falls back to the light cache and
+logs why. Details and the full table are in <code>pool/README.md</code>.</li>
+<li class="">More than one share at a time is <code>VERIFIER_THREADS</code> (threads inside one
+process, one dataset) rather than <code>VERIFIER_CONCURRENCY</code> (more processes, one
+dataset each). Measured warm on the same box: one process with two threads
+does <strong>87 shares/s in light mode and 626 in fast mode</strong>, against 74 and a
+4.6 GiB bill for two processes.</li>
 <li class=""><code>/stratum</code> faces the internet, so its framing is bounded: a frame over 1 MiB
 closes the connection, a <strong>message</strong> over 256 KiB closes it too (a per-frame
 limit alone leaves a client free to send continuation frames for ever), and a

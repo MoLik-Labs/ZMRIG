@@ -150,6 +150,27 @@ threads=$(plan_threads "$MODE" "$cores" "$THREADS_WANT")
 DATASET_MB=$(plan_dataset_mb "$ALGO")
 CACHE_MB=$(plan_cache_mb "$ALGO")
 required_mb=$(plan_need_mb "$ALGO" "$MODE" "$cores" "$THREADS_WANT")
+
+# A cgroup too small for the dataset is not a warning, it is a different program.
+# RandomX maps 2336 MB in one piece; under a 2 GB limit the miner builds the cache
+# and rebuilds the dataset per hash - 973 H/s becomes 99 H/s, measured. Planning
+# for the fast layout anyway is what makes a container feel slow for no reason:
+# every page reserved for a mapping that will be declined is memory the rig does
+# not get back. So when the limit decides it, the plan changes to light - the
+# mode the miner will actually run - and the numbers below follow it.
+MODE_DECIDED=0
+if [ "${MEM_LIMITED:-0}" -eq 1 ] && [ "$MODE" != "light" ] \
+   && [ "$required_mb" -gt "$mem_total_mb" ] && [ -z "$PAGES_WANT" ]; then
+    light_need=$(plan_need_mb "$ALGO" light "$cores" "$THREADS_WANT")
+    if [ "$light_need" -le "$mem_total_mb" ]; then
+        warn "the ${ALGO} dataset needs ${required_mb} MB and this process may use ${mem_total_mb} MB: planning light mode instead (~10x slower, but 10x slower beats a plan that cannot run)"
+        warn "give the container ${required_mb} MB (--memory=$(( (required_mb + 1023) / 1024 ))g) for fast mode"
+        MODE="light"
+        MODE_DECIDED=1
+        threads=$(plan_threads "$MODE" "$cores" "$THREADS_WANT")
+        required_mb=$light_need
+    fi
+fi
 # Pages, capped at RAM minus 512 MB: a partial pool is still worth having, while
 # asking for more pages than exist leaves nothing reserved.
 PAGES=$(plan_pages "$ALGO" "$MODE" "$cores" "$mem_total_mb" 2048 "$THREADS_WANT" "$PAGES_WANT")
@@ -519,3 +540,12 @@ Next steps:
   4. These settings are not persistent across reboots. To persist them, call this
      script from a systemd unit or /etc/rc.local.
 EOF
+
+if [ "${MODE_DECIDED:-0}" -eq 1 ]; then
+    cat <<EOF
+
+This host cannot hold the ${ALGO} dataset: the memory limit decided light mode,
+so the page count above is sized for the ${CACHE_MB} MB cache and the fast plan
+needs ${DATASET_MB} MB more. Raise the limit (container: --memory) to change it.
+EOF
+fi

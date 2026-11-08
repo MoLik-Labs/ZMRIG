@@ -10,12 +10,20 @@ Một image duy nhất, do CI của chính kho này dựng từ cùng một comm
 binary phát hành, đẩy lên registry của GitHub:
 
 ```console
-$ docker run --rm -e WALLET=4YourAddress… -e POOL=gulf.moneroocean.stream:10001 \
+$ docker run --rm --memory=3g \
+    -e WALLET=4YourAddress… -e POOL=gulf.moneroocean.stream:10001 \
     ghcr.io/molik-labs/zmrig
 ```
 
 Không cần cài đặt, không cần compiler, không phụ thuộc gì. `docker inspect` trên
 container đang chạy trả lời được nó được dựng từ commit nào.
+
+**`--memory=3g` không phải để cho đẹp.** RandomX đọc dataset 2336 MB; thiếu RAM
+thì miner lùi về dựng lại dataset từ cache 256 MB, đo được **chậm 10 lần** trên
+cùng số core (973 H/s so với 99 H/s, 2 thread). Docker Desktop mặc định chỉ cho
+container 2 GB, nên dòng lệnh trên là khác biệt giữa một cái rig và một cái lò
+sưởi. `docker run … args` cho biết container của bạn sẽ chạy ở chế độ nào trước
+khi bạn bấm start.
 
 | Tag | Nó là gì |
 | --- | --- |

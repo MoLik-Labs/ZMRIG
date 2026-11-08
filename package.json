@@ -12,7 +12,7 @@
     "test:web": "node --test legacy/tests/*.test.js",
     "test:pool": "node --test pool/tests/*.test.js",
     "test:thermal": "bash zmrig/tests/thermal.sh",
-    "test:oneclick": "bash tests/oneclick/plan.sh && bash tests/oneclick/config.sh && bash tests/oneclick/governor.sh && bash tests/oneclick/tune-targets.sh && bash tests/oneclick/purge.sh",
+    "test:oneclick": "bash tests/oneclick/plan.sh && bash tests/oneclick/config.sh && bash tests/oneclick/governor.sh && bash tests/oneclick/tune-targets.sh && bash tests/oneclick/light-fallback.sh && bash tests/oneclick/purge.sh",
     "test:releases": "bash tests/releases/latest-iso.test.sh && bash tests/releases/version-consistency.test.sh",
     "test:serve": "cd serve && npm test",
     "test:host": "node --test host/tests/*.test.js",

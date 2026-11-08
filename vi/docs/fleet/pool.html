@@ -8,8 +8,8 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.8c714c1c.js" defer="defer"></script>
-<script src="/ZMRIG/vi/assets/js/main.59623d7a.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/runtime~main.9980adcd.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/main.da0277ad.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -83,9 +83,21 @@ sổ PPLNS quá ngắn, ví phí không giải mã được.</li>
 <li class="">Mỗi share đều được pool băm lại trước khi trả (<code>verify_shares</code>), dùng một tiến
 trình <code>zmrig --verify-share</code> sống lâu cho mỗi core để cache 256 MB chỉ dựng một
 lần mỗi round. <code>pool/tests/bench-verify.mjs</code> đo trên chính máy bạn; trên một
-máy thử 2 vCPU với hai verifier và 200 share mỗi round: share đầu 0,85 s (dựng
-cache), trạng thái ổn định <strong>43 share/giây</strong> — một rig 1 kH/s ở độ khó 300 gửi
+máy thử 2 vCPU với hai verifier và 200 share mỗi round: share đầu 0,58 s (dựng
+cache), trạng thái ổn định <strong>39 share/giây</strong> — một rig 1 kH/s ở độ khó 300 gửi
 khoảng 3,3 share/giây, nên máy đó verify được chừng một tá rig.</li>
+<li class=""><code>VERIFIER_MODE=fast</code> dựng dataset 2 GiB một lần rồi đọc lại cho từng share:
+<strong>2,9 ms một share thay vì 22 ms</strong> (349 share/giây mỗi verifier), đo trên cùng
+máy đó, đổi lại 2336 MB RAM <em>cho mỗi tiến trình verifier</em> và 21 s khởi động.
+Đây là lựa chọn phải bật, và pool cộng số đó với <code>/proc/meminfo</code> lúc khởi động
+— <code>fast</code> với hai verifier mặc định là 4,6 GiB, một VPS 4 GB không có. Verifier
+không lấy được dataset sẽ tự lùi về cache nhẹ và ghi lý do vào log. Bảng đầy đủ
+nằm trong <code>pool/README.md</code>.</li>
+<li class="">Muốn verify nhiều share cùng lúc thì dùng <code>VERIFIER_THREADS</code> (nhiều thread
+trong một tiến trình, chung một dataset) chứ không phải <code>VERIFIER_CONCURRENCY</code>
+(nhiều tiến trình, mỗi tiến trình một dataset). Đo khi đã ấm trên cùng máy đó:
+một tiến trình hai thread được <strong>87 share/giây ở chế độ light và 626 ở fast</strong>,
+so với 74 share/giây và hoá đơn 4,6 GiB nếu chạy hai tiến trình.</li>
 <li class=""><code>/stratum</code> là mặt tiếp xúc internet, nên khung truyền có giới hạn: khung quá
 1 MiB thì đóng kết nối, <strong>tin nhắn</strong> quá 256 KiB cũng vậy (chỉ giới hạn từng
 khung thì client vẫn gửi khung nối tiếp mãi được), và một khung dữ liệu thứ hai

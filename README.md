@@ -171,11 +171,16 @@ See every automatic decision and its reason without touching the machine:
 ## Docker
 
 ```bash
-docker run -d --name zmrig --restart unless-stopped \
+docker run -d --name zmrig --restart unless-stopped --memory=3g \
   -e WALLET=4YourMoneroAddress... \
   -e POOL=gulf.moneroocean.stream:10001 \
   ghcr.io/molik-labs/zmrig
 ```
+
+`--memory=3g` is the difference between 973 H/s and 99 H/s: RandomX reads a
+2336 MB dataset, and under a smaller limit the miner rebuilds it from the 256 MB
+cache instead — measured **10x slower**, on the same cores. Docker Desktop hands a
+container 2 GB unless told otherwise.
 
 One image, two jobs: the miner by default, `pool` for the Ocean Pool from the same
 commit. Nothing to install and nothing to compile, and `docker inspect` answers
@@ -199,9 +204,10 @@ count to it. And memory is a cgroup too: `/proc/meminfo` is the host's, so
 the budget is now `min(cgroup, machine)`.
 
 `docker run --rm -e WALLET=… -e POOL=… ghcr.io/molik-labs/zmrig args` prints the
-command line, the thread count it derived, and the two things that cost a
-container the most when they are missing: a host with no huge page pool (~18 %
-of hashrate, measured) and `/dev/cpu/*/msr` for the prefetcher preset. Huge pages
+command line, the thread count it derived, and the three things that cost a
+container the most when they are missing: a memory limit too small for the
+dataset (10x, measured), a host with no huge page pool (~18 %) and
+`/dev/cpu/*/msr` for the prefetcher preset. Huge pages
 themselves need no container flags — the pool is the host's and an unprivileged
 container maps it.
 

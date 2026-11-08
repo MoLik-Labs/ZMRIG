@@ -10,12 +10,20 @@ One image, built by this repository's CI from the same commit as the release
 binaries, published to GitHub's registry:
 
 ```console
-$ docker run --rm -e WALLET=4YourAddress… -e POOL=gulf.moneroocean.stream:10001 \
+$ docker run --rm --memory=3g \
+    -e WALLET=4YourAddress… -e POOL=gulf.moneroocean.stream:10001 \
     ghcr.io/molik-labs/zmrig
 ```
 
 No installation, no compiler, no dependencies. `docker inspect` on a running
 container answers with the commit that built it.
+
+**`--memory=3g` is not decoration.** RandomX reads a 2336 MB dataset; with less
+RAM the miner falls back to rebuilding it from the 256 MB cache, which measured
+**10x slower** on the same cores (973 H/s against 99 H/s, 2 threads). Docker
+Desktop gives a container 2 GB unless told otherwise, so the command above is the
+difference between a rig and a space heater. `docker run … args` says which mode
+your container will land in before you start it.
 
 | Tag | What it is |
 | --- | --- |

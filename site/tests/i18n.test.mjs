@@ -52,6 +52,7 @@ test("the site has the pages the documentation promises", () => {
     "fleet/proxy.md",
     "fleet/pool.md",
     "reference/benchmarks.md",
+    "reference/tool.md",
     "reference/fee.md",
     "development/architecture.md",
     "development/testing.md",

@@ -94,6 +94,9 @@ echo 1073741824 > "$WORK/cgroup/memory.max"
 : > "$WORK/cgroup.self"
 
 limited() { # arguments -> stdout, with a 1024 MB memory limit
+    # Eight cores: the two-core case above is its own test, and the page counts
+    # below are arithmetic over the thread count.
+    echo 8 > "$WORK/cores"
     ZMRIG_CGROUP_ROOT="$WORK/cgroup" \
     ZMRIG_SELF_CGROUP="$WORK/cgroup.self" \
     PATH="$WORK/bin:$PATH" \
@@ -113,17 +116,28 @@ contains "1024 MB usable of" "$out" &&
     pass "the RAM line reports both numbers instead of the host's" ||
     fail "the RAM line reports both numbers instead of the host's"
 
-contains "not reserving pages" "$out" &&
-    pass "a dataset larger than the limit is not reserved" ||
-    fail "a dataset larger than the limit is not reserved"
+# The limit does not just warn: it decides the mode. A 1024 MB container will run
+# light whether or not this script agrees, so the plan becomes light too and the
+# pages it reserves are the 256 MB cache, not a 2336 MB mapping that cannot exist.
+contains "planning light mode instead" "$out" &&
+    pass "a dataset larger than the limit switches the plan to light" ||
+    fail "a dataset larger than the limit switches the plan to light"
 
-contains "would write" "$out" && contains "nr_hugepages" "$out" &&
-    fail "no page write may be planned when the dataset does not fit" ||
-    pass "no page write is planned when the dataset does not fit"
+contains "would write 152 -> " "$out" &&
+    pass "the reservation is sized for the cache, not the dataset" ||
+    fail "the reservation is sized for the cache, not the dataset"
 
-contains "plan: no reservation" "$out" &&
-    pass "the plan line says no reservation instead of a page count" ||
-    fail "the plan line says no reservation instead of a page count"
+contains "would write 1202 -> " "$out" &&
+    fail "a 1024 MB limit must never plan a 2404 MB reservation" ||
+    pass "a 1024 MB limit plans no reservation it cannot hold"
+
+contains "(rx/0 light, 8 thread(s))" "$out" &&
+    pass "the budget line follows the decided mode" ||
+    fail "the budget line follows the decided mode"
+
+contains "--memory=3g" "$out" &&
+    pass "the way back to fast mode is named" ||
+    fail "the way back to fast mode is named"
 
 # A limit that fits is a plan, not a refusal: 3072 MB holds rx/0's 2404 MB.
 echo 3221225472 > "$WORK/cgroup/memory.max"
@@ -131,7 +145,8 @@ out=$(limited --profile free)
 contains "not reserving pages" "$out" &&
     fail "a limit that fits must still reserve pages" ||
     pass "a limit that fits still reserves pages"
-contains "would write 1202 -> " "$out" &&
+# 2416 MB of fast-mode budget on 8 threads is 1208 pages, under the 3072 MB cap.
+contains "would write 1208 -> " "$out" &&
     pass "the reservation is capped by the limit, not by host RAM" ||
     fail "the reservation is capped by the limit, not by host RAM"
 
