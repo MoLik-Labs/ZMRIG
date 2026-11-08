@@ -527,6 +527,15 @@ throughput.
 survive a reboot; with `ISOLATE=0` the miner goes back to `AFFINITY=auto`, pinned
 to every physical core.
 
+`zmrig-os install` carries all of it across: the keys the installed rig boots
+from and the parameters in its GRUB environment block are written by the same
+code that writes them on the running system, so a stick set up as `isolate 4`
+installs as a rig with four isolated CPUs, and one with a 1 GiB reservation
+installs with it. Both files used to have their own copy of that writer, and the
+installer's copy had never learned `ISOLATE`, `HUGEPAGES` or `HUGEPAGES_1G`: the
+installed rig came up mining on every core with no reservation, and nothing in
+the log said anything had changed.
+
 ## Where the numbers come from
 
 How many pages an algorithm needs and which CPUs isolation will take are not

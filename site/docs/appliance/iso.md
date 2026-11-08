@@ -116,6 +116,13 @@ Both halves are written, because either one alone buys nothing:
 * `--cpu-affinity` for the miner, plus the IRQ masks moved to the remaining CPUs
   every time the supervisor starts.
 
+Installing carries all of it onto the disk: `zmrig-os install` writes the
+installed rig's config and its GRUB environment block with the same code that
+writes them on the running system. Those were two copies of one writer for a
+while, and the installer's copy had never learned `ISOLATE`, `HUGEPAGES` or
+`HUGEPAGES_1G`, so a stick set up as `isolate 4` installed as a rig mining on
+every core, with a log that said everything was fine.
+
 `ISOLATE=4` in `/etc/zmrig/os.conf`, or `zmrig.os.isolate=4` on the kernel
 command line, makes it survive a reboot; `ISOLATE=0` hands the machine back to
 `AFFINITY=auto`, which pins the miner to every physical core. The thread count

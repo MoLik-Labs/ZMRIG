@@ -45,6 +45,48 @@ The pool's tests were the only suite CI did not run. They run now, in a `pool`
 job, together with the fee audit: a change to the payout path could previously
 break the ledger, the address check or the share verifier and merge green.
 
+## The one address nobody checked was the pool's own
+
+Every login is checked, and the fee destination is not a login: it is a value in
+a config file, published at `/api/config` and on the status page, and every fee
+payment goes to it. One wrong character in it is still 95 base58 characters, so
+the shape check that guarded it passed, and the pool would have run happily
+collecting fees for a key nobody holds.
+
+`validateConfig` now decodes it before anything starts. Ledger mode still
+tolerates a placeholder — nothing leaves the box — but a string shaped like an
+address has to decode, checksum included, or the pool refuses to start and says
+which character class is wrong.
+
+## The image was missing the file that decodes addresses
+
+`pool/src/address.js` is a two-line re-export of `lib/address.js`, and
+`deploy/Dockerfile` copied `pool/` but not `lib/`. That was invisible while the
+require was lazy — on the login path — so the image built, started, answered
+`/api/config` and passed every check; the first rig to connect would have
+crashed it. Checking the fee address at startup turned it into a build-time
+failure, which is how it was found.
+
+The image copies `lib/`, a CI step runs the decoder inside the image (a real
+address decodes, a typo is refused), and a test walks every
+`require('../../…')` in `pool/src` and asserts `deploy/Dockerfile` copies that
+directory. Removing the `COPY` makes it fail, which is the only way to know a
+regression test is one.
+
+## One typo, one alert
+
+Every rig on a farm reports the same wallet, and they check in within seconds of
+each other, so a bad address in the shared config produced one alert per rig:
+eleven identical warnings about one problem, which is how a chat gets muted. The
+alert is keyed by the address now — rigs that have already been told stay quiet,
+the message that goes out says how many machines it affects (`💸 5 rigs all mine
+to an address that cannot be paid - …`), and it comes once per cooldown.
+
+Suppressing the repeat also suppressed the rest of that check-in for a while,
+which would have left every rig on such a farm unwatched apart from the first to
+speak; the test asserts a rig whose wallet warning was suppressed still reports
+its hashrate halving.
+
 Five bugs in the installed appliance, all of them quiet: each one made a rig look
 healthier than it was, and none of them printed a warning. Found by reading the
 boot path against the tests that claim to cover it.
@@ -62,6 +104,23 @@ mining on every core, and the log said it had rolled back successfully.
 Both writers now build the block with `plan_grubenv_block` in `os/plan.sh`, which
 parses what is there, replaces one key, and pads back to exactly 1024 bytes. A key
 too large for the block is refused rather than written truncated.
+
+## An installed rig forgot how it had been set up
+
+`zmrig-os install` writes the config the installed system boots from, and it did
+that with its own copy of the config heredoc. The running system's copy learned
+`ISOLATE`, `HUGEPAGES` and `HUGEPAGES_1G`; the installer's never did. A stick
+prepared with `zmrig-os isolate 4` and then installed produced a rig with no
+isolation at all — mining on every core, on the machine whose owner had just
+asked it not to — and the log said the install had gone well. It is the same
+failure as the `zmrig_extra` one below, in a different file.
+
+There is one writer for the config (`conf_body`) and one for the environment
+block (`grubenv_set path key value`). The install uses them for the target's
+`/etc/zmrig/os.conf` and for `zmrig_extra` in its GRUB block, so the parameters
+the stick booted with are the parameters the disk boots with. The test asserts
+the two config files have *the same keys*, not that three particular ones are
+present: the next key somebody adds is the one a spot check misses.
 
 ## The installed menu never read `zmrig_extra`
 

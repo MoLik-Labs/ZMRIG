@@ -117,6 +117,12 @@ Cả hai nửa đều được ghi, vì chỉ một nửa thì không mua đư�
 * `--cpu-affinity` cho miner, và mặt nạ ngắt được dời sang các CPU còn lại mỗi
   lần supervisor khởi động.
 
+Cài đặt mang theo tất cả những thứ đó lên ổ: `zmrig-os install` ghi file cấu hình
+của rig đã cài và GRUB environment block của nó bằng đúng đoạn mã ghi trên hệ thống
+đang chạy. Hai chỗ đó từng là hai bản sao của cùng một hàm ghi, và bản của installer
+chưa bao giờ biết `ISOLATE`, `HUGEPAGES` hay `HUGEPAGES_1G` — nên một USB đặt
+`isolate 4` lại cài ra một rig đào trên mọi lõi, với log nói rằng mọi thứ đều ổn.
+
 `ISOLATE=4` trong `/etc/zmrig/os.conf`, hoặc `zmrig.os.isolate=4` trên dòng lệnh
 nhân, để nó sống qua lần khởi động lại; `ISOLATE=0` trả máy lại cho `AFFINITY=auto`,
 tức ghim miner vào toàn bộ lõi vật lý. Số luồng đi theo mặt nạ: rig `balanced` trên

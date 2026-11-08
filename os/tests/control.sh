@@ -722,6 +722,12 @@ fn() { # function name, args...
     local name="$1"; shift
     ZMRIG_OS_NO_MAIN=1 ZMRIG_OS_ROOT="$ROOTDIR" sh -c '. "$1"; shift; "$@"' _ "$TOOL" "$name" "$@"
 }
+# The same, for the functions that read the configuration first. Sourcing alone
+# leaves every setting unset, and the tool is `set -u`.
+fnc() { # function name, args...
+    local name="$1"; shift
+    ZMRIG_OS_NO_MAIN=1 ZMRIG_OS_ROOT="$ROOTDIR" sh -c '. "$1"; shift; load_conf; "$@"' _ "$TOOL" "$name" "$@"
+}
 
 pts=$(fn partition_script)
 contains "label: gpt" "$pts" && ok "the install writes a GPT" || bad "the install writes a GPT"
@@ -762,6 +768,44 @@ fn grubenv_init "$ROOTDIR/grubenv.new"
 [ "$(wc -c < "$ROOTDIR/grubenv.new" | tr -d ' ')" = "1024" ] &&
     ok "a new install writes a 1024-byte environment block" || bad "the block is the wrong size"
 grep -q '^zmrig_slot=a$' "$ROOTDIR/grubenv.new" && ok "and it starts on slot a" || bad "and it starts on slot a"
+
+# The installer writes the config the installed rig boots with, and reading its
+# own copy of that heredoc was a mistake once: `conf_to_media` never learned
+# ISOLATE, HUGEPAGES or HUGEPAGES_1G, so a stick configured with `isolate 4`
+# installed as a rig mining on every core, and nothing anywhere said so. One
+# writer now, and this asserts the two files have the same keys - not "these
+# three happen to be present", which is what the next key would slip past.
+mkdir -p "$ROOTDIR/etc/zmrig"
+printf 'WALLET="%s"\nPOOL="pool.example.com:10001"\nISOLATE="2"\nHUGEPAGES="9"\nHUGEPAGES_1G="1"\n' \
+    "$WALLET" > "$ROOTDIR/etc/zmrig/os.conf"
+fnc conf_to_media "$ROOTDIR/installed.conf" >/dev/null 2>&1
+fnc save_conf >/dev/null 2>&1
+keys_of() { sed -n 's/^\([A-Z][A-Z_0-9]*\)=.*/\1/p' "$1" 2>/dev/null | sort | tr '\n' ' '; }
+[ "$(keys_of "$ROOTDIR/installed.conf")" = "$(keys_of "$ROOTDIR/etc/zmrig/os.conf")" ] &&
+    ok "an install writes the same keys as the running config" ||
+    bad "the installed config has different keys: $(keys_of "$ROOTDIR/installed.conf") vs $(keys_of "$ROOTDIR/etc/zmrig/os.conf")"
+contains 'ISOLATE="2"' "$(cat "$ROOTDIR/installed.conf" 2>/dev/null)" &&
+    ok "and it keeps the isolated CPU count" || bad "the installed config lost ISOLATE"
+contains 'HUGEPAGES_1G="1"' "$(cat "$ROOTDIR/installed.conf" 2>/dev/null)" &&
+    ok "and the gigantic page reservation" || bad "the installed config lost HUGEPAGES_1G"
+
+# The kernel parameters for that install, from the same pure function that
+# writes the running system's block.
+params=$(fnc boot_params_value)
+contains "default_hugepagesz=1G hugepagesz=1G hugepages=1" "$params" &&
+    ok "the boot parameters carry the 1 GiB page reservation" ||
+    bad "the boot parameters lost the reservation: $params"
+
+# A fresh install's block: empty of parameters, and it takes them by name while
+# keeping the slot.
+fn grubenv_init "$ROOTDIR/grubenv.inst" >/dev/null 2>&1
+fn grubenv_set "$ROOTDIR/grubenv.inst" zmrig_extra "$params" >/dev/null 2>&1
+contains "zmrig_extra=${params}" "$(cat "$ROOTDIR/grubenv.inst" 2>/dev/null)" &&
+    ok "the installed block gets the kernel parameters" || bad "the installed block did not get them"
+grep -q '^zmrig_slot=a$' "$ROOTDIR/grubenv.inst" &&
+    ok "and keeps the slot it booted with" || bad "writing the parameters lost the slot"
+[ "$(wc -c < "$ROOTDIR/grubenv.inst" | tr -d ' ')" = "1024" ] &&
+    ok "and the block is still 1024 bytes" || bad "the block changed size"
 
 plan=$(fn install_plan /dev/sda /m/vmlinuz /m/initramfs.gz /m/rootfs.squashfs /dev/sda2 /dev/sda3)
 contains "BOOTX64.EFI" "$plan" && ok "the plan installs the EFI loader" || bad "the plan installs the EFI loader"

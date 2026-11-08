@@ -316,14 +316,16 @@ _kc() {
     awk -F= -v k="$2" '$1 == k { v = substr($0, index($0, "=") + 1); gsub(/^"|"$/, "", v); out = v } END { print out }' "$1"
 }
 
-save_conf() {
-    mkdir -p "$ETC" 2>/dev/null || true
-    local tmp="${CONF}.new"
-
-    cat > "$tmp" <<EOF
-# ZMRIG OS configuration. Edited by \`zmrig-os setup\` and \`zmrig-os mode\`;
-# everything here survives a reboot only when a ZMRIGDATA partition is present
-# (\`zmrig-os persist /dev/sdX\`), because the image itself is read-only.
+# The configuration file: one writer, because there used to be two.
+#
+# `save_conf` wrote the running system and `conf_to_media` wrote the copy the
+# installed rig boots from, and they were two copies of the same heredoc. The
+# installer's copy drifted: it never learned `ISOLATE`, `HUGEPAGES` or
+# `HUGEPAGES_1G`, so a rig set up as `zmrig-os isolate 4` on the live stick and
+# then installed came up mining on every core, with a log that said everything
+# had gone well. A key added here now exists in both files or in neither.
+conf_body() {
+    cat <<EOF
 WALLET="${WALLET}"
 POOL="${POOL}"
 WORKER="${WORKER}"
@@ -353,6 +355,20 @@ EXTRA_ARGS="${EXTRA_ARGS}"
 FLEET_URL="${FLEET_URL}"
 FLEET_INTERVAL="${FLEET_INTERVAL:-$FLEET_INTERVAL_DEFAULT}"
 EOF
+}
+
+save_conf() {
+    mkdir -p "$ETC" 2>/dev/null || true
+    local tmp="${CONF}.new"
+
+    {
+        cat <<EOF
+# ZMRIG OS configuration. Edited by \`zmrig-os setup\` and \`zmrig-os mode\`;
+# everything here survives a reboot only when a ZMRIGDATA partition is present
+# (\`zmrig-os persist /dev/sdX\`), because the image itself is read-only.
+EOF
+        conf_body
+    } > "$tmp"
 
     # Deliberately not wrapped in `run`: ZMRIG_OS_DRYRUN exists to preview
     # privileged system changes (mounts, dd, reboot), and writing the config is
@@ -407,15 +423,23 @@ other_slot() { case "$1" in a) printf 'b' ;; *) printf 'a' ;; esac; }
 # used to forget the other - which is how a rig boots the wrong slot after
 # somebody isolates a few CPUs.
 write_grubenv() { # key value
-    local env="${BOOT_DIR}/grub/grubenv"
     [ -d "${BOOT_DIR}/grub" ] || return 1
+    grubenv_set "${BOOT_DIR}/grub/grubenv" "$1" "$2"
+}
+
+grubenv_set() { # path key value
+    local env="$1"
+    # The file itself may not exist yet - a fresh install seeds an empty block -
+    # but the directory has to: a write into a directory that is not there is a
+    # bootloader that is not there either.
+    [ -d "$(dirname "$env")" ] || return 1
 
     # The block is built by plan.sh, which merges the keys already in it. The
     # initramfs calls the same function: it used to have its own copy that
     # replaced the block, so an automatic rollback dropped `zmrig_extra` and the
     # rig came back without its isolated CPUs. One implementation, two callers.
     if command -v plan_grubenv_block >/dev/null 2>&1; then
-        plan_grubenv_block "$1" "$2" "$env" > "${env}.new" 2>/dev/null || { rm -f "${env}.new"; return 1; }
+        plan_grubenv_block "$2" "$3" "$env" > "${env}.new" 2>/dev/null || { rm -f "${env}.new"; return 1; }
         mv "${env}.new" "$env" 2>/dev/null || return 1
         return 0
     fi
@@ -426,7 +450,7 @@ write_grubenv() { # key value
     # file as an error, so /dev/null stands in for it.
     local src="$env"
     [ -r "$env" ] || src=/dev/null
-    awk -v key="$1" -v value="$2" -v total=1024 '
+    awk -v key="$2" -v value="$3" -v total=1024 '
         BEGIN { head = "# GRUB Environment Block\n" }
         {
             if ($0 == "" || substr($0, 1, 1) == "#") next
@@ -625,7 +649,14 @@ steer_irqs() {
 # isolating CPUs after reserving gigantic pages used to overwrite the
 # reservation, which is exactly the silent loss this file was already fixed for
 # once (see doc/ARCHITECTURE.md on plan_grubenv_block).
-write_boot_params() {
+# The kernel parameters this rig needs, as one string.
+#
+# Pure and separate from writing it, because there are two places to write: the
+# running system's block (`write_boot_params`) and the block on a disk being
+# installed. Installing used to seed an empty one, so a live stick configured as
+# `zmrig-os isolate 4` produced an installed rig that ignored the isolation and
+# reported nothing about it.
+boot_params_value() {
     local cpus extra=""
     cpus=$(iso_list)
     if [ -n "$cpus" ]; then
@@ -639,6 +670,12 @@ write_boot_params() {
             extra="${extra:+$extra }default_hugepagesz=1G hugepagesz=1G hugepages=${HUGEPAGES_1G}"
             ;;
     esac
+    printf '%s' "$extra"
+}
+
+write_boot_params() {
+    local extra
+    extra=$(boot_params_value)
     write_grubenv zmrig_extra "$extra" || return 1
     say "next boot: ${extra:-no kernel parameters set}"
 }
@@ -2407,7 +2444,7 @@ grubenv_init() { # path
 }
 
 cmd_install() {
-    local disk="" yes=0 autotune=1 mode="" confirm bytes root_part esp_part
+    local disk="" yes=0 autotune=1 mode="" confirm bytes root_part esp_part install_params
     local kernel initramfs squashfs efi core bootimg rootfs_mnt esp_mnt
 
     while [ $# -gt 0 ]; do
@@ -2607,6 +2644,20 @@ EOF2
     # 1024 bytes: GRUB ignores an environment block of any other size.
     grubenv_init "${rootfs_mnt}/boot/grub/grubenv"
 
+    # The kernel parameters go with the install. A fresh block starts empty, and
+    # a rig whose live stick had `isolate 4` or a 1 GiB page reservation lost
+    # both at the moment it was installed - silently, because the tool that
+    # wrote them was on the stick and the block was on the disk.
+    install_params=$(boot_params_value)
+    if [ -n "$install_params" ]; then
+        if grubenv_set "${rootfs_mnt}/boot/grub/grubenv" zmrig_extra "$install_params"; then
+            say "boot      $install_params"
+        else
+            warn "could not write the kernel parameters into the installed boot block; add these by hand:"
+            say "  $install_params"
+        fi
+    fi
+
     # The config the installed system boots with: the same wallet, pool and
     # mode, plus the marker that makes /etc/zmrig persistent.
     mkdir -p "${rootfs_mnt}/etc/zmrig"
@@ -2663,35 +2714,15 @@ EOF2
 # Writes the current configuration to a path, in the same format load_conf reads.
 conf_to_media() { # path
     local out="$1"
-    cat > "$out" <<EOF2
+    mkdir -p "$(dirname "$out")" 2>/dev/null || true
+
+    {
+        cat <<EOF
 # ZMRIG OS configuration. Written by \`zmrig-os\`; the initramfs reads this file
 # on every boot, so it is the one that survives.
-WALLET="${WALLET}"
-POOL="${POOL}"
-WORKER="${WORKER}"
-MODE="${MODE}"
-ALGO="${ALGO}"
-THREADS="${THREADS}"
-DONATE="${DONATE}"
-SAFE_TEMP="${SAFE_TEMP:-$SAFE_TEMP_DEFAULT}"
-MSR="${MSR}"
-API_PORT="${API_PORT}"
-API_HOST="${API_HOST}"
-API_TOKEN="${API_TOKEN}"
-AUTO_REBOOT="${AUTO_REBOOT}"
-AUTO_UPDATE="${AUTO_UPDATE:-1}"
-AUTO_IMAGE="${AUTO_IMAGE:-0}"
-AUTO_AUTOTUNE="${AUTO_AUTOTUNE:-1}"
-AUTOTUNED="${AUTOTUNED:-}"
-MEASURED_THREADS="${MEASURED_THREADS:-}"
-MEASURED_HS="${MEASURED_HS:-}"
-AFFINITY="${AFFINITY:-auto}"
-TUNED_AT="${TUNED_AT:-}"
-CHANNEL="${CHANNEL}"
-EXTRA_ARGS="${EXTRA_ARGS}"
-FLEET_URL="${FLEET_URL}"
-FLEET_INTERVAL="${FLEET_INTERVAL:-$FLEET_INTERVAL_DEFAULT}"
-EOF2
+EOF
+        conf_body
+    } > "$out"
 }
 
 # The thread search, shared by `zmrig-os autotune` and the installer, because

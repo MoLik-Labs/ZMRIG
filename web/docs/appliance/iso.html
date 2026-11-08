@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/assets/js/runtime~main.577f95f0.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/runtime~main.d1ad769a.js" defer="defer"></script>
 <script src="/ZMRIG/assets/js/main.dda710d9.js" defer="defer"></script>
 </head>
 <body>
@@ -83,6 +83,12 @@ by one function, so isolating CPUs after reserving 1 GiB pages keeps both, and
 <li class=""><code>--cpu-affinity</code> for the miner, plus the IRQ masks moved to the remaining CPUs
 every time the supervisor starts.</li>
 </ul>
+<p>Installing carries all of it onto the disk: <code>zmrig-os install</code> writes the
+installed rig&#x27;s config and its GRUB environment block with the same code that
+writes them on the running system. Those were two copies of one writer for a
+while, and the installer&#x27;s copy had never learned <code>ISOLATE</code>, <code>HUGEPAGES</code> or
+<code>HUGEPAGES_1G</code>, so a stick set up as <code>isolate 4</code> installed as a rig mining on
+every core, with a log that said everything was fine.</p>
 <p><code>ISOLATE=4</code> in <code>/etc/zmrig/os.conf</code>, or <code>zmrig.os.isolate=4</code> on the kernel
 command line, makes it survive a reboot; <code>ISOLATE=0</code> hands the machine back to
 <code>AFFINITY=auto</code>, which pins the miner to every physical core. The thread count

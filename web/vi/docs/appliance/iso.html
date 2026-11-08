@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.67d59003.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/runtime~main.6a362b79.js" defer="defer"></script>
 <script src="/ZMRIG/vi/assets/js/main.6ebd84ff.js" defer="defer"></script>
 </head>
 <body>
@@ -84,6 +84,11 @@ tách CPU sau khi đã đặt trang 1 GiB thì cả hai đều còn, và
 <li class=""><code>--cpu-affinity</code> cho miner, và mặt nạ ngắt được dời sang các CPU còn lại mỗi
 lần supervisor khởi động.</li>
 </ul>
+<p>Cài đặt mang theo tất cả những thứ đó lên ổ: <code>zmrig-os install</code> ghi file cấu hình
+của rig đã cài và GRUB environment block của nó bằng đúng đoạn mã ghi trên hệ thống
+đang chạy. Hai chỗ đó từng là hai bản sao của cùng một hàm ghi, và bản của installer
+chưa bao giờ biết <code>ISOLATE</code>, <code>HUGEPAGES</code> hay <code>HUGEPAGES_1G</code> — nên một USB đặt
+<code>isolate 4</code> lại cài ra một rig đào trên mọi lõi, với log nói rằng mọi thứ đều ổn.</p>
 <p><code>ISOLATE=4</code> trong <code>/etc/zmrig/os.conf</code>, hoặc <code>zmrig.os.isolate=4</code> trên dòng lệnh
 nhân, để nó sống qua lần khởi động lại; <code>ISOLATE=0</code> trả máy lại cho <code>AFFINITY=auto</code>,
 tức ghim miner vào toàn bộ lõi vật lý. Số luồng đi theo mặt nạ: rig <code>balanced</code> trên
