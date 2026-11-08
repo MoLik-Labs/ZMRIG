@@ -108,6 +108,68 @@ else
     expect_ok "the shape is accepted when there is no miner to ask" "$TOOL" setup --wallet "$WALLET" --pool pool.example.com:10001
 fi
 
+# ------------------------------------------- a config the rig can still boot
+#
+# The supervisor treats a miner that exits as a crash, and five crashes in a row
+# reboot the machine - so a value the miner rejects is a rig that reboots
+# forever. Every field with a domain is checked when the file is read, and a
+# value outside it falls back to the default with a warning. These are the values
+# a power cut or a tired operator actually produce.
+printf 'WALLET="%s"\nTHREADS=abc\nDONATE=99\nSAFE_TEMP=200\nAPI_PORT=99999\nMODE=nonsense\nALGO=rx/bogus\n' \
+    "$WALLET" > "$ROOTDIR/etc/zmrig/os.conf"
+CHECK_MSG=$("$TOOL" args 2>&1)
+status=$?
+[ "$status" = 0 ] && ok "a config with junk values still starts the miner" \
+                  || bad "a config with junk values exits ${status}: $(printf '%s' "$CHECK_MSG" | head -1)"
+for pair in "THREADS=abc" "DONATE=99" "SAFE_TEMP=200" "API_PORT=99999" "MODE=nonsense" "ALGO=rx/bogus"; do
+    # Captured, not piped: `grep -q` closes the pipe on the first match, the
+    # tool takes SIGPIPE on its next warning, and `pipefail` then reports a
+    # failure for a test that matched. (It did, for a while.)
+    warnings=$("$TOOL" args 2>&1 >/dev/null)
+    case "$warnings" in
+        *"${pair} in os.conf"*) ok "a junk ${pair%%=*} is reported, not passed to the miner" ;;
+        *)                      bad "a junk ${pair%%=*} is passed through silently" ;;
+    esac
+done
+case "$CHECK_MSG" in
+    *"-t abc"*|*"-t 0 "*|*"--max-temp 200"*|*"--http-port 99999"*)
+        bad "a junk value reached the miner command line" ;;
+    *)  ok "no junk value reaches the miner command line" ;;
+esac
+case "$CHECK_MSG" in
+    *"--donate-level 3"*) ok "a fee outside 0..10 falls back to the documented 3 %" ;;
+    *)                    bad "the fee fallback is not in the command line: $CHECK_MSG" ;;
+esac
+
+# ... and the file is truncated by a power cut mid-line, which is what an
+# appliance actually loses. Everything after the break is gone; the rig still
+# has to come up with what is left.
+printf 'WALLET="%s"\nMODE="bal' "$WALLET" > "$ROOTDIR/etc/zmrig/os.conf"
+CHECK_MSG=$("$TOOL" args 2>&1)
+case "$CHECK_MSG" in
+    *"-u $WALLET"*) ok "a truncated os.conf still yields the wallet that survived" ;;
+    *)              bad "a truncated os.conf loses the wallet: $CHECK_MSG" ;;
+esac
+
+# A worker name is free text to a pool and a word to a shell: a space used to
+# split `-p my rig` into two arguments and a `*` was expanded against the
+# working directory.
+"$TOOL" setup --wallet "$WALLET" --pool pool.example.com:10001 --worker "my rig *" >/dev/null 2>&1
+CHECK_MSG=$("$TOOL" args 2>&1)
+case "$CHECK_MSG" in
+    *"-p my-rig--"*) ok "a worker name with a space and a glob is made safe" ;;
+    *)               bad "the worker name reaches the miner unchanged: $(printf '%s' "$CHECK_MSG" | head -1)" ;;
+esac
+
+# The domain checks must not reject a value that is merely zero-padded: a fleet
+# that writes `DONATE=03` means three, not "not a number".
+printf 'WALLET="%s"\nDONATE=03\n' "$WALLET" > "$ROOTDIR/etc/zmrig/os.conf"
+CHECK_MSG=$("$TOOL" args 2>&1)
+case "$CHECK_MSG" in
+    *"--donate-level 3 "*) ok "DONATE=03 reads as three" ;;
+    *)                    bad "DONATE=03 was not parsed: $CHECK_MSG" ;;
+esac
+
 # doctor is the other place an operator looks, and it has to say exactly what
 # was checked: a decoded checksum, or a counted shape. Its exit status is about
 # the whole machine (a VM has no sensor and no MSR, so it exits 1 here), so what

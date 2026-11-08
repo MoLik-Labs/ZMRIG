@@ -216,6 +216,116 @@ fn quotaFromMax(root: []const u8, rel: []const u8, path_buf: []u8, text_buf: []u
     return @intCast(@max(quota / period, 1));
 }
 
+/// Bytes this process may still allocate before its cgroup memory limit is
+/// reached, or null when there is no limit (bare metal, and every container
+/// started without `--memory`).
+///
+/// `/proc/meminfo` is not namespaced: inside `docker run --memory=1g` on a 32 GB
+/// host it reports the host, so the miner picked fast mode, mapped a 2336 MB
+/// dataset and was OOM-killed a second later. The limit is the only number that
+/// describes the machine the process actually runs on, and the difference
+/// between a rig that starts and one that dies during startup.
+///
+/// What is subtracted is memory the kernel cannot take back: `anon` in
+/// memory.stat (v2) or memory.usage_in_bytes minus the reclaimable page cache -
+/// page cache is *not* subtracted, because a container that has read 500 MB of
+/// files has not lost that memory, it has merely borrowed it.
+pub fn cgroupMemory() ?MemoryBudget {
+    return memoryBudgetFrom(cgroupRoot(), readSelfCgroup() orelse "");
+}
+
+/// A cgroup memory limit and what is left of it. Two numbers, because they
+/// answer different questions: the limit is "what was this container given",
+/// and the remainder is "can the dataset fit right now". Reporting the
+/// remainder as the limit said "limited to 824 MB" about a 1 GiB container.
+pub const MemoryBudget = struct {
+    limit: u64,
+    available: u64,
+};
+
+/// Pure apart from the files under `root`: `self_cgroup` is the text of
+/// /proc/self/cgroup, so every layout can be tested against a fixture.
+pub fn memoryBudgetFrom(root: []const u8, self_cgroup: []const u8) ?MemoryBudget {
+    var path_buf: [256]u8 = undefined;
+    var text_buf: [128]u8 = undefined;
+
+    // --- cgroup v2: memory.max and memory.current next to each other.
+    var v2_path: ?[]const u8 = null;
+    var it = std.mem.splitScalar(u8, self_cgroup, '\n');
+    while (it.next()) |line| {
+        if (std.mem.startsWith(u8, line, "0::")) v2_path = std.mem.trim(u8, line[3..], " \r\t");
+    }
+
+    if (v2_path) |rel| {
+        if (memoryFromDir(root, rel, &path_buf, &text_buf)) |budget| return budget;
+    }
+    if (memoryFromDir(root, "", &path_buf, &text_buf)) |budget| return budget;
+
+    // --- cgroup v1: the memory controller's own directory.
+    var v1_path: ?[]const u8 = null;
+    it = std.mem.splitScalar(u8, self_cgroup, '\n');
+    while (it.next()) |line| {
+        const first_colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
+        const second_colon = std.mem.indexOfScalarPos(u8, line, first_colon + 1, ':') orelse continue;
+        const controllers = line[first_colon + 1 .. second_colon];
+        if (std.mem.indexOf(u8, controllers, "memory") == null) continue;
+        v1_path = std.mem.trim(u8, line[second_colon + 1 ..], " \r\t");
+    }
+
+    if (v1_path) |rel| {
+        if (!std.mem.eql(u8, rel, "/") and rel.len > 0) {
+            if (memoryFromDir(root, rel, &path_buf, &text_buf)) |budget| return budget;
+        }
+        // A daemon that is not containerised lives at "/" with the controller
+        // mounted at <root>/memory, not at the root itself.
+        if (memoryFromDir(root, "/memory", &path_buf, &text_buf)) |budget| return budget;
+    }
+
+    return null;
+}
+
+/// The limit of one cgroup directory, or null when it has none. Tries v2 first
+/// and falls back to v1, because the same call has to work on the host and in
+/// an image built on an older base.
+fn memoryFromDir(root: []const u8, rel: []const u8, path_buf: []u8, text_buf: []u8) ?MemoryBudget {
+    const dir = if (rel.len == 0 or std.mem.eql(u8, rel, "/"))
+        root
+    else
+        std.fmt.bufPrint(path_buf, "{s}{s}", .{ root, rel }) catch return null;
+
+    const limit = readNumberIn(text_buf, dir, "memory.max") orelse
+        readNumberIn(text_buf, dir, "memory.limit_in_bytes") orelse return null;
+
+    // v1 spells "no limit" as a number just under 2^63, and a limit larger than
+    // the machine is not a limit either: clamping to either would invent a
+    // budget and send a bare-metal rig into light mode.
+    if (limit >= (1 << 62)) return null;
+
+    const held = nonReclaimable(text_buf, dir) orelse
+        readNumberIn(text_buf, dir, "memory.current") orelse
+        readNumberIn(text_buf, dir, "memory.usage_in_bytes") orelse 0;
+
+    return .{ .limit = limit, .available = limit - @min(held, limit) };
+}
+
+/// `anon` from memory.stat: the pages that cannot be reclaimed. A cgroup at its
+/// limit but full of file cache has room, and treating the cache as a resident
+/// allocation is how a working container gets told it cannot mine.
+fn nonReclaimable(text_buf: []u8, dir: []const u8) ?u64 {
+    var path_buf: [256]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buf, "{s}/memory.stat", .{dir}) catch return null;
+    const text = readFile(text_buf, path) orelse return null;
+
+    var it = std.mem.splitScalar(u8, text, '\n');
+    while (it.next()) |line| {
+        const key_end = std.mem.indexOfScalar(u8, line, ' ') orelse continue;
+        if (!std.mem.eql(u8, line[0..key_end], "anon")) continue;
+        return std.fmt.parseInt(u64, std.mem.trim(u8, line[key_end + 1 ..], " \r\t"), 10) catch null;
+    }
+
+    return null;
+}
+
 fn readSelfCgroup() ?[]const u8 {
     const text = readFile(&read_self_buf, "/proc/self/cgroup") orelse return null;
     return text;
@@ -765,6 +875,58 @@ test "the quota only lowers the default, and never to zero" {
     try testing.expectEqual(@as(usize, 1), @max(@min(free, @as(usize, 1)), 1));
     // A quota larger than the machine changes nothing at all.
     try testing.expectEqual(free, @min(free, @as(usize, 64)));
+}
+
+test "a container memory limit is read from v2 and v1" {
+    const testing = std.testing;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.makePath("memory");
+    try tmp.dir.makePath("docker/abc");
+
+    // v2, a container with 1 GiB and a page cache: 600 MB of anon is resident,
+    // the rest is reclaimable, so 424 MB is still available. Not the 32 GB
+    // /proc/meminfo reports inside it, which is the bug this exists for.
+    try tmp.dir.writeFile(.{ .sub_path = "docker/abc/memory.max", .data = "1073741824\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "docker/abc/memory.stat", .data = "anon 629145600\nfile 0\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "memory.max", .data = "max\n" });
+
+    var root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const root = try tmp.dir.realpath(".", &root_buf);
+
+    const container = memoryBudgetFrom(root, "0::/docker/abc\n").?;
+    try testing.expectEqual(@as(u64, 1073741824), container.limit);
+    try testing.expectEqual(@as(u64, 444596224), container.available);
+    // A namespace where the process sits at the root: the container's own limit.
+    try tmp.dir.writeFile(.{ .sub_path = "memory.max", .data = "536870912\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "memory.stat", .data = "anon 268435456\n" });
+    const at_root = memoryBudgetFrom(root, "0::/\n").?;
+    try testing.expectEqual(@as(u64, 536870912), at_root.limit);
+    try testing.expectEqual(@as(u64, 268435456), at_root.available);
+
+    // v1: limit and usage, with a limit just under 2^63 meaning "unlimited".
+    // A host runs one hierarchy or the other, so the v2 files go back to
+    // unlimited first - a fixture with both would be testing a machine that
+    // does not exist (and would let a v2 answer mask a broken v1 read).
+    try tmp.dir.writeFile(.{ .sub_path = "memory.max", .data = "max\n" });
+    try testing.expect(memoryBudgetFrom(root, "7:memory:/x\n") == null);
+    try tmp.dir.writeFile(.{ .sub_path = "memory/memory.limit_in_bytes", .data = "2147483648\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "memory/memory.usage_in_bytes", .data = "1073741824\n" });
+    const v1 = memoryBudgetFrom(root, "7:memory:/\n").?;
+    try testing.expectEqual(@as(u64, 2147483648), v1.limit);
+    try testing.expectEqual(@as(u64, 1073741824), v1.available);
+
+    // v1 unlimited is a number, not the word: it must read as no limit at all.
+    try tmp.dir.writeFile(.{ .sub_path = "memory/memory.limit_in_bytes", .data = "9223372036854771712\n" });
+    try testing.expect(memoryBudgetFrom(root, "7:memory:/\n") == null);
+
+    // A bare-metal machine has neither file: null, and no arithmetic on junk.
+    var empty = testing.tmpDir(.{});
+    defer empty.cleanup();
+    var empty_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const empty_root = try empty.dir.realpath(".", &empty_buf);
+    try testing.expect(memoryBudgetFrom(empty_root, "0::/\n") == null);
 }
 
 test "an empty CPU list produces no threads instead of crashing" {

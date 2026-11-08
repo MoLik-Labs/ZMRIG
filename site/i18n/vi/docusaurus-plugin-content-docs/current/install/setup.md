@@ -98,6 +98,11 @@ miner:
 docker run --rm -e WALLET=4YourMoneroAddress ghcr.io/molik-labs/zmrig args
 ```
 
+Lệnh đó cũng nói ra hai lý do phía container khiến rig đào chậm hơn cái máy bên
+cạnh: host chưa giữ huge page (khoảng 18 % hashrate, đã đo — `sysctl -w
+vm.nr_hugepages=1168` trên host là xong, container không cần cờ nào), và thiếu
+`/dev/cpu/*/msr` cho preset prefetcher.
+
 Mọi biến môi trường ở [tài liệu container](/docs/install/docker).
 
 ## C. Ảnh boot

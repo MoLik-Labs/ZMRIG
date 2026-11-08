@@ -102,18 +102,32 @@ explicitly, so the number a rig pays is visible in `args` instead of being a
 default inside a binary. Three percent is the default; `DONATE=0` turns it off and
 the build fails its own tests if the code and the documentation disagree.
 
+**Huge pages need one host command and no container flags.** The pool belongs to
+the kernel (`sysctl -w vm.nr_hugepages=1168`, or `zmrig-os hugepages` on the
+appliance), and an unprivileged container maps it: an anonymous `MAP_HUGETLB`
+mapping needs no capability, which was measured — 2336 MB of 2336 MB came from
+the pool with `CapEff: 0` and no `/dev/hugepages` mount. `docker run … args`
+prints both cases by name, including the 18 % a missing pool costs.
+
+**`--memory` is a real limit and it decides the mode.** `rx/0` maps 2336 MB;
+under a smaller limit the miner keeps only the 256 MB cache and rebuilds the
+dataset per hash, about 10× slower. It says so at startup and in `--check`, and
+the `memory` line prints what it will actually map rather than what it would like
+to. Give the container 3 GiB, or pick `MODE=light` deliberately.
+
 ## What a container cannot do
 
-Huge pages are reserved by the kernel at boot, MSR writes need `/dev/cpu/*/msr`,
-and thermal sensors are not namespaced. The image says so instead of failing
-quietly:
+MSR writes need `/dev/cpu/*/msr` and root, and thermal sensors are not
+namespaced. The image says so instead of failing quietly:
 
-* **Huge pages** need `--cap-add=IPC_LOCK` and a `/dev/hugepages` mount, on top of
-  the host reserving them (`sysctl vm.nr_hugepages`, or `zmrig-os hugepages`).
-* **MSR writes** (`MSR=on`) let a container poke CPU registers; `MSR=auto` leaves
-  it to the miner's probe, which will say no.
+* **MSR writes** (`MSR=on`) need `--device /dev/cpu/0/msr --cap-add SYS_RAWIO
+  --user 0`, one `--device` per CPU: a root container poking CPU registers, worth
+  5-15 % on bare metal and nothing in a VM. `MSR=auto` leaves it to the miner's
+  probe, which will say no.
 * **`MODE=safe`** reads the host's sensors, which is what you want — and why the
   governor belongs on the host when the host runs more than one container.
+* **The CPU governor and interrupt affinity** are host-wide: `scripts/tune-linux.sh`
+  on the host is the other half of `--profile free`.
 
 ## Updating
 

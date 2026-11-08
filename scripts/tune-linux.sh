@@ -131,6 +131,17 @@ fi
 read_meminfo() { awk -v k="$1" '$1 == k":" { print $2 }' /proc/meminfo; }
 
 mem_total_mb=$(( $(read_meminfo MemTotal) / 1024 ))
+# ...but MemTotal is the host's, and it is not namespaced. Inside a container or
+# a `systemd MemoryMax=` slice the limit is the number that decides whether a
+# 2.3 GB pool is useful or is 2.3 GB taken away from the machine for a dataset
+# this process cannot map.
+mem_limit_mb=$(plan_memory_limit_mb)
+if [ -n "$mem_limit_mb" ] && [ "$mem_limit_mb" -gt 0 ] && [ "$mem_limit_mb" -lt "$mem_total_mb" ]; then
+    info "memory: this process may use ${mem_limit_mb} MB (cgroup limit); the host reports ${mem_total_mb} MB"
+    MEM_HOST_MB=$mem_total_mb
+    MEM_LIMITED=1
+    mem_total_mb=$mem_limit_mb
+fi
 cores=$(nproc)
 
 # The mode decides how many threads the miner will actually run, and the thread
@@ -148,6 +159,21 @@ PAGES=$(plan_pages "$ALGO" "$MODE" "$cores" "$mem_total_mb" 2048 "$THREADS_WANT"
 GIGA_PAGES=$(( (required_mb + 1023) / 1024 ))
 [ "$GIGA_PAGES" -lt 1 ] && GIGA_PAGES=1
 
+# A pool smaller than the dataset is not a partial win. RandomX asks for one
+# contiguous mapping, so 900 MB of pages behind a 2336 MB request is a mapping
+# that does not exist - the miner falls back to 4 KiB pages and the host has
+# lost 900 MB for nothing. When the cgroup is the smaller number, say why and
+# leave the kernel alone.
+if [ "${MEM_LIMITED:-0}" -eq 1 ] && [ "$required_mb" -gt "$mem_total_mb" ]; then
+    if [ -n "$PAGES_WANT" ]; then
+        warn "the ${ALGO} ${MODE} dataset needs ${required_mb} MB and this process may use ${mem_total_mb} MB; reserving ${PAGES_WANT} page(s) anyway because --pages asked for it"
+    else
+        warn "the ${ALGO} ${MODE} dataset needs ${required_mb} MB but this process may only use ${mem_total_mb} MB: not reserving pages (the miner will run in light mode, ~10x slower)"
+        warn "give the container more memory, or set --mode light so the plan matches what will run"
+        HUGE_MODE="off"
+    fi
+fi
+
 show_status() {
     step "Current state"
 
@@ -155,12 +181,16 @@ show_status() {
     hp_total=$(read_meminfo HugePages_Total)
     hp_free=$(read_meminfo HugePages_Free)
     hp_size=$(read_meminfo Hugepagesize)
-    info "Hardware: ${cores} threads, ${mem_total_mb} MB RAM"
+    if [ -n "${MEM_HOST_MB:-}" ]; then
+        info "Hardware: ${cores} threads, ${mem_total_mb} MB usable of ${MEM_HOST_MB} MB (cgroup limit)"
+    else
+        info "Hardware: ${cores} threads, ${mem_total_mb} MB RAM"
+    fi
 
     if [ "${hp_total:-0}" -gt 0 ] 2>/dev/null; then
         ok "2MB huge pages: ${hp_free}/${hp_total} free (${hp_size} kB each)"
     else
-        warn "2MB huge pages: none reserved (RandomX will run with 4KB pages -> up to 25% slower)"
+        warn "2MB huge pages: none reserved (RandomX will run with 4KB pages -> ~18% slower, measured)"
     fi
 
     local one_g
@@ -191,7 +221,11 @@ show_status() {
 
     info "RandomX memory budget for this host: ~${required_mb} MB (${ALGO} ${MODE}, ${threads} thread(s))"
     info "dataset ${DATASET_MB} MB + cache ${CACHE_MB} MB for ${ALGO}"
-    info "plan: ${PAGES} x 2MB pages, or ${GIGA_PAGES} x 1GB page(s); ${mem_total_mb} MB RAM"
+    if [ "$HUGE_MODE" = "off" ]; then
+        info "plan: no reservation (huge pages off, or the dataset does not fit this process's memory limit)"
+    else
+        info "plan: ${PAGES} x 2MB pages, or ${GIGA_PAGES} x 1GB page(s); ${mem_total_mb} MB RAM"
+    fi
 }
 
 if [ "$STATUS_ONLY" -eq 1 ]; then
@@ -253,7 +287,7 @@ verify_huge_pages() {
         warn "only ${got} of ${want} pages could be reserved ($((got * 2)) MB); the miner will report a partial fallback"
         warn "free memory or lower the reservation, then re-run"
     else
-        warn "the kernel reserved 0 pages: the miner will fall back to 4 KiB pages and lose up to 25% hashrate"
+        warn "the kernel reserved 0 pages: the miner will fall back to 4 KiB pages and lose ~18% hashrate"
         warn "this is common inside containers (read-only /proc/sys) - reserve on the host instead"
     fi
 }

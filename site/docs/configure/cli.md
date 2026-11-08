@@ -242,7 +242,7 @@ and costs nothing — 2 MiB pages are where almost all of the gain is.
 The `memory` line is the coin's own size — `panthera maps 192 MB, 96 pages` —
 and the `thp` line answers the question it raises: `madvise` and `always` mean
 the kernel backs the mapping with 2 MiB pages without any root step, `never`
-means it does not and the miner will be ~20 % slower until pages are reserved.
+means it does not and the miner will be ~18 % slower until pages are reserved.
 
 `--check` reads the file and prints; it opens no socket and allocates no
 dataset. If the file is root-only, run it with `sudo` or you get

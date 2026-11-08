@@ -196,3 +196,71 @@ test('every variable the shim reads is in the documented list', () => {
     assert.ok(KNOWN_ENV.includes(name), `${name} is read but not listed in KNOWN_ENV (and so not in doc/DOCKER.md)`);
   }
 });
+
+// --- what the container cannot see ----------------------------------------
+//
+// The notes `args` prints are the answer to "why is this container slower than
+// the host it runs on". They are computed from /proc/meminfo and the cgroup, so
+// they are tested with those two things injected: a test host's page pool must
+// not decide whether CI passes.
+const { perfNotes } = require('../entry.js');
+
+const MEMINFO = (free, size = 2048) =>
+  `HugePages_Total:   ${free}\nHugePages_Free:    ${free}\nHugepagesize:      ${size} kB\n`;
+
+test('a host with no reserved pages is reported, with the command that fixes it', () => {
+  const notes = perfNotes({}, { meminfo: MEMINFO(0), hasMsr: true });
+  assert.equal(notes.length, 1);
+  assert.match(notes[0], /huge pages: none are reserved on the host/);
+  assert.match(notes[0], /sysctl -w vm\.nr_hugepages=1168/);
+});
+
+test('a reserved pool in a container that may use it is silent', () => {
+  const notes = perfNotes({}, { meminfo: MEMINFO(1168), hugetlbBytes: null, hasMsr: true });
+  assert.deepEqual(notes, []);
+});
+
+test('a pool the container may not touch is reported, not praised', () => {
+  const notes = perfNotes({}, { meminfo: MEMINFO(1168), hugetlbBytes: 0, hasMsr: true });
+  assert.equal(notes.length, 1);
+  assert.match(notes[0], /the host has 1168 free pages of 2 MiB but this container's hugetlb limit is 0/);
+});
+
+test('1 GiB pages are described in their own size, not as 512 MiB', () => {
+  const notes = perfNotes({}, { meminfo: MEMINFO(0, 1048576), hasMsr: true });
+  assert.match(notes[0], /4 KiB pages instead of 1024 MiB/);
+});
+
+test('the MSR preset is reported as unavailable, and not when it cannot apply', () => {
+  const absent = perfNotes({}, { meminfo: MEMINFO(1168), hasMsr: false });
+  assert.equal(absent.length, 1);
+  assert.match(absent[0], /\/dev\/cpu\/0\/msr is not in this container/);
+
+  // `--no-msr` and `safe` never open the device, so telling them about it is noise.
+  assert.deepEqual(perfNotes({ MSR: 'off' }, { meminfo: MEMINFO(1168), hasMsr: false }), []);
+  assert.deepEqual(perfNotes({ MODE: 'safe' }, { meminfo: MEMINFO(1168), hasMsr: false }), []);
+});
+
+test('both notes can appear at once, and neither repeats the thread-count note', () => {
+  const notes = perfNotes({}, { meminfo: MEMINFO(0), hasMsr: false });
+  assert.equal(notes.length, 2);
+  assert.match(notes[0], /huge pages/);
+  assert.match(notes[1], /msr:/);
+});
+
+test('a kernel without /proc/meminfo says nothing rather than guessing', () => {
+  assert.deepEqual(perfNotes({}, { meminfo: '', hasMsr: false }), []);
+});
+
+test('the notes belong to `args`, so a restarting rig does not log advice', () => {
+  const env = { ...BASE };
+  const opts = { cpus: 4, tty: false, meminfo: MEMINFO(0), hasMsr: false };
+
+  const mine = plan([], env, opts);
+  assert.equal(mine.perf, undefined, 'mine must not carry the container notes');
+
+  const listing = plan(['args'], env, opts);
+  assert.equal(listing.perf.length, 2);
+  // and the command line itself is unchanged by them
+  assert.deepEqual(listing.argv, mine.argv);
+});

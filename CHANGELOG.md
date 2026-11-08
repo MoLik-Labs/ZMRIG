@@ -3,6 +3,59 @@
 _Not a release: no tag, no image. This lands on `BETA` and becomes a version when
 the release is cut._
 
+## The container was sized for the host it ran on
+
+Three numbers decided how fast a container mined, and every one of them came from
+the host rather than from the container:
+
+* **Threads** were `os.cpus().length`, which lists the host's CPUs even under
+  `--cpuset-cpus=0-1`. Now `os.availableParallelism()`, the same
+  `sched_getaffinity` call the miner makes, so the shim and the miner agree about
+  how big this machine is. The quota still caps it, and an explicit `THREADS` is
+  still respected with a warning.
+* **Memory** was `/proc/meminfo`, which is not namespaced: `--memory=1g` on a 32 GB
+  host looked like 30 GB of headroom, and `--bench` passed its own memory check
+  right up to the OOM kill. `zmrig` now reads `memory.max`/`memory.limit_in_bytes`
+  and uses the smaller of that and the machine for the fast/light verdict, the
+  huge-page plan and the benchmark pre-flight. `--check` prints the limit, what is
+  left of it, and what will actually be mapped (`256 MB`, not `2336 MB`, when the
+  answer is light mode); `--bench` refuses with the cgroup named instead of
+  starting an allocation that cannot finish.
+* **Huge pages** were documented as needing `--cap-add=IPC_LOCK` and a
+  `/dev/hugepages` mount. They do not. An anonymous `MAP_HUGETLB` mapping needs no
+  capability at all, which was measured rather than assumed: with `CapEff: 0` and
+  no hugetlbfs mount, a process mapped **2336 MB of 2336 MB** from the reserved
+  pool and benchmarked 936.4 H/s. `docker run … args` now says which of the two
+  things that *do* block it applies - an empty host pool, or a cgroup hugetlb
+  limit of 0 - instead of a capability that was never required.
+
+The measurement that keeps the advice honest: 936.4 H/s from the pool against
+920.5 with transparent huge pages and **771.0 H/s on 4 KiB pages**, so the
+warning that said "~20 %" (and one place that said "up to 25 %") now says ~18 %,
+which is what both measuring sessions found.
+
+## The tuning script planned a reservation the container could not use
+
+`tune-linux.sh` sized the huge page reservation from `MemTotal`. Inside a VPS
+whose container has 2 GB of a 32 GB machine that is 32 GB, so `zmrig-tune`
+reserved 2.3 GB out of the *host's* pool for a dataset the container could never
+map - the host paid for it and the rig gained nothing. The plan is now capped by
+the cgroup limit (`memory.max`, or `memory.limit_in_bytes`; both read at the path
+`/proc/self/cgroup` names), the "Hardware" line reports `1024 MB usable of 3939 MB
+(cgroup limit)`, and when the dataset does not fit at all the reservation is
+skipped with the reason and the light-mode suggestion rather than a page count
+that cannot be satisfied. `--pages N` still wins, because it was asked for.
+
+## A junk `os.conf` is a rig that reboots every ten minutes
+
+`zmrig-os` passed `os.conf` straight to the miner's command line. `THREADS=abc`
+made the miner exit, the supervisor counted an exit as a crash, and five of those
+rebooted the machine - unattended, at three in the morning, over a typo in a file
+nobody was looking at. Every field now has a domain: out-of-range values fall back
+to the default with one `warning:` line naming the field and its new value, and
+the rig starts. `WORKER` and `API_TOKEN` are sanitised to the character set a
+stratum login can carry instead of splitting the argument list.
+
 ## One page instead of five
 
 Setting up a rig meant reading `doc/INSTALL.md` for the installer, `doc/DOCKER.md`

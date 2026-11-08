@@ -145,6 +145,87 @@ function readNumber(file) {
   }
 }
 
+// --- what this container cannot see ---------------------------------------
+//
+// Two of the three things that move RandomX hashrate most are properties of the
+// *container*, not of the rig: the huge page pool and `/dev/cpu/*/msr`. Both
+// fail silently - the miner falls back to 4 KiB pages, or skips the prefetcher
+// preset, and keeps hashing - so a container mines 18 % under the host next to
+// it and nothing in the log says why. `args` is where an operator goes to ask
+// that question, and these notes answer it before the command line.
+//
+// What it does *not* say: "you need --cap-add=IPC_LOCK". An anonymous
+// MAP_HUGETLB mapping needs no capability - measured on this repo's test host,
+// an unprivileged uid with CapEff=0 mapped 2336 MB from the pool inside a
+// container, and the miner reported "2336 MB of 2336 MB came from the reserved
+// pool". CAP_IPC_LOCK is about mlock(), and /dev/hugepages is about hugetlbfs
+// files; neither is the path the miner takes. What does block the mapping is an
+// empty pool (the host's `vm.nr_hugepages`) or a cgroup hugetlb limit of 0.
+function meminfoField(text, key) {
+  if (!text) return 0;
+  const match = new RegExp(`^${key}:\\s+(\\d+)`, 'm').exec(text);
+  return match ? Number(match[1]) : 0;
+}
+
+function readText(file) {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+// `hugetlb.2MB.max` is a byte count, "max" when unlimited, and absent on a
+// kernel with no hugetlb controller. Only the 0 case matters: it is the one
+// that makes the mapping fail inside a container whose host has pages.
+function hugetlbLimitBytes(env) {
+  const root = envOf(env, 'ZMRIG_CGROUP_DIR', '/sys/fs/cgroup');
+  for (const file of [path.join(root, 'hugetlb.2MB.max'), path.join(root, 'hugetlb', 'hugetlb.2MB.max')]) {
+    const text = readText(file).trim();
+    if (!text) continue;
+    if (text === 'max') return null;
+    const value = Number(text);
+    return Number.isFinite(value) ? value : null;
+  }
+  return null;
+}
+
+// `smaps`/`meminfo` are the host's in a container, which is why these numbers
+// are worth reporting: they are the pool the container *would* use if it could.
+function perfNotes(env = process.env, opts = {}) {
+  const notes = [];
+  const meminfo = opts.meminfo ?? readText('/proc/meminfo');
+  if (!meminfo) return notes; // not Linux: nothing here is true
+
+  const freePages = meminfoField(meminfo, 'HugePages_Free');
+  const pageKb = meminfoField(meminfo, 'Hugepagesize') || 2048;
+  const limit = opts.hugetlbBytes !== undefined ? opts.hugetlbBytes : hugetlbLimitBytes(env);
+
+  if (freePages === 0) {
+    notes.push(
+      `huge pages: none are reserved on the host, so RandomX reads 4 KiB pages instead of ${pageKb / 1024} MiB ` +
+        '(about 18 % slower, measured); reserve them once on the host: sysctl -w vm.nr_hugepages=1168',
+    );
+  } else if (limit === 0) {
+    notes.push(
+      `huge pages: the host has ${freePages} free pages of ${pageKb / 1024} MiB but this container's hugetlb limit is 0, ` +
+        'so it cannot map them: raise --hugetlb-2m on the container, or drop the limit',
+    );
+  }
+
+  const msr = envOf(env, 'MSR', DEFAULTS.MSR).toLowerCase();
+  const mode = envOf(env, 'MODE', DEFAULTS.MODE).toLowerCase();
+  const hasMsr = opts.hasMsr !== undefined ? opts.hasMsr : fs.existsSync('/dev/cpu/0/msr');
+  if (!hasMsr && msr !== 'off' && mode !== 'safe') {
+    notes.push(
+      'msr: /dev/cpu/0/msr is not in this container, so the prefetcher preset is skipped ' +
+        '(5-15 % on bare metal, nothing in a VM); it needs --device /dev/cpu/0/msr --cap-add SYS_RAWIO --user 0',
+    );
+  }
+
+  return notes;
+}
+
 // Whole numbers only, and a donation of 3 is three: `--donate-level 3%` would be
 // passed straight to a parser that rejects it, one argument after the wallet.
 function number(env, name, fallback) {
@@ -195,7 +276,13 @@ function minerArgs(env, opts = {}) {
 
   const threads = envOf(env, 'THREADS', DEFAULTS.THREADS);
   const quota = cgroupCpus(env);
-  const visible = (opts.cpus || os.cpus().length || 1);
+  // The CPUs this container may actually run on, not the ones the host has.
+  // `os.cpus()` lists the host, so a container started with
+  // `--cpuset-cpus=0-1` (or under a Kubernetes cpuset) looked like a 16-CPU
+  // machine and the shim pinned it to a thread count it could never run - the
+  // miner's own heuristic reads sched_getaffinity and would have said 2.
+  // `availableParallelism` is the same call the miner makes.
+  const visible = (opts.cpus || Math.max(1, os.availableParallelism?.() || os.cpus().length || 1));
 
   if (threads !== 'auto') {
     if (!/^\d+$/.test(threads) || Number(threads) < 1) {
@@ -209,7 +296,12 @@ function minerArgs(env, opts = {}) {
     }
   } else if (quota && quota < visible) {
     args.push('-t', String(quota));
-    notes.push(`the container is limited to ${quota} CPU${quota === 1 ? '' : 's'} (${visible} visible): ${quota} mining thread${quota === 1 ? '' : 's'}`);
+    notes.push(`the container is limited to ${quota} CPU${quota === 1 ? '' : 's'} (${visible} usable): ${quota} mining thread${quota === 1 ? '' : 's'}`);
+  } else if (visible < hostCpus() && !quota) {
+    // A cpuset without a quota: no `-t`, because the miner reads the same
+    // affinity mask and sizes itself correctly. Saying so once is what turns
+    // "why does it use 2 of my 16 cores" into an answer.
+    notes.push(`cpuset: this container may only run on ${visible} of the ${hostCpus()} CPUs; the miner sizes itself to ${visible}`);
   }
 
   switch (mode) {
@@ -308,7 +400,12 @@ function plan(argv, env = process.env, opts = {}) {
     case 'args': {
       const built = minerArgs(env, opts);
       if (built.error) return { error: built.error };
-      return { command: 'args', bin, argv: built.args, notes: built.notes };
+      // Container-shaped notes belong to `args` only: a rig that restarts every
+      // hour should not print the same advice into the log every time, and the
+      // miner itself already warns about light mode and 4 KiB pages when it
+      // starts. This is the answer to "why is this number lower than on the
+      // host", asked once, by hand.
+      return { command: 'args', bin, argv: built.args, notes: built.notes, perf: perfNotes(env, opts) };
     }
 
     case 'version':
@@ -359,6 +456,13 @@ function run(bin, argv, env) {
   });
 }
 
+// The host's CPU count, for the message above: `os.cpus()` ignores a cpuset and
+// `availableParallelism()` honours it, and the gap between the two is exactly
+// what an operator needs told when a 16-core machine uses two cores.
+function hostCpus() {
+  return os.cpus().length || 1;
+}
+
 function describe() {
   const version = process.env.ZMRIG_VERSION || '';
   const tag = process.env.ZMRIG_TAG || 'latest';
@@ -382,6 +486,7 @@ function main(argv, env) {
 
   if (decision.command === 'args') {
     for (const note of decision.notes || []) console.error(`zmrig: ${note}`);
+    for (const note of decision.perf || []) console.error(`zmrig: ${note}`);
     console.log([decision.bin, ...decision.argv].join(' '));
     return 0;
   }
@@ -423,4 +528,4 @@ if (require.main === module) {
   if (typeof code === 'number') process.exit(code);
 }
 
-module.exports = { plan, minerArgs, cgroupCpus, main, KNOWN_ENV, DEFAULTS, describe, USAGE };
+module.exports = { plan, minerArgs, perfNotes, cgroupCpus, main, KNOWN_ENV, DEFAULTS, describe, USAGE };

@@ -100,6 +100,11 @@ container what it actually told the miner:
 docker run --rm -e WALLET=4YourMoneroAddress ghcr.io/molik-labs/zmrig args
 ```
 
+It also names the two container-side reasons a rig mines less than the host next
+to it: a host with no huge page pool reserved (about 18 % of hashrate, measured —
+`sysctl -w vm.nr_hugepages=1168` on the host fixes it, and the container needs no
+flags for it), and `/dev/cpu/*/msr` for the prefetcher preset.
+
 Every variable is in [the container reference](/docs/install/docker).
 
 ## C. The bootable image

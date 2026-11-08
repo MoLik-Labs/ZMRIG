@@ -82,5 +82,62 @@ contains "too few to steer interrupts" "$out" &&
     pass "a two-core machine keeps its interrupt spread" ||
     fail "a two-core machine keeps its interrupt spread"
 
+# MemTotal is the host's and a container's limit is not in it. A plan built from
+# 32 GB of host RAM on a 2 GB container reserves 2.3 GB out of the host's pool
+# for a mapping the container can never make, which costs the host and helps
+# nobody. The fake cgroup here is the container: 1024 MB.
+mkdir -p "$WORK/cgroup"
+echo 1073741824 > "$WORK/cgroup/memory.max"
+
+limited() { # arguments -> stdout, with a 1024 MB memory limit
+    ZMRIG_CGROUP_ROOT="$WORK/cgroup" \
+    PATH="$WORK/bin:$PATH" \
+    SYS_ROOT="$WORK/sys" \
+    PROC_SYS="$WORK/proc/sys" \
+    PROC_IRQ="$WORK/proc/irq" \
+    CPU_ROOT="$WORK/cpu" \
+        bash "$ROOT/scripts/tune-linux.sh" --dry-run "$@" 2>&1
+}
+
+out=$(limited --numa off --irq steer --profile free)
+contains "this process may use 1024 MB (cgroup limit)" "$out" &&
+    pass "the cgroup limit is read and named" ||
+    fail "the cgroup limit is read and named"
+
+contains "1024 MB usable of" "$out" &&
+    pass "the RAM line reports both numbers instead of the host's" ||
+    fail "the RAM line reports both numbers instead of the host's"
+
+contains "not reserving pages" "$out" &&
+    pass "a dataset larger than the limit is not reserved" ||
+    fail "a dataset larger than the limit is not reserved"
+
+contains "would write" "$out" && contains "nr_hugepages" "$out" &&
+    fail "no page write may be planned when the dataset does not fit" ||
+    pass "no page write is planned when the dataset does not fit"
+
+contains "plan: no reservation" "$out" &&
+    pass "the plan line says no reservation instead of a page count" ||
+    fail "the plan line says no reservation instead of a page count"
+
+# A limit that fits is a plan, not a refusal: 3072 MB holds rx/0's 2404 MB.
+echo 3221225472 > "$WORK/cgroup/memory.max"
+out=$(limited --profile free)
+contains "not reserving pages" "$out" &&
+    fail "a limit that fits must still reserve pages" ||
+    pass "a limit that fits still reserves pages"
+contains "would write 1202 -> " "$out" &&
+    pass "the reservation is capped by the limit, not by host RAM" ||
+    fail "the reservation is capped by the limit, not by host RAM"
+
+# No cgroup at all: the machine's RAM is the truth, as before.
+out=$(ZMRIG_CGROUP_ROOT="$WORK/nonexistent" \
+      PATH="$WORK/bin:$PATH" SYS_ROOT="$WORK/sys" PROC_SYS="$WORK/proc/sys" \
+      PROC_IRQ="$WORK/proc/irq" CPU_ROOT="$WORK/cpu" \
+      bash "$ROOT/scripts/tune-linux.sh" --dry-run --profile free 2>&1)
+contains "cgroup limit" "$out" &&
+    fail "no cgroup must not produce a limit line" ||
+    pass "a machine without a cgroup limit plans from MemTotal"
+
 printf '\n    %s\n\n' "$([ "$FAILED" = "0" ] && echo 'all tuning targets passed' || echo 'FAILURES')"
 exit "$FAILED"
