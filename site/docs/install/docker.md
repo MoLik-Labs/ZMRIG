@@ -31,7 +31,18 @@ that question with no pool, no config and no boot:
 
 ```console
 $ docker run --rm -e WALLET=4YourAddress… ghcr.io/molik-labs/zmrig check
-wallet  OK: standard address, mainnet
+valid   4YourAddress…
+  check checksum verified (Keccak-256)
+  kind  standard
+  net   mainnet
+```
+
+A typo is refused, and says which check failed:
+
+```console
+$ docker run --rm -e WALLET=4YourAddress…f ghcr.io/molik-labs/zmrig check
+invalid 4YourAddress…f
+  checksum does not match: at least one character is wrong
 ```
 
 A typo is refused, and the same check runs again at startup, from the miner

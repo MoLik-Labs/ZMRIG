@@ -404,6 +404,25 @@ else
     record FAIL "the docs quote the message the binary prints" "stale:$stale"
 fi
 
+# The container page quotes `--check-wallet`, which is a different command with a
+# different shape than `--check` above ("valid/invalid", not "wallet  OK"). It was
+# wrong on the first attempt, in both languages, so it is checked the same way:
+# the first word of the real output has to appear in the page.
+wallet_head=$("$BIN" --check-wallet "$WALLET" 2>/dev/null | head -1 | awk '{print $1}')
+wallet_typo=$("$BIN" --check-wallet "$TYPO" 2>/dev/null | sed -n '2p' | sed 's/^ *//')
+docker_pages="doc/DOCKER.md site/docs/install/docker.md site/i18n/vi/docusaurus-plugin-content-docs/current/install/docker.md"
+stale=""
+for page in $docker_pages; do
+    [ -f "$ROOT/$page" ] || { stale="$stale $page(missing)"; continue; }
+    [ -n "$wallet_head" ] && ! grep -qF "$wallet_head" "$ROOT/$page" && stale="$stale $page(verdict)"
+    [ -n "$wallet_typo" ] && ! grep -qF "$wallet_typo" "$ROOT/$page" && stale="$stale $page(message)"
+done
+if [ -z "$stale" ]; then
+    record PASS "the container page quotes the wallet verdict it prints" "$wallet_head"
+else
+    record FAIL "the container page quotes the wallet verdict it prints" "stale:$stale"
+fi
+
 if "$BIN" --help | grep -qF -- "--allow-bad-wallet"; then
     record PASS "--allow-bad-wallet is documented" ""
 else

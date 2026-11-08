@@ -392,12 +392,17 @@ jobs:
           docker run --rm -e WALLET="$wallet" -e POOL=p.example:3333 zmrig:ci args | tee /tmp/args
           grep -q -- '--donate-level 3' /tmp/args
 
-          # The wallet verdict is the binary's own, and a typo is refused.
+          # The wallet verdict is the binary's own, and a typo is refused. The
+          # words are the binary's ("valid", "checksum does not match"), not a
+          # summary written here: a summary is a second source of truth that goes
+          # stale, which is how the page quoted the wrong command's output once.
           docker run --rm -e WALLET="$wallet" zmrig:ci check | tee /tmp/check
-          grep -q 'OK' /tmp/check
+          grep -q '^valid' /tmp/check
+          grep -q 'checksum verified' /tmp/check
           code=0
           docker run --rm -e "WALLET=${wallet%?}f" zmrig:ci check >/tmp/bad 2>&1 || code=$?
           test "$code" != "0" || { echo "a typo'd address was accepted"; cat /tmp/bad; exit 1; }
+          grep -q 'checksum does not match' /tmp/bad
 
       - name: It says which commit it is
         run: |

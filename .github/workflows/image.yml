@@ -167,14 +167,16 @@ jobs:
           grep -q -- '--donate-level 3' /tmp/args
           grep -q -- '-p rig-1' /tmp/args
 
-          # The wallet check is the miner's own, and it says OK for a real address
-          # and INVALID for a typo.
+          # The wallet check is the miner's own, and its words are the ones the
+          # documentation quotes: "valid" for a real address, "checksum does not
+          # match" for a typo.
           docker run --rm -e WALLET="$wallet" zmrig:ci check | tee /tmp/check
-          grep -q 'OK' /tmp/check
+          grep -q '^valid' /tmp/check
+          grep -q 'checksum verified' /tmp/check
           code=0
           docker run --rm -e "WALLET=${wallet%?}f" zmrig:ci check >/tmp/bad 2>&1 || code=$?
           test "$code" != "0" || { echo "a typo'd address was accepted"; cat /tmp/bad; exit 1; }
-          grep -q 'INVALID\|not a Monero address' /tmp/bad
+          grep -q 'checksum does not match' /tmp/bad
 
       - name: The pool job in the same image
         run: |

@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/assets/js/runtime~main.30da8950.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/runtime~main.0d0bed3c.js" defer="defer"></script>
 <script src="/ZMRIG/assets/js/main.90adbc9d.js" defer="defer"></script>
 </head>
 <body>
@@ -26,7 +26,9 @@ container answers with the commit that built it.</p>
 <p>A rig that mines to an address it cannot be paid at is the most expensive mistake
 in this project, because it looks exactly like a working rig. The image answers
 that question with no pool, no config and no boot:</p>
-<div class="language-console codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-console codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token plain">$ docker run --rm -e WALLET=4YourAddress… ghcr.io/molik-labs/zmrig check</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">wallet  OK: standard address, mainnet</span><br></div></code></pre></div></div>
+<div class="language-console codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-console codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token plain">$ docker run --rm -e WALLET=4YourAddress… ghcr.io/molik-labs/zmrig check</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">valid   4YourAddress…</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">  check checksum verified (Keccak-256)</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">  kind  standard</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">  net   mainnet</span><br></div></code></pre></div></div>
+<p>A typo is refused, and says which check failed:</p>
+<div class="language-console codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-console codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token plain">$ docker run --rm -e WALLET=4YourAddress…f ghcr.io/molik-labs/zmrig check</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">invalid 4YourAddress…f</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">  checksum does not match: at least one character is wrong</span><br></div></code></pre></div></div>
 <p>A typo is refused, and the same check runs again at startup, from the miner
 itself, so the verdict is in the log of every container whether or not anyone
 asked for it.</p>

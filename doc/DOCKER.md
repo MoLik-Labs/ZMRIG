@@ -23,7 +23,12 @@ the question without a pool, a config or a boot:
 ```console
 $ docker run --rm -e WALLET=46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ \
     ghcr.io/molik-labs/zmrig check
-wallet  OK: standard address, mainnet
+valid   46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ
+  check checksum verified (Keccak-256)
+  kind  standard
+  net   mainnet
+  spend 7f12…
+  view  1b7d…
 ```
 
 A typo is refused, with the character range that is wrong:
@@ -31,7 +36,8 @@ A typo is refused, with the character range that is wrong:
 ```console
 $ docker run --rm -e WALLET=46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tK \
     ghcr.io/molik-labs/zmrig check
-wallet  INVALID: checksum does not match: at least one character is wrong
+invalid 46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tK
+  checksum does not match: at least one character is wrong
 ```
 
 The same check runs again at startup, from the miner itself, so the verdict is in

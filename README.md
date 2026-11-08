@@ -606,7 +606,7 @@ checks while two of the rows are wrong.
 | `proxy` `npm test` | 60 | extranonce allocation, vardiff, real sockets, WebSocket rig, banned pool left alone |
 | `pool` `npm test` | 52 | PPLNS in BigInt, share verification, payouts, audit log, end-to-end with a real miner |
 | `zmrig/tests/unit.sh` | 20 modules | options, hashing, health, report codes, stratum parsing, proxy handshakes, the per-algorithm memory rule, and the thermal governor's every edge |
-| `zmrig/tests/cli.sh` | 65 | flags, exit codes, `--help` covers the parser, `--check` reports the memory of the coin it was asked about and which huge-page mechanism backs it |
+| `zmrig/tests/cli.sh` | 66 | flags, exit codes, `--help` covers the parser, `--check` reports the memory of the coin it was asked about and which huge-page mechanism backs it |
 | `zmrig/tests/net.sh` | 29 | TCP/TLS/WS/WSS against a fake pool, ban and refusal handling, failover, seed change |
 | `zmrig/tests/health.sh` | 7 | the watchdog, both directions: an honest pool is not a fault, an all-reject pool is |
 | `tests/oneclick/*.sh` | 80 | plan, config, governor, tuner targets (against a fake `/proc` and `/sys`), purge (removes only its own paths), branch switching, `--coin` mapping and the algorithm-name guard |

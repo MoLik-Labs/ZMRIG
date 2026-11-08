@@ -31,7 +31,18 @@ pool, không cần config, không cần boot:
 
 ```console
 $ docker run --rm -e WALLET=4YourAddress… ghcr.io/molik-labs/zmrig check
-wallet  OK: standard address, mainnet
+valid   4YourAddress…
+  check checksum verified (Keccak-256)
+  kind  standard
+  net   mainnet
+```
+
+Một ký tự sai bị từ chối, và nói rõ hỏng ở bước kiểm tra nào:
+
+```console
+$ docker run --rm -e WALLET=4YourAddress…f ghcr.io/molik-labs/zmrig check
+invalid 4YourAddress…f
+  checksum does not match: at least one character is wrong
 ```
 
 Một ký tự sai bị từ chối, và phép kiểm tra đó chạy lại lúc khởi động, do chính

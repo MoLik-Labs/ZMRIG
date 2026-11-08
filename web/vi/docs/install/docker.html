@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.f44b6332.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/runtime~main.43a29227.js" defer="defer"></script>
 <script src="/ZMRIG/vi/assets/js/main.a31acc74.js" defer="defer"></script>
 </head>
 <body>
@@ -26,7 +26,9 @@ container đang chạy trả lời được nó được dựng từ commit nào
 <p>Một rig đào vào địa chỉ không thể trả tiền cho nó là sai lầm đắt nhất trong dự án
 này, vì nó trông y hệt một rig đang chạy tốt. Image trả lời câu đó mà không cần
 pool, không cần config, không cần boot:</p>
-<div class="language-console codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-console codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token plain">$ docker run --rm -e WALLET=4YourAddress… ghcr.io/molik-labs/zmrig check</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">wallet  OK: standard address, mainnet</span><br></div></code></pre></div></div>
+<div class="language-console codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-console codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token plain">$ docker run --rm -e WALLET=4YourAddress… ghcr.io/molik-labs/zmrig check</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">valid   4YourAddress…</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">  check checksum verified (Keccak-256)</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">  kind  standard</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">  net   mainnet</span><br></div></code></pre></div></div>
+<p>Một ký tự sai bị từ chối, và nói rõ hỏng ở bước kiểm tra nào:</p>
+<div class="language-console codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-console codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token plain">$ docker run --rm -e WALLET=4YourAddress…f ghcr.io/molik-labs/zmrig check</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">invalid 4YourAddress…f</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">  checksum does not match: at least one character is wrong</span><br></div></code></pre></div></div>
 <p>Một ký tự sai bị từ chối, và phép kiểm tra đó chạy lại lúc khởi động, do chính
 miner thực hiện, nên kết luận luôn có trong log của mọi container dù không ai hỏi.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="cần-đặt-gì">Cần đặt gì<a href="#cần-đặt-gì" class="hash-link" aria-label="Đường dẫn trực tiếp đến Cần đặt gì" title="Đường dẫn trực tiếp đến Cần đặt gì" translate="no">​</a></h2>
