@@ -247,3 +247,36 @@ means it does not and the miner will be ~18 % slower until pages are reserved.
 `--check` reads the file and prints; it opens no socket and allocates no
 dataset. If the file is root-only, run it with `sudo` or you get
 `cannot read …: check the path or run as root`.
+
+## Pool mode: `--verify-share`
+
+A pool that pays for a share has to be able to check it. `zmrig` answers that on
+stdin/stdout, one JSON line in and one out, with its log on stderr:
+
+```bash
+zmrig --verify-share < shares.jsonl > hashes.jsonl
+```
+
+In `light` mode (the default here, whatever `--mode` says elsewhere) it keeps a
+256 MB cache and rebuilds the dataset for every share: **25 ms** each, 39 shares
+a second on a 2 vCPU box. `--mode=fast` builds the 2 GiB dataset once instead —
+21 s of startup at 2 threads, 42 s at 1 — and then reads it: **2.9 ms** a share,
+350 a second. Same hashes, different memory.
+
+```bash
+zmrig --verify-share --mode=fast < shares.jsonl > hashes.jsonl
+```
+
+That is 2336 MB of RAM per process, so the miner checks before it takes it: with
+`--no-huge-pages`, or on a host where the free memory and free huge pages do not
+add up to 2336 MB, it says so and stays on the light cache instead of being
+killed halfway through the first share.
+
+```text
+warning --mode fast needs 2336 MB for the dataset and only 1269 MB can be
+        allocated here: using the light cache (about 9x slower per share)
+```
+
+A pool should run one verifier per core, but only as many `fast` ones as the
+machine has RAM for; `pool/src/index.js --check` does that arithmetic and prints
+the number that fits.

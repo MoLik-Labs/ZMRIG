@@ -88,9 +88,14 @@ contains "too few to steer interrupts" "$out" &&
 # nobody. The fake cgroup here is the container: 1024 MB.
 mkdir -p "$WORK/cgroup"
 echo 1073741824 > "$WORK/cgroup/memory.max"
+# An empty /proc/self/cgroup, so the test does not inherit the layout of the
+# machine it runs on: on cgroup v2 the process sits at some nested path that
+# does not exist under $WORK, and on v1 it sits somewhere else again.
+: > "$WORK/cgroup.self"
 
 limited() { # arguments -> stdout, with a 1024 MB memory limit
     ZMRIG_CGROUP_ROOT="$WORK/cgroup" \
+    ZMRIG_SELF_CGROUP="$WORK/cgroup.self" \
     PATH="$WORK/bin:$PATH" \
     SYS_ROOT="$WORK/sys" \
     PROC_SYS="$WORK/proc/sys" \
@@ -131,7 +136,7 @@ contains "would write 1202 -> " "$out" &&
     fail "the reservation is capped by the limit, not by host RAM"
 
 # No cgroup at all: the machine's RAM is the truth, as before.
-out=$(ZMRIG_CGROUP_ROOT="$WORK/nonexistent" \
+out=$(ZMRIG_CGROUP_ROOT="$WORK/nonexistent" ZMRIG_SELF_CGROUP="$WORK/cgroup.self" \
       PATH="$WORK/bin:$PATH" SYS_ROOT="$WORK/sys" PROC_SYS="$WORK/proc/sys" \
       PROC_IRQ="$WORK/proc/irq" CPU_ROOT="$WORK/cpu" \
       bash "$ROOT/scripts/tune-linux.sh" --dry-run --profile free 2>&1)

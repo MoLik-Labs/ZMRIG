@@ -117,9 +117,16 @@ zmrig -o pool.example.com:3333 -u 4YourMoneroAddress.rig1 -t 4
 - Mỗi share đều được pool băm lại trước khi trả (`verify_shares`), dùng một tiến
   trình `zmrig --verify-share` sống lâu cho mỗi core để cache 256 MB chỉ dựng một
   lần mỗi round. `pool/tests/bench-verify.mjs` đo trên chính máy bạn; trên một
-  máy thử 2 vCPU với hai verifier và 200 share mỗi round: share đầu 0,85 s (dựng
-  cache), trạng thái ổn định **43 share/giây** — một rig 1 kH/s ở độ khó 300 gửi
+  máy thử 2 vCPU với hai verifier và 200 share mỗi round: share đầu 0,58 s (dựng
+  cache), trạng thái ổn định **39 share/giây** — một rig 1 kH/s ở độ khó 300 gửi
   khoảng 3,3 share/giây, nên máy đó verify được chừng một tá rig.
+- `VERIFIER_MODE=fast` dựng dataset 2 GiB một lần rồi đọc lại cho từng share:
+  **2,9 ms một share thay vì 25 ms** (350 share/giây mỗi verifier), đo trên cùng
+  máy đó, đổi lại 2336 MB RAM *cho mỗi tiến trình verifier* và 21 s khởi động.
+  Đây là lựa chọn phải bật, và pool cộng số đó với `/proc/meminfo` lúc khởi động
+  — `fast` với hai verifier mặc định là 4,6 GiB, một VPS 4 GB không có. Verifier
+  không lấy được dataset sẽ tự lùi về cache nhẹ và ghi lý do vào log. Bảng đầy đủ
+  nằm trong `pool/README.md`.
 - `/stratum` là mặt tiếp xúc internet, nên khung truyền có giới hạn: khung quá
   1 MiB thì đóng kết nối, **tin nhắn** quá 256 KiB cũng vậy (chỉ giới hạn từng
   khung thì client vẫn gửi khung nối tiếp mãi được), và một khung dữ liệu thứ hai

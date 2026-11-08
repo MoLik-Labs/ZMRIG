@@ -459,6 +459,8 @@ pub const usage =
     \\      --power=W            wall power in watts, used by the report
     \\      --verify-share       read {"seed","blob","nonce"} JSON lines on stdin and
     \\                           print the hashes: share verification for a pool
+    \\                           (--mode=fast builds the dataset once and is about
+    \\                           9x faster per share, for 2.3 GiB of RAM)
     \\  -h, --help               this help
     \\  -V, --version            print the version
     \\

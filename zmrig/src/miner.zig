@@ -1023,6 +1023,25 @@ pub fn usableMemory() u64 {
     return @min(machine, budget.available);
 }
 
+/// The same question in the other direction: what can be handed out *right
+/// now*. `usableMemory` is capped by the machine's size, which is the right
+/// number for "will this fit", but it counts the reserved huge page pool as
+/// part of the machine - and an ordinary `mmap` cannot use it. A verifier that
+/// asked for 2336 MB of anonymous memory on a host where 2336 MB is reserved as
+/// huge pages was OOM-killed with every check having said yes.
+///
+/// This is `MemAvailable` plus the free huge pages, which is what a mapping can
+/// actually be given, capped by the cgroup's remainder. `use_huge_pages` is
+/// `--no-huge-pages` inverted: a process that has been told not to touch the
+/// page pool cannot count it, or the arithmetic says yes and the kernel says
+/// no.
+pub fn availableMemory(use_huge_pages: bool) u64 {
+    const machine = if (use_huge_pages) memoryForDataset() else meminfoBytes("MemAvailable:");
+    const budget = topology.cgroupMemory() orelse return machine;
+
+    return @min(machine, budget.available);
+}
+
 /// The cgroup limit and what is left of it, for the messages that have to
 /// explain the difference between "this machine has 32 GB" and "this container
 /// may use 1".

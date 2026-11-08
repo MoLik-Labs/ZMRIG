@@ -9,7 +9,14 @@
 #   ./zmrig/build.sh --portable      # no -march=native (run on any x86-64)
 #   ./zmrig/build.sh --arch=NAME     # gcc -march=NAME, e.g. x86-64-v2, znver3
 #   ./zmrig/build.sh --static        # one file, no libc at all (musl, via zig)
+#   ./zmrig/build.sh --strip         # drop the DWARF debug info (8.8 -> 1.9 MB)
 #   ./zmrig/build.sh --output DIR    # write the binary/objects to DIR
+#
+# --strip is for the artefacts that are *shipped*: the container image, the ISO
+# and the binary an install leaves on disk. Debug info is 78 % of this binary and
+# nothing on a rig reads it - a crash report from an appliance is a log line, not
+# a core file. Keep it for a build somebody is going to debug: that is the
+# default, because a 1.9 MB binary with no symbols is not debuggable at all.
 #
 # --static cross-compiles the whole engine with `zig cc` against musl and links
 # it into a single file that runs on any Linux, including an Alpine live image
@@ -30,6 +37,7 @@ BUILD_ZIG=1
 MARCH="-march=native"
 MCPU="native"
 STATIC=0
+STRIP=0
 ZIG="${ZIG:-zig}"   # replaced by scripts/find-zig.sh when left as the default
 
 while [ $# -gt 0 ]; do
@@ -41,9 +49,13 @@ while [ $# -gt 0 ]; do
         --no-zig)    BUILD_ZIG=0 ;;
         --portable)  MARCH=""; MCPU="baseline" ;;
         --static)    STATIC=1 ;;
+        --strip)     STRIP=1 ;;
         --arch)      ARCH="${2:?}"; MARCH="-march=${ARCH}"; MCPU="${ARCH//-/_}"; shift ;;
         --arch=*)    ARCH="${1#*=}"; MARCH="-march=${ARCH}"; MCPU="${ARCH//-/_}" ;;
-        -h|--help)   sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        # The whole leading comment block, not a line range: the range was
+        # 2,15 and stopped describing the file the moment a flag was added
+        # below it.
+        -h|--help)   awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$0"; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 1 ;;
     esac
     shift
@@ -362,6 +374,11 @@ echo "==> avx-512 flags for the three files that use them: ${AVX512_FLAGS[*]}"
 CPU_FLAG=()
 [ -n "$MARCH" ] && CPU_FLAG=("-mcpu=${MCPU}")
 
+# Debug info, or not. `-fstrip` is the compiler's own strip, so it also works for
+# the musl cross build where the host `strip` is the wrong one.
+STRIP_FLAG=()
+[ "$STRIP" -eq 1 ] && STRIP_FLAG=(-fstrip)
+
 # The hash engine is C++, so the binary needs the C++ runtime and the unwinder.
 # Zig does not resolve plain "-lstdc++", so pass the real files.
 LINK_RT=()
@@ -383,7 +400,7 @@ else
 fi
 
 "$ZIG" build-exe "${HERE}/src/main.zig" "${TARGET[@]}" \
-    -O ReleaseFast "${CPU_FLAG[@]}" \
+    -O ReleaseFast "${CPU_FLAG[@]}" "${STRIP_FLAG[@]}" \
     --name zmrig \
     -femit-bin="${OUT}/zmrig" \
     --cache-dir "${OUT}/zig-cache" \

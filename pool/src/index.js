@@ -14,7 +14,18 @@ const fs = require('node:fs');
 
 const { loadConfig, validateConfig } = require('./config');
 const { PoolServer } = require('./server');
+const { fastModeWarning } = require('./fit');
 const { formatXmr } = require('./util');
+
+/** `/proc/meminfo`, or undefined where there is none. Never throws: the
+ *  memory arithmetic is advice, and advice is not worth a failed start. */
+function readMeminfo() {
+  try {
+    return fs.readFileSync('/proc/meminfo', 'utf8');
+  } catch (_) {
+    return undefined;
+  }
+}
 
 function parseArgs(argv) {
   const out = { config: null, check: false };
@@ -81,6 +92,19 @@ Docs: pool/README.md - https://github.com/MoLik-Labs/ZMRIG
   // be able to answer "where does the fee go" in one glance.
   logger('info', `${config.name}: fee ${config.fee_percent}% -> ${config.operator_address}`);
   logger('info', `mode ${config.mode}, payouts ${config.payout_mode}, verification ${config.verify_shares ? 'on' : 'OFF'}`);
+
+  // The verifier's cost is the one setting that turns a pool that fits into a
+  // pool the kernel kills, so `--check` prints it instead of leaving it to a
+  // log line the operator may never scroll to.
+  if (config.verify_shares) {
+    const mode = String(config.verifier_mode || 'light').trim().toLowerCase() === 'fast' ? 'fast' : 'light';
+    logger('info', `verifier: ${mode} mode, ${config.verifier_concurrency} process(es) of ${config.verifier_binary}`);
+
+    if (args.check) {
+      const warning = fastModeWarning(readMeminfo(), { mode, concurrency: config.verifier_concurrency });
+      if (warning) logger('warn', warning);
+    }
+  }
 
   if (!config.verify_shares) {
     logger('warn', 'share verification is disabled: miners can submit work they never did');

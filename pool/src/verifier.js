@@ -17,6 +17,10 @@ class Verifier {
     this.binary = options.binary || 'zmrig';
     this.concurrency = Math.max(1, Number(options.concurrency || 2));
     this.timeout = Number(options.timeout || 10000);
+    // `light` or `fast`: the miner's own `--mode`, passed through. A verifier
+    // that rebuilds the 2 GiB dataset per share (light) does 25 ms a share on
+    // the test host; with the dataset it is 2.9 ms, for 2.3 GiB of RAM each.
+    this.mode = String(options.mode || 'light').trim().toLowerCase() === 'fast' ? 'fast' : 'light';
     this.log = options.logger || (() => {});
     this.slots = [];
     this.queue = [];
@@ -29,7 +33,10 @@ class Verifier {
   }
 
   spawnSlot(index) {
-    const child = spawn(this.binary, ['--verify-share', '--no-color'], {
+    const args = ['--verify-share', '--no-color'];
+    if (this.mode === 'fast') args.push('--mode', 'fast');
+
+    const child = spawn(this.binary, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env },
     });

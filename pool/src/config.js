@@ -61,6 +61,12 @@ const DEFAULTS = {
   verifier_binary: 'zmrig',
   verifier_concurrency: 2,
   verifier_timeout: 10000,
+  // `light` keeps a 256 MiB cache and rebuilds the dataset for every share:
+  // 25 ms a share, warm, on the 2 vCPU test host. `fast` builds the 2 GiB
+  // dataset once and reads it: 2.9 ms a share, measured, same hashes. It costs
+  // 2.3 GiB of RAM *per verifier process* and 21 s at startup, so it is a
+  // deliberate choice and not a default - see doc/POOLS.md.
+  verifier_mode: 'light',
 
   // --- accounting -------------------------------------------------------
   // PPLNS: the last N seconds of shares split the block reward.
@@ -151,6 +157,9 @@ function loadConfig(file, overrides = {}) {
   config.reserve = env('RESERVE', config.reserve);
   config.verifier_binary = env('VERIFIER_BINARY', config.verifier_binary);
   config.verifier_concurrency = envNumber('VERIFIER_CONCURRENCY', config.verifier_concurrency);
+  // Trimmed as well as lowercased: `VERIFIER_MODE="fast "` in a compose file
+  // is a fast pool, not a silent light one.
+  config.verifier_mode = String(env('VERIFIER_MODE', config.verifier_mode)).trim().toLowerCase();
   config.template_interval = envNumber('TEMPLATE_INTERVAL', config.template_interval);
   config.strict_address = envBool('STRICT_ADDRESS', config.strict_address);
 

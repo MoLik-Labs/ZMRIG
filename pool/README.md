@@ -95,6 +95,8 @@ is the annotated starting point.
 | `target_share_seconds` | `15` | Vardiff target. |
 | `min_difficulty` / `max_difficulty` | `100` / `4e6` | Vardiff clamp. |
 | `verify_shares` | `true` | Re-hash every share with `zmrig --verify-share`. |
+| `verifier_mode` | `light` | `light` (256 MB cache, rebuild per share) or `fast` (2 GiB dataset, ~9x faster per share, 2336 MB of RAM per verifier). |
+| `verifier_concurrency` | `2` | One long-lived verifier process per core. Each `fast` one is 2336 MB. |
 | `pplns_window` | `3600` | Seconds of shares that split a block. |
 | `payout_min` | `0.010000000000` | Minimum balance before a payout. |
 | `payout_mode` | `ledger` | `ledger` records balances, `wallet` really pays. |
@@ -104,9 +106,9 @@ is the annotated starting point.
 
 Environment names are the upper-case equivalents: `POOL_FEE_PERCENT`,
 `OPERATOR_ADDRESS`, `PORT`, `HTTP_PORT`, `DAEMON`, `POOL_MODE`,
-`VERIFY_SHARES`, `PPLNS_WINDOW`, `PAYOUT_MODE`, `WALLET_RPC`,
-`INITIAL_DIFFICULTY`, `VARDIFF`, `STATE_FILE`, `AUDIT_FILE`, `LOG_LEVEL`, and
-the rest of the table above.
+`VERIFY_SHARES`, `VERIFIER_MODE`, `VERIFIER_CONCURRENCY`, `PPLNS_WINDOW`,
+`PAYOUT_MODE`, `WALLET_RPC`, `INITIAL_DIFFICULTY`, `VARDIFF`, `STATE_FILE`,
+`AUDIT_FILE`, `LOG_LEVEL`, and the rest of the table above.
 
 `--check` prints the effective configuration and exits non-zero on anything that
 would let the pool take a fee it cannot justify: a fee out of range, an unknown
@@ -144,10 +146,39 @@ verifier per core alive and re-uses it, so the 256 MB RandomX cache is built
 once per round rather than once per share. `pool/tests/bench-verify.mjs`
 measures the three numbers that matter, on whatever machine you run it on; on a
 2 vCPU test box with two verifiers and 200 shares per round: the first share of
-a round costs **0.85 s** (the cache build), every share after that takes about
-**23 ms** of wall time, and the steady state is **43 shares per second**. A rig
+a round costs **0.58 s** (the cache build), every share after that takes about
+**25 ms** of wall time, and the steady state is **39 shares per second**. A rig
 at 1 kH/s on difficulty 300 submits about 3.3 shares a second, so that box
 verifies roughly a dozen of them.
+
+### When 39 shares/s is not enough: `VERIFIER_MODE=fast`
+
+Light mode rebuilds the dataset for every hash — that *is* the 25 ms. `fast`
+mode builds the 2 GiB dataset once at startup and reads it instead:
+
+| | `light` (default) | `fast` |
+| --- | --- | --- |
+| Setup | 0.6 s | 21 s at 2 threads, 42 s at 1 |
+| Per share, warm | 25 ms | **2.9 ms** |
+| Throughput, one verifier | 39 shares/s | **350 shares/s** |
+| RAM, per verifier | 256 MB | **2336 MB** |
+
+Same hashes out of both — the mode changes how RandomX is initialised, not what
+it computes. The cost is the RAM, and it is per process: `VERIFIER_MODE=fast`
+with the default `VERIFIER_CONCURRENCY=2` is 4.6 GiB, which is more than a 4 GB
+VPS has. The pool reads `/proc/meminfo` at startup (and `--check` on demand) and
+says so:
+
+```text
+warn  VERIFIER_MODE=fast needs 9344 MB for 4 verifier(s) and 3641 MB can be
+      allocated here: set VERIFIER_CONCURRENCY=1 to fit
+```
+
+Free huge pages count towards that room, because the verifier asks for them
+first; a host that already reserved 2.3 GiB with `zmrig-os hugepages` can run one
+fast verifier without any ordinary memory to spare. A verifier that cannot get
+the dataset falls back to the light cache by itself and logs why — a pool stays
+up, it just verifies slower. On a 1 GB VPS, stay on `light`.
 
 Shares queued behind a busy verifier are dispatched as each one frees, not when
 the next share happens to arrive; a share that cannot be verified within

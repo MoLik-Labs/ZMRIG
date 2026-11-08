@@ -418,7 +418,11 @@ EOF
 
 # ------------------------------------------------------------------ 2. binary
 step "building the miner (${ARCH_LEVEL}, static musl)"
-ZIG="$ZIG_BIN" "${ROOT}/zmrig/build.sh" --static --arch="$ARCH_LEVEL" \
+# --strip: the ISO is a read-only squashfs on a USB stick, so every megabyte is
+# paid for in write time, flash wear and pull time on a 100-rig farm. The debug
+# info is 78 % of the binary and nothing in the image can read it - a crash on an
+# appliance is a log line, not a core dump somebody will symbolise.
+ZIG="$ZIG_BIN" "${ROOT}/zmrig/build.sh" --static --arch="$ARCH_LEVEL" --strip \
     --output "$BTREE" --jobs "$JOBS" >"${WORK}/build.log" 2>&1 ||
     { tail -30 "${WORK}/build.log"; die "the miner failed to build"; }
 

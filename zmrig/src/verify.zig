@@ -9,15 +9,41 @@
 //!
 //! A pool needs this to accept a share without trusting the miner: it hashes
 //! the blob itself and compares the result. The seed cache is built once and
-//! reused for every share of the same round, and it is a *light* cache
-//! (256 MiB), which is what makes the mode usable on a 1 GB VPS.
+//! reused for every share of the same round, and by default it is a *light*
+//! cache (256 MiB), which is what makes the mode usable on a 1 GB VPS.
+//!
+//! `--mode fast` builds the 2 GiB dataset instead, once, and then reads it for
+//! every share: measured on the 2 vCPU test host, 2000 shares of one seed cost
+//! 25.5 ms each in light mode and 2.9 ms each in fast mode - 39 shares/s
+//! against 350 - after 0.6 s and 21 s of setup respectively. It costs 2336 MB
+//! of RAM *per verifier process*, so it is opt-in rather than automatic: a pool
+//! that runs four of them has to know what it is asking for, and
+//! `pool/src/verifier.js` starts `VERIFIER_CONCURRENCY` of them. `pool/src/fit.js`
+//! is the arithmetic that warns when the number does not fit the host.
 
 const std = @import("std");
 const api = @import("api.zig");
 const log = @import("log.zig");
 const util = @import("util.zig");
 
-pub fn run(allocator: std.mem.Allocator, logger: *log.Logger) !void {
+/// What the caller decided, in one place: three positional booleans on a
+/// function that already takes two arguments is how a call site ends up passing
+/// the mode where the thread count goes.
+pub const Settings = struct {
+    /// Build the dataset instead of hashing from the cache alone. `--mode`
+    /// `auto` is `false` here, on purpose: a verifier is usually one of several
+    /// on a small VPS, and silently taking 2.3 GiB per process is how a pool
+    /// that used to run gets OOM-killed.
+    full_memory: bool = false,
+    /// `--randomx-init`, or 0 to use every CPU (capped at 16).
+    init_threads: usize = 0,
+    /// `--no-huge-pages` inverted. The mapper falls back on its own, so this
+    /// only decides whether the reserved page pool may be used at all.
+    huge_pages: bool = true,
+};
+
+pub fn run(allocator: std.mem.Allocator, logger: *log.Logger, settings: Settings) !void {
+    const full_memory = settings.full_memory;
     var wrapped: ?api.Wrapped = null;
     defer if (wrapped) |*w| w.destroy();
 
@@ -36,7 +62,23 @@ pub fn run(allocator: std.mem.Allocator, logger: *log.Logger) !void {
     var line_buf: [64 * 1024]u8 = undefined;
     var blob_buf: [4096]u8 = undefined;
 
-    logger.info("verify mode: hashing submitted shares (light mode, 256 MB cache)", .{});
+    // Dataset initialisation is very close to linear in threads - measured
+    // 21.5 s at 2 threads and 42.5 s at 1 on the test host - and happens once
+    // per seed change, which is once per block.
+    // Capped at 16: past that the cache becomes the bottleneck and the rest of
+    // the pool's work suffers for a build that is already a few seconds.
+    const init_threads: usize = if (settings.init_threads > 0)
+        @min(settings.init_threads, 64)
+    else
+        @min(std.Thread.getCpuCount() catch 1, 16);
+
+    if (full_memory) {
+        logger.info("verify mode: hashing submitted shares (fast mode, {d} MB cache + {d} MB dataset)", .{
+            api.Algo.rx_0.cacheBytes() / (1024 * 1024), api.Algo.rx_0.datasetBytes() / (1024 * 1024),
+        });
+    } else {
+        logger.info("verify mode: hashing submitted shares (light mode, 256 MB cache)", .{});
+    }
 
     while (true) {
         const line = reader.readUntilDelimiterOrEof(&line_buf, '\n') catch |e| switch (e) {
@@ -84,9 +126,15 @@ pub fn run(allocator: std.mem.Allocator, logger: *log.Logger) !void {
 
         if (wrapped == null) {
             wrapped = api.Wrapped.create(.rx_0, .{
-                .huge_pages = false,
+                // Huge pages, unless `--no-huge-pages` said otherwise: a pool
+                // is often also the host that reserved them (`zmrig-os
+                // hugepages`), and a fast verifier that ignored the pool would
+                // map its dataset from ordinary RAM *next to* 2.3 GiB of pages
+                // nothing is using - which is how this process got OOM-killed
+                // the first time it was asked for the dataset.
+                .huge_pages = settings.huge_pages,
                 .huge_pages_jit = true,
-                .full_memory = false,
+                .full_memory = full_memory,
                 .jit = true,
             }) catch {
                 try writer.writeAll("{\"error\":\"cannot create the hash engine\"}\n");
@@ -97,7 +145,10 @@ pub fn run(allocator: std.mem.Allocator, logger: *log.Logger) !void {
         }
 
         if (!have_seed or !std.mem.eql(u8, &current_seed, &seed_bytes)) {
-            if (wrapped.?.seed(&seed_bytes, 1)) |_| {
+            // Building the dataset is the one place a verifier can use more
+            // than one core: every share afterwards is a single hash on this
+            // thread. A light verifier ignores the number.
+            if (wrapped.?.seed(&seed_bytes, init_threads)) |_| {
                 current_seed = seed_bytes;
                 have_seed = true;
             } else |_| {

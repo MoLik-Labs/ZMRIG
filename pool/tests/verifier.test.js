@@ -89,3 +89,33 @@ test('the binary the pool ships with answers on stdout alone', { skip: !fs.exist
     verifier.close();
   }
 });
+
+test('mode fast is passed to the binary, and anything else is not', async () => {
+  // The verifier's speed comes from the child's `--mode`, so the flag has to
+  // reach the child's argv. A typo in VERIFIER_MODE must not become a third
+  // state: `fast` or `light`, nothing else.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zmrig-verifier-'));
+  const fake = path.join(dir, 'echo-args.sh');
+  // Prints its own arguments as the "hash", so the reply says what it was given.
+  fs.writeFileSync(fake, '#!/bin/sh\necho "{\\"hash\\":\\"$*\\"}"\n'
+    + 'while read -r line; do echo "{\\"hash\\":\\"$*\\"}"; done\n');
+  fs.chmodSync(fake, 0o755);
+
+  const fast = new Verifier({ binary: fake, concurrency: 1, timeout: 5000, mode: 'fast' });
+  fast.start();
+  const odd = new Verifier({ binary: fake, concurrency: 1, timeout: 5000, mode: 'FAST ' });
+  odd.start();
+  const typo = new Verifier({ binary: fake, concurrency: 1, timeout: 5000, mode: 'turbo' });
+  typo.start();
+  try {
+    assert.match(await fast.verify(share()), /--verify-share --no-color --mode fast$/);
+    // Padding and case are noise, a different word is not.
+    assert.match(await odd.verify(share()), /--mode fast$/);
+    assert.doesNotMatch(await typo.verify(share()), /--mode/, 'an unknown mode must fall back to light');
+  } finally {
+    fast.close();
+    odd.close();
+    typo.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
