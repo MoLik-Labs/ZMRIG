@@ -374,6 +374,11 @@ pub fn main() !void {
             .full_memory = full,
             .init_threads = opts.init_threads,
             .huge_pages = opts.huge_pages,
+            // `-t` in this mode is hashing threads, not mining threads, and it
+            // is the only place it means that - so it is read from the command
+            // line rather than from the profile's heuristic, which is about
+            // mining and would have quietly given a verifier every core.
+            .threads = if (opts.seen.threads) (opts.threads orelse 1) else 1,
         });
 
         return;

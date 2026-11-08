@@ -98,7 +98,8 @@ Docs: pool/README.md - https://github.com/MoLik-Labs/ZMRIG
   // log line the operator may never scroll to.
   if (config.verify_shares) {
     const mode = String(config.verifier_mode || 'light').trim().toLowerCase() === 'fast' ? 'fast' : 'light';
-    logger('info', `verifier: ${mode} mode, ${config.verifier_concurrency} process(es) of ${config.verifier_binary}`);
+    const threads = Math.max(1, Number(config.verifier_threads) || 1);
+    logger('info', `verifier: ${mode} mode, ${config.verifier_concurrency} process(es) x ${threads} thread(s) of ${config.verifier_binary}`);
 
     if (args.check) {
       const warning = fastModeWarning(readMeminfo(), { mode, concurrency: config.verifier_concurrency });

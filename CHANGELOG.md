@@ -3,6 +3,57 @@
 _Not a release: no tag, no image. This lands on `BETA` and becomes a version when
 the release is cut._
 
+## Verifying on more than one core without buying the RAM twice
+
+Making `fast` mode work raised the obvious next question: a pool with four cores
+wanted four verifiers, which was 4 × 2336 MB. It does not have to be. RandomX is
+one read-only dataset plus a per-thread VM, which is exactly how the miner runs,
+so `zmrig --verify-share -t N` now hashes N shares at once over one dataset.
+
+The pool had to change with it: a verifier answered one share at a time, so a
+second thread inside the process would have had nothing to do. Each verifier
+process now keeps `VERIFIER_PIPELINE` shares in flight (twice its thread count by
+default, which is where the measurements stop improving) and matches the replies
+first in, first out — the order the child answers in. Measured warm, one seed, through `pool/src/verifier.js`:
+
+| Configuration | Processes | Threads | Light | Fast | RAM (`fast`) |
+| --- | --- | --- | --- | --- | --- |
+| `VERIFIER_CONCURRENCY=1` | 1 | 1 | 46 shares/s | 349 shares/s | 2336 MB |
+| `VERIFIER_CONCURRENCY=2` | 2 | 1 | 74 shares/s | 4.6 GiB needed | 4672 MB |
+| `CONCURRENCY=1 VERIFIER_THREADS=2` | 1 | 2 | **87 shares/s** | **626 shares/s** | **2336 MB** |
+
+Two threads in one process beat two processes and use half the memory.
+
+### More than one seed is where it broke
+
+The first threaded build returned *wrong hashes for the whole first round* when
+a client pipelined across a seed change, and the fixed-blob test that came
+before it could not see it. The cause was in the design: `seed` rebuilds the
+cache, and jobs submitted before it were still being hashed by the workers while
+it did. `run` now drains the queue before it changes the seed - and
+`pool/tests/verifier.test.js` has a case that sends two seeds through one
+threaded verifier and compares every hash with a single-threaded run.
+
+### Three bugs found by building it
+
+* The output buffer was only flushed at the top of the read loop, which was fine
+  while the pool sent one share and waited: it now sent one, waited, and the
+  reply sat in a buffer nobody flushed. Input is read with `poll` and replies are
+  written as soon as they are ready — a non-blocking check while shares are in
+  flight, then a 1 ms wake-up so a second share that arrives mid-hash is picked
+  up, and an indefinite wait when there is nothing to hash.
+* The first version waited for the oldest share and wrote whatever happened to
+  be ready, then exited: the last **7 of 2000** replies were never written.
+  `flushAll` keeps going until the queue is empty.
+* A 64 KiB read of many short lines announced `line too long` every time the
+  buffer was emptied, because "buffer full" was checked before "buffer empty".
+  The buffer is compacted and re-searched first; over-long lines are now
+  discarded up to their newline instead of being hashed as fragments.
+
+A timeout now kills the child instead of failing one share: with several shares
+in flight, the next reply would be matched to the wrong one. One failed share is
+honest; a wrong hash is not.
+
 ## Verifying a share took 25 ms and did not have to
 
 The pool re-hashes every share it pays for, and that hash was expensive in the
@@ -16,8 +67,8 @@ verifier can do the same. `--mode=fast` builds it once and hashes from it:
 | | `light` (default) | `fast` |
 | --- | --- | --- |
 | Setup | 0.6 s | 21.5 s at 2 threads, 42.5 s at 1 |
-| Per share, warm | 25.5 ms | **2.9 ms** |
-| One verifier | 39 shares/s | **350 shares/s** |
+| Per share, warm | 22 ms | **2.9 ms** |
+| One verifier | 46 shares/s | **349 shares/s** |
 | RAM per verifier | 256 MB | **2336 MB** |
 
 Same hashes from both, byte for byte; the mode changes how RandomX is

@@ -96,7 +96,9 @@ is the annotated starting point.
 | `min_difficulty` / `max_difficulty` | `100` / `4e6` | Vardiff clamp. |
 | `verify_shares` | `true` | Re-hash every share with `zmrig --verify-share`. |
 | `verifier_mode` | `light` | `light` (256 MB cache, rebuild per share) or `fast` (2 GiB dataset, ~9x faster per share, 2336 MB of RAM per verifier). |
-| `verifier_concurrency` | `2` | One long-lived verifier process per core. Each `fast` one is 2336 MB. |
+| `verifier_concurrency` | `2` | Long-lived verifier processes. Each `fast` one is 2336 MB. |
+| `verifier_threads` | `1` | Hashing threads *inside* each process (`-t`). They share one dataset, so 2 threads cost 1 dataset, where 2 processes cost 2. |
+| `verifier_pipeline` | `0` (= `verifier_threads`) | Shares in flight per process. A thread needs a share waiting to have work. |
 | `pplns_window` | `3600` | Seconds of shares that split a block. |
 | `payout_min` | `0.010000000000` | Minimum balance before a payout. |
 | `payout_mode` | `ledger` | `ledger` records balances, `wallet` really pays. |
@@ -106,7 +108,8 @@ is the annotated starting point.
 
 Environment names are the upper-case equivalents: `POOL_FEE_PERCENT`,
 `OPERATOR_ADDRESS`, `PORT`, `HTTP_PORT`, `DAEMON`, `POOL_MODE`,
-`VERIFY_SHARES`, `VERIFIER_MODE`, `VERIFIER_CONCURRENCY`, `PPLNS_WINDOW`,
+`VERIFY_SHARES`, `VERIFIER_MODE`, `VERIFIER_CONCURRENCY`, `VERIFIER_THREADS`,
+`VERIFIER_PIPELINE`, `PPLNS_WINDOW`,
 `PAYOUT_MODE`, `WALLET_RPC`, `INITIAL_DIFFICULTY`, `VARDIFF`, `STATE_FILE`,
 `AUDIT_FILE`, `LOG_LEVEL`, and the rest of the table above.
 
@@ -147,20 +150,47 @@ once per round rather than once per share. `pool/tests/bench-verify.mjs`
 measures the three numbers that matter, on whatever machine you run it on; on a
 2 vCPU test box with two verifiers and 200 shares per round: the first share of
 a round costs **0.58 s** (the cache build), every share after that takes about
-**25 ms** of wall time, and the steady state is **39 shares per second**. A rig
-at 1 kH/s on difficulty 300 submits about 3.3 shares a second, so that box
-verifies roughly a dozen of them.
+**22 ms** of wall time, and the steady state is **46 shares per second** for one
+verifier. A rig at 1 kH/s on difficulty 300 submits about 3.3 shares a second, so
+one verifier keeps up with a dozen of them.
 
-### When 39 shares/s is not enough: `VERIFIER_MODE=fast`
+### Using both cores without buying the RAM twice
 
-Light mode rebuilds the dataset for every hash — that *is* the 25 ms. `fast`
+There are two ways to verify more than one share at a time, and they are not
+equally expensive:
+
+| | Processes | Threads | Warm, light | Warm, fast | RAM (`fast`) |
+| --- | --- | --- | --- | --- | --- |
+| `VERIFIER_CONCURRENCY=1` | 1 | 1 | 46 shares/s | 349 shares/s | 2336 MB |
+| `VERIFIER_CONCURRENCY=2` | 2 | 1 | 74 shares/s | — (4.6 GiB) | 4672 MB |
+| `VERIFIER_CONCURRENCY=1` `VERIFIER_THREADS=2` | 1 | 2 | **87 shares/s** | **626 shares/s** | **2336 MB** |
+
+Measured warm, one seed, through `pool/src/verifier.js` on the 2 vCPU test host.
+Threads share the dataset — that is how the miner itself runs, one VM per thread
+over one cache — so two threads in one process are both faster than two
+processes and half the memory. Set `VERIFIER_THREADS` to the number of cores you
+want the verifier to have, and leave `VERIFIER_CONCURRENCY` at 1 unless you have
+the RAM for another dataset: `fast` with two processes needs 4.6 GiB.
+
+A thread only has work if a share is waiting, so each process keeps
+`verifier_pipeline` shares in flight (the same number as its threads by
+default). The replies are matched first in, first out, because that is the order
+`zmrig --verify-share` answers in. If a process misses `verifier_timeout`, it is
+killed and every share in it fails: with several shares in flight, a late reply
+would otherwise be handed to the next share, which is worse than a rejected
+share.
+
+### When one thread is not enough: `VERIFIER_MODE=fast`
+
+Light mode rebuilds the dataset for every hash — that *is* the 22 ms. `fast`
 mode builds the 2 GiB dataset once at startup and reads it instead:
 
 | | `light` (default) | `fast` |
 | --- | --- | --- |
 | Setup | 0.6 s | 21 s at 2 threads, 42 s at 1 |
-| Per share, warm | 25 ms | **2.9 ms** |
-| Throughput, one verifier | 39 shares/s | **350 shares/s** |
+| Per share, warm | 22 ms | **2.9 ms** |
+| Throughput, one verifier (1 thread) | 46 shares/s | **349 shares/s** |
+| Throughput, 1 process × 2 threads | 87 shares/s | **626 shares/s** |
 | RAM, per verifier | 256 MB | **2336 MB** |
 
 Same hashes out of both — the mode changes how RandomX is initialised, not what
@@ -182,7 +212,7 @@ up, it just verifies slower. On a 1 GB VPS, stay on `light`.
 
 Shares queued behind a busy verifier are dispatched as each one frees, not when
 the next share happens to arrive; a share that cannot be verified within
-`verify_timeout` is dropped with `verification unavailable` rather than accepted
+`verifier_timeout` is dropped with `verification unavailable` rather than accepted
 on trust.
 
 ### What the WebSocket transport refuses

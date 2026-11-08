@@ -258,7 +258,7 @@ zmrig --verify-share < shares.jsonl > hashes.jsonl
 ```
 
 In `light` mode (the default here, whatever `--mode` says elsewhere) it keeps a
-256 MB cache and rebuilds the dataset for every share: **25 ms** each, 39 shares
+256 MB cache and rebuilds the dataset for every share: **22 ms** each, 46 shares
 a second on a 2 vCPU box. `--mode=fast` builds the 2 GiB dataset once instead —
 21 s of startup at 2 threads, 42 s at 1 — and then reads it: **2.9 ms** a share,
 350 a second. Same hashes, different memory.
@@ -277,6 +277,11 @@ warning --mode fast needs 2336 MB for the dataset and only 1269 MB can be
         allocated here: using the light cache (about 9x slower per share)
 ```
 
-A pool should run one verifier per core, but only as many `fast` ones as the
-machine has RAM for; `pool/src/index.js --check` does that arithmetic and prints
-the number that fits.
+`-t/--threads` inside this mode is how many shares are hashed at once, and it
+costs nothing extra in memory — the threads share the dataset, one VM each, the
+same way the miner itself runs. On the 2 vCPU test box, warm and on one seed:
+one thread verifies 46 shares/s in light mode and 349 in fast, two threads
+verify 87 and **626**. A pool should therefore prefer `VERIFIER_THREADS` over
+more verifier processes, and only run as many `fast` processes as the machine
+has RAM for; `pool/src/index.js --check` does that arithmetic and prints the
+number that fits.

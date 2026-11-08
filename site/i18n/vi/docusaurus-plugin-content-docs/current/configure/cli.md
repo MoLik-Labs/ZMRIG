@@ -250,7 +250,7 @@ zmrig --verify-share < shares.jsonl > hashes.jsonl
 ```
 
 Ở chế độ `light` (mặc định ở đây, bất kể `--mode` nói gì ở chỗ khác) nó giữ
-cache 256 MB và dựng lại dataset cho từng share: **25 ms** một share, 39
+cache 256 MB và dựng lại dataset cho từng share: **22 ms** một share, 46
 share/giây trên máy 2 vCPU. `--mode=fast` dựng dataset 2 GiB một lần — 21 s khởi
 động với 2 thread, 42 s với 1 — rồi đọc lại: **2,9 ms** một share, 350 share/giây.
 Cùng hash, khác RAM.
@@ -268,6 +268,10 @@ warning --mode fast needs 2336 MB for the dataset and only 1269 MB can be
         allocated here: using the light cache (about 9x slower per share)
 ```
 
-Pool nên chạy một verifier mỗi core, nhưng chỉ bật `fast` cho số tiến trình mà
-máy có RAM chịu được; `pool/src/index.js --check` làm phép cộng đó và in ra con
-số vừa.
+`-t/--threads` trong chế độ này là số share băm cùng lúc, và không tốn thêm RAM —
+các thread dùng chung dataset, mỗi thread một VM, đúng như cách miner tự chạy.
+Trên máy thử 2 vCPU, khi đã ấm và cùng một seed: một thread verify 43 share/giây
+ở chế độ light và 349 ở fast, hai thread được 87 và **626**. Vì vậy pool nên
+tăng `VERIFIER_THREADS` trước khi thêm tiến trình verifier, và chỉ bật `fast` cho
+số tiến trình mà máy có RAM chịu được; `pool/src/index.js --check` làm phép cộng
+đó và in ra con số vừa.

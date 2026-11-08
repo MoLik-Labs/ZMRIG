@@ -64,6 +64,8 @@ class PoolServer {
         concurrency: config.verifier_concurrency,
         timeout: config.verifier_timeout,
         mode: config.verifier_mode,
+        threads: config.verifier_threads,
+        pipeline: config.verifier_pipeline,
         logger: this.logger,
       })
       : null;
