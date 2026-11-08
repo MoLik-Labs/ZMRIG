@@ -594,16 +594,23 @@ config file cannot execute anything as root.
 | `ALGO` | `auto` | `auto` advertises every RandomX variant; or pin one |
 | `THREADS` | `auto` | force `-t N` |
 | `AUTO_AUTOTUNE` | `1` | measure the machine and keep watching it |
+| `AUTOTUNED` | — | marker: this machine has been measured, so it is not measured again |
+| `MEASURED_THREADS` | — | the thread count the measurement pinned, next to `THREADS` |
 | `MEASURED_HS` | — | the rate the measurement recorded; the baseline drift is judged against |
 | `TUNED_AT` | — | when that measurement was taken (epoch seconds) |
+| `AFFINITY` | `auto` | `auto` pins to every physical core, `off` uses the whole machine, or an explicit XMRig mask; `ISOLATE` overrides it |
 | `DONATE` | `3` | the developer fee, 0–10; printed by `zmrig-os doctor`, and `zmrig-os setup --donate N` writes it |
+| `SAFE_TEMP` | `72` | °C: the thermal ceiling `safe` mode and the governor hold, and the value `zmrig.os.maxtemp=` overrides |
 | `MSR` | `auto` | `on`/`off`; `auto` uses it only on bare metal as root |
 | `API_PORT` | `0` | `zmrig`'s HTTP API for external monitoring (off by default) |
 | `API_HOST` | `127.0.0.1` | bind address for that API — `0.0.0.0` only with a token |
 | `API_TOKEN` | — | `Authorization: Bearer` value the API then requires |
 | `HUGEPAGES` | (empty) | pages to reserve: empty sizes the pool from `ALGO`, `0` turns it off, a number is obeyed exactly |
+| `HUGEPAGES_1G` | (empty) | 1 GiB pages to reserve at boot, as a count; empty or `0` means none, and `zmrig-os hugepages 1g N` writes it |
 | `ISOLATE` | `0` | logical CPUs to keep for mining, taken as whole SMT cores; `0` is off |
 | `AUTO_REBOOT` | `1` | reboot after five failed starts in a row |
+| `AUTO_UPDATE` | `1` | update the miner daily, keeping the previous binary so the upgrade can be undone |
+| `AUTO_IMAGE` | `0` | also update the OS image into the other A/B slot (off: a rig is updated when you say so) |
 | `CHANNEL` | `stable` | which update channel to follow |
 | `FLEET_URL` | — | control plane (Telegram/Discord bot); empty means nothing is contacted |
 | `FLEET_INTERVAL` | `60` | seconds between check-ins; the server may lower it |

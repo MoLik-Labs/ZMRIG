@@ -789,6 +789,20 @@ contains 'ISOLATE="2"' "$(cat "$ROOTDIR/installed.conf" 2>/dev/null)" &&
 contains 'HUGEPAGES_1G="1"' "$(cat "$ROOTDIR/installed.conf" 2>/dev/null)" &&
     ok "and the gigantic page reservation" || bad "the installed config lost HUGEPAGES_1G"
 
+# `os.conf.example` is the file an operator copies. Seven keys the tool writes
+# were missing from it - the measurement, the affinity, the thermal cap - so a
+# hand-written config could ask about a setting the documentation had no name
+# for. Every key the writer emits has to be in the example; the reverse is not
+# asserted, because a key read only from the kernel command line (`INSTALL`) is
+# not a config-file setting.
+example_keys=$(sed -n 's/^\([A-Z][A-Z_0-9]*\)=.*/\1/p' "$ROOT/os/overlay/etc/zmrig/os.conf.example" 2>/dev/null | sort)
+missing=""
+for key in $(keys_of "$ROOTDIR/installed.conf" | tr ' ' '\n'); do
+    printf '%s\n' "$example_keys" | grep -qx "$key" || missing="$missing $key"
+done
+[ -z "$missing" ] && ok "every key the tool writes is in os.conf.example" ||
+    bad "os.conf.example does not document:$missing"
+
 # The kernel parameters for that install, from the same pure function that
 # writes the running system's block.
 params=$(fnc boot_params_value)

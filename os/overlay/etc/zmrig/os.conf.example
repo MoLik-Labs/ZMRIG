@@ -8,7 +8,8 @@
 # persists.
 WALLET=""
 POOL="gulf.moneroocean.stream:10001"
-WORKER="rig"
+# Empty means this machine's hostname, which is what a rig with no opinion wants.
+WORKER=""
 MODE="max"
 ALGO="auto"
 THREADS="auto"
@@ -16,6 +17,9 @@ THREADS="auto"
 # is a setting, not a rule: 0 turns it off, 1 to 10 are all accepted, and
 # `zmrig-os doctor` prints the value this machine will actually run with.
 DONATE="3"
+# The temperature the `safe` mode and the thermal governor never go above, in
+# degrees Celsius. 72 is a mining fan curve; a laptop or a small case wants less.
+SAFE_TEMP="72"
 
 # The RandomX MSR preset: prefetchers off, worth 5-15 % on bare metal and nothing
 # in a virtual machine. auto = the miner decides (it knows whether this CPU has a
@@ -33,6 +37,19 @@ AUTO_UPDATE="1"
 # other A/B slot and only becomes the default once the copy has been verified;
 # three failed boots on a slot roll the machine back to the other one.
 AUTO_IMAGE="0"
+# Measure this machine once, on this machine, and pin the thread count the miner
+# reports as its best. A heuristic from the core count is right most of the time;
+# the measurement is right here. `AUTOTUNED` is the marker that stops it running
+# again, and the two MEASURED_* keys are what it saw - the rate is what the drift
+# check compares against a week later.
+AUTO_AUTOTUNE="1"
+AUTOTUNED=""
+MEASURED_THREADS=""
+MEASURED_HS=""
+TUNED_AT=""
+# Where the miner is pinned: auto = every physical core, off = the whole machine,
+# or an explicit XMRig mask. ISOLATE=N overrides it with the isolated set.
+AFFINITY="auto"
 CHANNEL="stable"
 # Huge pages: empty means "size the pool from ALGO" (2.3 GB for Monero, 192 MB
 # for Scala), 0 turns the reservation off. The initramfs reads this before it
