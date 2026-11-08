@@ -166,6 +166,14 @@ sudo zmrig-os hugepages          # what is reserved, and what this run needs
 sudo zmrig-os hugepages off      # stop reserving it (next boot)
 ```
 
+How many pages is a question about the machine, not about Monero: three is right
+for a Monero dataset and wrong on a box that cannot spare 3 GB, because the
+reservation never comes back while it boots. `doctor` answers with
+`plan_gigantic_pages`, which asks for a page only when 2 GiB would still be left
+over for the kernel, the page cache and the shell; on a 4 GB rig it says the
+machine cannot afford one instead of printing a command that would leave 1 GB
+for everything else.
+
 `zmrig-os hugepages` writes `default_hugepagesz=1G hugepagesz=1G hugepages=3`
 into the same GRUB environment block `isolate` uses, composing with it rather
 than replacing it. Reserving a gigantic pool **stops the 2 MiB reservation**:

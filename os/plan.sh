@@ -93,6 +93,30 @@ plan_pages() { # algo mode cores total_mb page_kb [threads] [override]
     printf '%s' "$(( (need * 1024 + page_kb - 1) / page_kb ))"
 }
 
+# 1 GiB pages worth reserving at boot for a dataset of `need_mb`.
+#
+# The gigantic pool is the last TLB win available to RandomX - 1040 entries at
+# 2 MiB, two at 1 GiB - and it can only be created before the machine fragments,
+# which is why it is a kernel parameter and not a sysctl. It also never comes
+# back: the memory is out of the machine for as long as it boots. So the answer
+# is a count only when the machine can spare it, and empty when it cannot.
+#
+# 2 GiB is what has to stay for the kernel, the page cache, the shell and the
+# verifier the pool runs. A rig that swaps to serve a TLB win mines slower than
+# the one that never asked.
+plan_gigantic_pages() { # need_mb total_mb
+    local need="${1:-0}" total="${2:-0}" pages
+
+    case "$need" in ''|*[!0-9]*) printf '%s' ''; return 0 ;; esac
+    case "$total" in ''|*[!0-9]*) printf '%s' ''; return 0 ;; esac
+    [ "$need" -gt 0 ] || { printf '%s' ''; return 0; }
+
+    pages=$(( (need + 1023) / 1024 ))
+    [ "$total" -ge $(( pages * 1024 + 2048 )) ] || { printf '%s' ''; return 0; }
+
+    printf '%s' "$pages"
+}
+
 # How many physical cores a set of CPUs amounts to: the number of distinct
 # thread-sibling groups it touches. Isolation takes whole groups, so on an SMT
 # machine this is half the list and on a non-SMT machine it is all of it — and

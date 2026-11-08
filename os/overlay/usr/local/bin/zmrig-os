@@ -2141,13 +2141,23 @@ cmd_doctor() {
         check warn hugepages "none reserved: the miner runs on THP (~20% slower than a reserved pool)"
     fi
 
-    # 1 GiB pages: never a warning, because not having them is not a fault — the
-    # pool has to be reserved before the machine fragments, so it is a decision
-    # taken at install time, and the miner falls back to 2 MiB pages by itself.
+    # 1 GiB pages are never a warning: not having them is not a fault, because
+    # the pool has to be reserved before the machine fragments, so it is a
+    # decision taken at install time and the miner falls back to 2 MiB pages by
+    # itself. What the line must not do is suggest a number the machine cannot
+    # afford - it used to advise three pages unconditionally, which on a 4 GB box
+    # is advice to reserve 3 GB and leave 1 GB for everything else.
     giga_have=$(cat "$SYS/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages" 2>/dev/null || echo "")
+    giga_worth=$(plan_gigantic_pages "$need_mb" "$free_mb")
     case "${giga_have:-x}" in
         ''|*[!0-9]*) check ok gigantic "no 1 GiB pool on this kernel: the miner uses 2 MiB pages" ;;
-        0)  check ok gigantic "no 1 GiB pages reserved (zmrig-os hugepages 1g $(( (need_mb + 1023) / 1024 )) reserves them at boot)" ;;
+        0)
+            if [ -n "$giga_worth" ]; then
+                check ok gigantic "none reserved; ${giga_worth} x 1 GiB would cover the ${need_mb} MB dataset here (zmrig-os hugepages 1g $giga_worth, next boot)"
+            else
+                check ok gigantic "none reserved, and ${free_mb} MB is not enough to spare a 1 GiB page here: the miner uses 2 MiB pages"
+            fi
+            ;;
         *)  check ok gigantic "${giga_have} x 1 GiB reserved: the ${need_mb} MB mapping takes $(( (need_mb + 1023) / 1024 ))" ;;
     esac
 
@@ -3796,6 +3806,10 @@ if ! command -v plan_pages >/dev/null 2>&1; then
     plan_pages() {
         case "${5:-0}" in ''|0|*[!0-9]*) printf '%s' 0 ;; *) printf '%s' "$(( (2336 * 1024 + $5 - 1) / $5 ))" ;; esac
     }
+    # No plan, no advice: a damaged image cannot work out whether this machine
+    # could afford a 1 GiB page, and guessing would send an operator to a boot
+    # parameter that does not fit.
+    plan_gigantic_pages() { printf '%s' ''; }
     plan_mask_hex() { return 1; }
     plan_iso_cpus() { return 0; }
     plan_housekeeping() { return 0; }

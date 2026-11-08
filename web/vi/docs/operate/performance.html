@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.6a362b79.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/runtime~main.095797e8.js" defer="defer"></script>
 <script src="/ZMRIG/vi/assets/js/main.6ebd84ff.js" defer="defer"></script>
 </head>
 <body>
@@ -44,6 +44,10 @@ tường minh (<code>huge pages 2336 MB (explicit, 2 MiB pages)</code>), API tr�
 lập lúc chạy: pool là bộ nhớ vật lý liền mạch và phải được lấy sớm lúc boot, nên
 nó là tham số kernel.</p>
 <div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token function" style="color:rgb(130, 170, 255)">sudo</span><span class="token plain"> zmrig-os hugepages            </span><span class="token comment" style="color:rgb(105, 112, 152);font-style:italic"># đang đặt bao nhiêu, lần chạy này cần bao nhiêu</span><span class="token plain"></span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain"></span><span class="token function" style="color:rgb(130, 170, 255)">sudo</span><span class="token plain"> zmrig-os hugepages 1g </span><span class="token number" style="color:rgb(247, 140, 108)">3</span><span class="token plain">       </span><span class="token comment" style="color:rgb(105, 112, 152);font-style:italic"># dataset Monero là 3 trang; áp dụng lần boot sau</span><span class="token plain"></span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain"></span><span class="token function" style="color:rgb(130, 170, 255)">sudo</span><span class="token plain"> zmrig-os hugepages off        </span><span class="token comment" style="color:rgb(105, 112, 152);font-style:italic"># thôi đặt trước</span><br></div></code></pre></div></div>
+<p>Bao nhiêu trang là câu hỏi về cái máy chứ không phải về Monero: phần đặt trước
+không trả lại trong suốt thời gian rig chạy, nên <code>doctor</code> chỉ đề nghị một con số
+khi vẫn còn 2 GiB cho nhân, page cache và shell. Trên máy 4 GB, nó nói máy không
+dư trang nào thay vì in ra một lệnh để lại 1 GB cho mọi thứ khác.</p>
 <p>Đặt pool gigantic <strong>thay thế</strong> phần đặt trước 2 MiB chứ không cộng thêm — ba
 trang 1 GiB đã lấy 3 GB bộ nhớ vật lý liền mạch, và miner map pool nào đang có.
 Log lúc boot và <code>zmrig-os tune</code> đều nói pool nào đang có hiệu lực.</p>

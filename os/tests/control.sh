@@ -127,6 +127,28 @@ else
     contains "checksum verified" "$CHECK_MSG" && bad "without a miner, doctor must not claim a checksum check"
 fi
 
+# The gigantic-page line is advice, so it has to fit the machine it is printed
+# on. It used to say "zmrig-os hugepages 1g 3" whatever the box was, which on a
+# 4 GB rig is an instruction to reserve 3 GB and leave 1 GB for the kernel.
+giga() { # total RAM in MB
+    # A root with plan.sh in it: without the arithmetic the tool is right to say
+    # nothing, and that is what the damaged-image test covers. This one is about
+    # the number it prints when it *can* work it out.
+    local root="$ROOTDIR/gigaroot"
+    mkdir -p "$root/usr/local/lib/zmrig" "$root/etc/zmrig"
+    cp "$ROOT/os/plan.sh" "$root/usr/local/lib/zmrig/plan.sh" 2>/dev/null || true
+    printf 'WALLET="%s"\n' "$WALLET" > "$root/etc/zmrig/os.conf"
+    ZMRIG_OS_NO_MAIN=1 ZMRIG_OS_ROOT="$root" sh -c \
+        '. "$1"; RAM="$2"; load_conf; mem_total_mb() { printf %s "$RAM"; }; cmd_doctor 2>&1' \
+        _ "$TOOL" "$1" | grep gigantic || true
+}
+contains "would cover" "$(giga 32000)" &&
+    ok "doctor tells a big machine how many 1 GiB pages to reserve" ||
+    bad "doctor gives no gigantic-page advice on a 32 GB box"
+contains "not enough to spare" "$(giga 4000)" &&
+    ok "and tells a small one it cannot spare them" ||
+    bad "doctor advises a reservation a 4 GB box cannot afford"
+
 # The interactive prompt is the one place a typo can be fixed by the person who
 # made it. Dying on the first wrong character means a reboot - or a rig that sits
 # at "no wallet configured" - so it asks three times, says why, and accepts the

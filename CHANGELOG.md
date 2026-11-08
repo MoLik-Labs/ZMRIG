@@ -105,6 +105,22 @@ Both writers now build the block with `plan_grubenv_block` in `os/plan.sh`, whic
 parses what is there, replaces one key, and pads back to exactly 1024 bytes. A key
 too large for the block is refused rather than written truncated.
 
+## `doctor` advised a reservation the machine could not afford
+
+The gigantic-page line ended with `zmrig-os hugepages 1g 3` whatever it was
+running on, because three is what a Monero dataset needs. On a 4 GB rig that is
+an instruction to take 3 GB of RAM permanently out of the machine and leave 1 GB
+for the kernel, the page cache and the shell — advice that turns a fast rig into
+a swapping one, printed by the tool whose job is to say whether the rig is
+healthy.
+
+`plan_gigantic_pages need_mb total_mb` answers the machine-shaped question: a
+page only when 2 GiB would still be left over. `doctor` prints the number when
+there is one and says the box cannot spare a page when there is not; with no
+`plan.sh` it prints neither, because a damaged image cannot work that out. Seven
+assertions in `os/tests/plan.sh` and two in `os/tests/control.sh`, the second
+running the real `doctor` against a faked 32 GB and a faked 4 GB machine.
+
 ## An installed rig forgot how it had been set up
 
 `zmrig-os install` writes the config the installed system boots from, and it did

@@ -49,6 +49,11 @@ sudo zmrig-os hugepages 1g 3       # dataset Monero là 3 trang; áp dụng lầ
 sudo zmrig-os hugepages off        # thôi đặt trước
 ```
 
+Bao nhiêu trang là câu hỏi về cái máy chứ không phải về Monero: phần đặt trước
+không trả lại trong suốt thời gian rig chạy, nên `doctor` chỉ đề nghị một con số
+khi vẫn còn 2 GiB cho nhân, page cache và shell. Trên máy 4 GB, nó nói máy không
+dư trang nào thay vì in ra một lệnh để lại 1 GB cho mọi thứ khác.
+
 Đặt pool gigantic **thay thế** phần đặt trước 2 MiB chứ không cộng thêm — ba
 trang 1 GiB đã lấy 3 GB bộ nhớ vật lý liền mạch, và miner map pool nào đang có.
 Log lúc boot và `zmrig-os tune` đều nói pool nào đang có hiệu lực.

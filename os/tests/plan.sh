@@ -79,6 +79,18 @@ eq "no page size means no pages" 0 "$(plan_pages xmr max 8 32000 0)"
 eq "1 GB pages are counted in 1 GB units" 3 "$(plan_pages xmr max 8 32000 1048576)"
 eq "unreadable RAM is not a reason to crash" 1208 "$(plan_pages xmr max 8 null 2048)"
 
+# Gigantic pages are offered only where the machine can spare them: the
+# reservation is permanent for the life of the boot, and this is the number the
+# doctor prints as advice.
+echo "gigantic pages"
+eq "a 32 GB box gets 3 pages for Monero's 2080 MB" 3 "$(plan_gigantic_pages 2080 32000)"
+eq "an 8 GB box still gets 3" 3 "$(plan_gigantic_pages 2080 8000)"
+eq "a 4 GB box is not told to reserve 3 GiB" "" "$(plan_gigantic_pages 2080 4000)"
+eq "a 6 GB box has 3 GiB spare after 2 GiB of headroom" "" "$(plan_gigantic_pages 2080 5000)"
+eq "Scala needs one page" 1 "$(plan_gigantic_pages 400 8000)"
+eq "no dataset means no pages" "" "$(plan_gigantic_pages 0 32000)"
+eq "unreadable RAM is not advice" "" "$(plan_gigantic_pages 2080 null)"
+
 # ---------------------------------------------------------------- mask
 echo "cpu mask"
 eq "0-3 is 0xf" f "$(plan_mask_hex 0 1 2 3)"

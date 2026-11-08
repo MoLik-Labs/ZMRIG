@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/assets/js/runtime~main.d1ad769a.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/runtime~main.fa58c78e.js" defer="defer"></script>
 <script src="/ZMRIG/assets/js/main.dda710d9.js" defer="defer"></script>
 </head>
 <body>
@@ -44,6 +44,11 @@ one answered (<code>explicit, 1 GiB pages</code> against <code>explicit, 2 MiB p
 be a runtime setting: the pool is contiguous physical memory and has to be
 carved out early in boot, so it is a kernel parameter.</p>
 <div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token function" style="color:rgb(130, 170, 255)">sudo</span><span class="token plain"> zmrig-os hugepages            </span><span class="token comment" style="color:rgb(105, 112, 152);font-style:italic"># what is reserved, and what this run needs</span><span class="token plain"></span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain"></span><span class="token function" style="color:rgb(130, 170, 255)">sudo</span><span class="token plain"> zmrig-os hugepages 1g </span><span class="token number" style="color:rgb(247, 140, 108)">3</span><span class="token plain">       </span><span class="token comment" style="color:rgb(105, 112, 152);font-style:italic"># a Monero dataset is 3 pages; next boot</span><span class="token plain"></span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain"></span><span class="token function" style="color:rgb(130, 170, 255)">sudo</span><span class="token plain"> zmrig-os hugepages off        </span><span class="token comment" style="color:rgb(105, 112, 152);font-style:italic"># stop reserving it</span><br></div></code></pre></div></div>
+<p>How many pages is a question about the machine rather than about Monero: the
+reservation never comes back while the rig is up, so <code>doctor</code> only suggests a
+number when 2 GiB would still be left for the kernel, the page cache and the
+shell. On a 4 GB box it says the machine cannot spare a page instead of printing
+a command that would leave 1 GB for everything else.</p>
 <p>Reserving a gigantic pool <strong>replaces</strong> the 2 MiB reservation rather than adding
 to it — three 1 GiB pages have already taken 3 GB of contiguous memory, and the
 miner maps whichever pool exists. The boot log and <code>zmrig-os tune</code> both say which

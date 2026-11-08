@@ -49,6 +49,12 @@ sudo zmrig-os hugepages 1g 3       # a Monero dataset is 3 pages; next boot
 sudo zmrig-os hugepages off        # stop reserving it
 ```
 
+How many pages is a question about the machine rather than about Monero: the
+reservation never comes back while the rig is up, so `doctor` only suggests a
+number when 2 GiB would still be left for the kernel, the page cache and the
+shell. On a 4 GB box it says the machine cannot spare a page instead of printing
+a command that would leave 1 GB for everything else.
+
 Reserving a gigantic pool **replaces** the 2 MiB reservation rather than adding
 to it — three 1 GiB pages have already taken 3 GB of contiguous memory, and the
 miner maps whichever pool exists. The boot log and `zmrig-os tune` both say which

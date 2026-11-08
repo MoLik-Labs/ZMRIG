@@ -606,7 +606,7 @@ config file cannot execute anything as root.
 | `API_HOST` | `127.0.0.1` | bind address for that API — `0.0.0.0` only with a token |
 | `API_TOKEN` | — | `Authorization: Bearer` value the API then requires |
 | `HUGEPAGES` | (empty) | pages to reserve: empty sizes the pool from `ALGO`, `0` turns it off, a number is obeyed exactly |
-| `HUGEPAGES_1G` | (empty) | 1 GiB pages to reserve at boot, as a count; empty or `0` means none, and `zmrig-os hugepages 1g N` writes it |
+| `HUGEPAGES_1G` | (empty) | 1 GiB pages to reserve at boot, as a count; empty or `0` means none, and `zmrig-os hugepages 1g N` writes it. `doctor` only suggests a number the machine can afford: a page is worth reserving when 2 GiB still stays for the kernel |
 | `ISOLATE` | `0` | logical CPUs to keep for mining, taken as whole SMT cores; `0` is off |
 | `AUTO_REBOOT` | `1` | reboot after five failed starts in a row |
 | `AUTO_UPDATE` | `1` | update the miner daily, keeping the previous binary so the upgrade can be undone |
