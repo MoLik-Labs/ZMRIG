@@ -48,12 +48,18 @@ the log of every container whether or not anybody asked for it.
 ## Run it
 
 ```console
-$ docker run -d --name zmrig --restart unless-stopped \
+$ docker run -d --name zmrig --restart unless-stopped --memory=3g \
     -e WALLET=4YourAddress... \
     -e POOL=gulf.moneroocean.stream:10001 \
     ghcr.io/molik-labs/zmrig
 $ docker logs -f zmrig
 ```
+
+`--memory=3g` is the flag that decides whether this is a rig. RandomX reads a
+2336 MB dataset; under a smaller limit the miner builds the 256 MB cache and
+rebuilds the dataset per hash, which measured **10x slower** on the same cores
+(973 H/s against 99 H/s, two threads). Docker Desktop hands a container 2 GB
+unless told otherwise.
 
 `WALLET` and `POOL` have no defaults. A placeholder wallet hashes for nobody and a
 default pool would be choosing a custodian on your behalf, so the shim refuses
@@ -160,9 +166,10 @@ say the same thing.
 
 **3. Memory: `--memory` below 3 GiB turns fast mode off.** `rx/0` needs a 2336 MB
 mapping. Under a smaller limit the miner builds the cache only and rebuilds the
-dataset per hash: about 10× slower. It says so at startup, and `docker run … args`
-shows the decision-aware figure — 256 MB, not 2336 MB — because planning a
-mapping the miner is about to decline is how a rig gets sized wrong. Give the
+dataset per hash: 10× slower, measured (973 H/s against 99 H/s). The shim says so
+at startup, `docker run … args` shows the decision-aware figure — 256 MB, not
+2336 MB — and `zmrig-tune` on the same container switches its own plan to light
+rather than reserving huge pages for a mapping the miner will decline. Give the
 container 3 GiB or more, or accept light mode deliberately with `MODE=light`.
 
 ### What a container cannot do

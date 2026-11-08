@@ -8,8 +8,8 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/assets/js/runtime~main.0f62316f.js" defer="defer"></script>
-<script src="/ZMRIG/assets/js/main.a6a3e851.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/runtime~main.78b771ed.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/main.a7ca145f.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -61,6 +61,10 @@ inside the container — publish it deliberately, <code>-p 127.0.0.1:18080:18080
 <p>When the log says the rig mines fewer threads than the host has cores, ask the
 container what it actually told the miner:</p>
 <div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token function" style="color:rgb(130, 170, 255)">docker</span><span class="token plain"> run </span><span class="token parameter variable" style="color:rgb(191, 199, 213)">--rm</span><span class="token plain"> </span><span class="token parameter variable" style="color:rgb(191, 199, 213)">-e</span><span class="token plain"> </span><span class="token assign-left variable" style="color:rgb(191, 199, 213)">WALLET</span><span class="token operator" style="color:rgb(137, 221, 255)">=</span><span class="token plain">4YourMoneroAddress ghcr.io/molik-labs/zmrig args</span><br></div></code></pre></div></div>
+<p>It also names the two container-side reasons a rig mines less than the host next
+to it: a host with no huge page pool reserved (about 18 % of hashrate, measured —
+<code>sysctl -w vm.nr_hugepages=1168</code> on the host fixes it, and the container needs no
+flags for it), and <code>/dev/cpu/*/msr</code> for the prefetcher preset.</p>
 <p>Every variable is in <a class="" href="/ZMRIG/docs/install/docker">the container reference</a>.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="c-the-bootable-image">C. The bootable image<a href="#c-the-bootable-image" class="hash-link" aria-label="Direct link to C. The bootable image" title="Direct link to C. The bootable image" translate="no">​</a></h2>
 <p>A rig that only mines does not need a general-purpose distribution. The image is

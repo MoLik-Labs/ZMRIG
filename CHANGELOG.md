@@ -3,6 +3,53 @@
 _Not a release: no tag, no image. This lands on `BETA` and becomes a version when
 the release is cut._
 
+## The tool has one index, and the container has a memory floor
+
+Three changes, all of them about the same failure: a rig that looks fine and
+mines slowly.
+
+### A container under 3 GiB was planned as if it were a host
+
+RandomX maps 2336 MB in one piece. Under a smaller limit the miner builds the
+256 MB cache and rebuilds the dataset per hash, which measured **10x slower** on
+the same cores — 973 H/s against 99 H/s, two threads. Three places knew that and
+none of them acted on it:
+
+* `deploy/docker/entry.js` now prints the cost at startup, with the number that
+  caused it and the flag that fixes it (`docker run --memory=2560m …`). Silent
+  when the limit is large enough, when `MODE=light` is deliberate, or when the
+  host itself is too small for a dataset — a note that fires on a healthy rig is
+  a note nobody reads.
+* `scripts/tune-linux.sh` no longer warns and then plans the fast layout anyway.
+  When the cgroup is the deciding number it switches the plan to `light` and
+  sizes the page reservation for the cache: every page reserved for a mapping
+  that will be declined is memory the rig never gets back. An explicit `--pages`
+  still wins, because an explicit number is a decision.
+* The Docker guide, the front page and the installer's own `args` output now say
+  the same thing, in that order: the flag, the measurement, and how to check
+  before starting.
+
+### The tool is one place, and it is now enforced
+
+`tool/README.md` is the index of everything a rig owner *runs* — the installer,
+the appliance CLI, the planner, the tuner, the container entry point and the
+image — with the tree each file lives in and the test that keeps it honest. It
+also explains why they are not all in one directory: `zmrig-os` must exist at
+`/usr/local/bin/zmrig-os` inside the image, and `oneclick.sh` must sit at the
+repository root for `curl … | sudo bash` to read what the documentation says it
+reads.
+
+`tests/lint/tool-layout.sh` runs in CI and enforces both halves of the promise:
+every path on the index exists, every top-level script is on the index, and
+every entry point named there has a test directory.
+
+### The download is smaller
+
+`tests/lint/repo-size.sh` fails on any tracked file over 1 MB outside `src/` and
+the published site mirror, and lists the ten largest when asked. It found a 3.6 MB
+Python wheel that nothing referenced and had been in every clone since it was
+added by accident.
+
 ## Verifying on more than one core without buying the RAM twice
 
 Making `fast` mode work raised the obvious next question: a pool with four cores

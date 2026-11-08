@@ -51,6 +51,19 @@ jobs:
           bash tests/docs/config-keys.sh
           bash tests/docs/setup-page.sh
 
+      # Two rules about the repository itself, in the job that runs fastest and
+      # needs nothing installed.
+      #
+      # `repo-size.sh` is about the download: a rig installs over somebody's
+      # metered connection, and a stray build artefact in Git is paid for by
+      # every clone forever. `tool-layout.sh` is about finding things: the tool
+      # is one page of the repository, and a script that is not on it does not
+      # exist for the person who has to repair a rig at 3 a.m.
+      - name: Repository size and tool layout
+        run: |
+          bash tests/lint/repo-size.sh
+          bash tests/lint/tool-layout.sh
+
       # The web host. `serve/` has no dependencies, so the unit tests need no
       # install step; the last one boots the real process on a socket.
       - name: Run web host tests

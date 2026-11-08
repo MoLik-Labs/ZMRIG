@@ -8,8 +8,8 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.8c714c1c.js" defer="defer"></script>
-<script src="/ZMRIG/vi/assets/js/main.59623d7a.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/runtime~main.9980adcd.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/main.da0277ad.js" defer="defer"></script>
 </head>
 <body>
 <svg style="display: none;"><defs>
@@ -59,6 +59,9 @@ container — muốn mở ra thì mở có chủ ý: <code>-p 127.0.0.1:18080:18
 <p>Khi log báo số thread ít hơn số core của máy, hỏi container xem nó đã nói gì với
 miner:</p>
 <div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token function" style="color:rgb(130, 170, 255)">docker</span><span class="token plain"> run </span><span class="token parameter variable" style="color:rgb(191, 199, 213)">--rm</span><span class="token plain"> </span><span class="token parameter variable" style="color:rgb(191, 199, 213)">-e</span><span class="token plain"> </span><span class="token assign-left variable" style="color:rgb(191, 199, 213)">WALLET</span><span class="token operator" style="color:rgb(137, 221, 255)">=</span><span class="token plain">4YourMoneroAddress ghcr.io/molik-labs/zmrig args</span><br></div></code></pre></div></div>
+<p>Lệnh đó cũng nói ra hai lý do phía container khiến rig đào chậm hơn cái máy bên
+cạnh: host chưa giữ huge page (khoảng 18 % hashrate, đã đo — <code>sysctl -w vm.nr_hugepages=1168</code> trên host là xong, container không cần cờ nào), và thiếu
+<code>/dev/cpu/*/msr</code> cho preset prefetcher.</p>
 <p>Mọi biến môi trường ở <a class="" href="/ZMRIG/vi/docs/install/docker">tài liệu container</a>.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="c-ảnh-boot">C. Ảnh boot<a href="#c-ảnh-boot" class="hash-link" aria-label="Đường dẫn trực tiếp đến C. Ảnh boot" title="Đường dẫn trực tiếp đến C. Ảnh boot" translate="no">​</a></h2>
 <p>Một cái rig chỉ để đào thì không cần một distribution đa dụng. Ảnh này là một

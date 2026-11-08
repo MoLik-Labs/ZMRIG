@@ -118,6 +118,29 @@ function cgroupCpus(env) {
   return null;
 }
 
+// The container's memory ceiling, in MiB, or null when there is none. This is
+// the number that decides how RandomX runs: the dataset mode needs 2336 MB and
+// `--mode=light` is the fallback, which is **10x slower** on the same cores
+// (measured here: 973 H/s against 99 H/s with 2 threads). Nothing else about a container changes the hash rate that much, and the
+// failure is silent - the miner keeps hashing, just slower - so `args` and the
+// startup notes say it out loud.
+function cgroupMemoryMb(env) {
+  const root = envOf(env, 'ZMRIG_CGROUP_DIR', '/sys/fs/cgroup');
+
+  for (const file of [path.join(root, 'memory.max'), path.join(root, 'memory', 'memory.limit_in_bytes')]) {
+    const text = readText(file).trim();
+    if (!text) continue;
+    if (text === 'max') return null;
+    const bytes = Number(text);
+    if (!Number.isFinite(bytes) || bytes <= 0) continue;
+    // cgroup v1 reports a sentinel near 2^63 for "unlimited".
+    if (bytes >= 1 << 60) return null;
+    return Math.floor(bytes / (1024 * 1024));
+  }
+
+  return null;
+}
+
 function readPair(file) {
   let text;
   try {
@@ -161,6 +184,11 @@ function readNumber(file) {
 // pool". CAP_IPC_LOCK is about mlock(), and /dev/hugepages is about hugetlbfs
 // files; neither is the path the miner takes. What does block the mapping is an
 // empty pool (the host's `vm.nr_hugepages`) or a cgroup hugetlb limit of 0.
+// Measured on the 2 vCPU test host, 2 threads, `--bench`: 973 H/s with the
+// dataset and 99 H/s without. RandomX's own documentation says light mode is
+// about 8x slower, so this is not a quirk of one machine.
+const LIGHT_MODE_RATIO = 10;
+
 function meminfoField(text, key) {
   if (!text) return 0;
   const match = new RegExp(`^${key}:\\s+(\\d+)`, 'm').exec(text);
@@ -221,6 +249,33 @@ function perfNotes(env = process.env, opts = {}) {
       'msr: /dev/cpu/0/msr is not in this container, so the prefetcher preset is skipped ' +
         '(5-15 % on bare metal, nothing in a VM); it needs --device /dev/cpu/0/msr --cap-add SYS_RAWIO --user 0',
     );
+  }
+
+  // The memory ceiling decides light vs dataset mode, which is worth more than
+  // the two notes above put together (~2x on the same cores). `MODE=light` asked
+  // for it, so that case is not a warning.
+  if (mode !== 'light') {
+    const limitMb = opts.memoryLimitMb !== undefined ? opts.memoryLimitMb : cgroupMemoryMb(env);
+    // 2336 MB for the dataset + cache, plus the process itself and the JIT.
+    const needMb = 2560;
+    if (limitMb !== null && limitMb < needMb) {
+      notes.push(
+        `memory: this container is limited to ${limitMb} MB, so RandomX builds no dataset and hashes from the ` +
+          `256 MB cache instead - ${LIGHT_MODE_RATIO}x slower, measured (973 H/s against 99 H/s on 2 threads). ` +
+          `A dataset needs ${needMb} MB: docker run --memory=${Math.ceil(needMb / 512) * 512}m ...`,
+      );
+    } else if (limitMb === null) {
+      // No limit of its own: the host's MemAvailable is what decides. Cheap to
+      // ask, and it is the same question the miner will ask a second later.
+      const available = Math.floor(meminfoField(meminfo, 'MemAvailable') / 1024);
+      if (available > 0 && available < needMb) {
+        notes.push(
+          `memory: ${available} MB is available on this host and a RandomX dataset needs ${needMb} MB, ` +
+            `so the miner will hash from the 256 MB cache: ${LIGHT_MODE_RATIO}x slower, measured (973 H/s against ` +
+            '99 H/s on 2 threads). Free memory, or mine a smaller coin',
+        );
+      }
+    }
   }
 
   return notes;

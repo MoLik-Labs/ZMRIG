@@ -264,3 +264,50 @@ test('the notes belong to `args`, so a restarting rig does not log advice', () =
   // and the command line itself is unchanged by them
   assert.deepEqual(listing.argv, mine.argv);
 });
+
+// The memory ceiling is the single biggest thing a container can get wrong:
+// with less than a dataset's worth of RAM the miner falls back to the 256 MB
+// cache, which measured **10x slower** on the same cores (973 H/s against
+// 99 H/s, 2 threads). It fails silently - the rig keeps hashing - so `args` has
+// to say it, with the number that fixes it.
+
+test('a container too small for the dataset is told what it costs', () => {
+  const notes = perfNotes({}, { meminfo: MEMINFO(1168), hugetlbBytes: null, hasMsr: true, memoryLimitMb: 1024 });
+
+  assert.equal(notes.length, 1);
+  assert.match(notes[0], /limited to 1024 MB/);
+  assert.match(notes[0], /10x slower/, 'the measured ratio, not a guess');
+  assert.match(notes[0], /--memory=2560m/, 'the flag that fixes it, with the number');
+});
+
+test('a container with room for the dataset says nothing', () => {
+  assert.deepEqual(
+    perfNotes({}, { meminfo: MEMINFO(1168), hugetlbBytes: null, hasMsr: true, memoryLimitMb: 4096 }),
+    [],
+  );
+  // 2560 MB is the threshold: at exactly that, the dataset fits.
+  assert.deepEqual(
+    perfNotes({}, { meminfo: MEMINFO(1168), hugetlbBytes: null, hasMsr: true, memoryLimitMb: 2560 }),
+    [],
+  );
+});
+
+test('MODE=light is not warned about, because it was asked for', () => {
+  assert.deepEqual(
+    perfNotes({ MODE: 'light' }, { meminfo: MEMINFO(1168), hugetlbBytes: null, hasMsr: true, memoryLimitMb: 512 }),
+    [],
+  );
+});
+
+test('an unlimited container is judged by the host, and a small host is reported', () => {
+  const small = 'HugePages_Free: 1168\nHugepagesize: 2048 kB\nMemAvailable: 800000 kB\n';
+  const notes = perfNotes({}, { meminfo: small, hugetlbBytes: null, hasMsr: true, memoryLimitMb: null });
+
+  assert.equal(notes.length, 1);
+  assert.match(notes[0], /781 MB is available/);
+  assert.match(notes[0], /10x slower/);
+
+  // A host with room is the normal case and must stay quiet.
+  const big = 'HugePages_Free: 1168\nHugepagesize: 2048 kB\nMemAvailable: 8388608 kB\n';
+  assert.deepEqual(perfNotes({}, { meminfo: big, hugetlbBytes: null, hasMsr: true, memoryLimitMb: null }), []);
+});
