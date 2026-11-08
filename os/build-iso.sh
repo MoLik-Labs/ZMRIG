@@ -789,7 +789,7 @@ Daily use
       zmrig-os install       the two forms above, explained
       zmrig-os ssh-key add   paste a public key, then 'rc-service sshd start'
 
-The developer fee is 1 % of Monero mining time, printed in --check and in the
+The developer fee is 3 % of Monero mining time, printed in --check and in the
 banner. 'zmrig-os setup --donate 0' turns it off; nothing else about the miner
 changes.
 

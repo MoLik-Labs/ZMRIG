@@ -105,6 +105,42 @@ else
     fail "donate-level is $(json_get "${DIR1}/config.json" "donate-level"), expected 3"
 fi
 
+# --- the fee switch the documentation promises ----------------------------
+# "0 turns it off" is a promise about the tool, not only about the binary: the
+# value has to reach the file, or the operator is editing JSON by hand, which is
+# what the docs used to tell them to do.
+DIR_F0="${WORK}/etc-fee-off"
+if run_config "$DIR_F0" --engine=zmrig --pool=supportxmr.com:3333 --donate-level=0; then
+    if [ "$(json_get "${DIR_F0}/config.json" "donate-level")" = "0" ]; then
+        pass "--donate-level=0 writes donate-level 0"
+    else
+        fail "donate-level is $(json_get "${DIR_F0}/config.json" "donate-level"), expected 0"
+    fi
+else
+    fail "config refused --donate-level=0: $(tail -2 "${WORK}/log")"
+fi
+
+DIR_F5="${WORK}/etc-fee-five"
+run_config "$DIR_F5" --engine=zmrig --pool=supportxmr.com:3333 --donate-level 5
+if [ "$(json_get "${DIR_F5}/config.json" "donate-level")" = "5" ]; then
+    pass "--donate-level 5 (space form) writes 5"
+else
+    fail "the space form wrote '$(json_get "${DIR_F5}/config.json" "donate-level")'"
+fi
+
+# The miner accepts 0..10 and rejects 11; the installer must not write a config
+# the miner will refuse at boot.
+if run_config "${WORK}/etc-fee-bad" --engine=zmrig --pool=supportxmr.com:3333 --donate-level=11; then
+    fail "config accepted --donate-level=11, which the miner rejects"
+else
+    pass "config refuses --donate-level=11"
+fi
+if run_config "${WORK}/etc-fee-nan" --engine=zmrig --pool=supportxmr.com:3333 --donate-level=three; then
+    fail "config accepted --donate-level=three"
+else
+    pass "config refuses a fee that is not a number"
+fi
+
 # --- the thermal policy reaches the file the miner reads -------------------
 DIR_T="${WORK}/etc-thermal"
 run_config "$DIR_T" --engine=zmrig --pool=supportxmr.com:3333 --max-temp=70

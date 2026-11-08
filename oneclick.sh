@@ -22,6 +22,7 @@
 #
 # Subcommands
 #   install (default)  deps + build + tune + config + service + self-check
+#   plan               every automatic decision and the reason for it (no root)
 #   build              compile only
 #   tune               huge pages, THP, governor, MSR (root)
 #   config             (re)generate the config file
@@ -31,6 +32,7 @@
 #   verify             self-test + developer-fee audit
 #   update             git pull + rebuild + restart
 #   uninstall          stop, remove service, binary and (optionally) the config
+#   purge              remove everything this tool ever put on the machine
 #
 # Everything is idempotent: re-running does not duplicate services, does not
 # overwrite an existing config unless --force is passed, and skips a rebuild
@@ -100,6 +102,10 @@ MSR_MODE="auto"
 PROFILE="${MINER_PROFILE:-auto}"
 # Empty means "no thermal policy": the miner is only throttled when asked.
 MAX_TEMP="${MAX_TEMP:-}"
+# The developer fee this install will run with. Three percent by default, and a
+# flag because the fee is documented as switchable: "edit donate-level in
+# config.json" is not a switch, it is homework.
+DONATE_LEVEL="${DONATE_LEVEL:-3}"
 CPU_AFFINITY=""
 NICEHASH=0
 # Machine report for the web dashboard (zmrig only): a small file the miner
@@ -162,7 +168,10 @@ confirm() {
 }
 
 usage() {
-    sed -n '3,40p' "$0" | sed 's/^# \{0,1\}//'
+    # The header is the help. Printing a fixed line range means the range goes
+    # stale the day someone adds a subcommand (it did: `plan` and `purge` were
+    # missing from --help), so stop at the first non-comment line instead.
+    sed -n '3,/^[^#]/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
     cat <<'EOF'
 
 Options
@@ -190,7 +199,7 @@ Options
   --algo NAME            force one algorithm instead of pool auto-selection
   --engine NAME          auto (default) | xmrig (all algorithms) | zmrig (Zig, rx/*).
                          auto reads the pool: switching pools need every algorithm,
-                         RandomX-only pools are faster on zmrig (1% dev fee)
+                         RandomX-only pools are faster on zmrig (3% dev fee)
   --tls                  use TLS for the pool connection
   --cloudflare[=HOST[:PORT]]  WebSocket+TLS on 443 (works through CDNs and
                          firewalls that only allow HTTPS). Switches to the
@@ -214,6 +223,8 @@ Options
   --cpu-affinity MASK    mine only on these CPUs, XMRig bitmask (e.g. 0x3)
   --msr                  write the RandomX MSR preset (root, bare metal)
   --no-msr               never touch the MSR registers (containers, some VMs)
+  --donate-level N       developer fee in percent, 0..10 (default: 3; 0 turns it
+                         off). Written into config.json, and printed by --check
   --nicehash             mask the nonce for a NiceHash/rental pool
   --build-dir DIR        where to compile        (default: PREFIX/src/zmrig-build)
   --all-backends         also build OpenCL/CUDA support
@@ -307,6 +318,9 @@ while [ $# -gt 0 ]; do
         --cpu-affinity=*) CPU_AFFINITY="${1#*=}" ;;
         --msr)           MSR_MODE="on" ;;
         --no-msr)        MSR_MODE="off" ;;
+        --donate-level|--donate-level=*)
+            DONATE_LEVEL="${1#*=}"
+            if [ "$DONATE_LEVEL" = "$1" ]; then DONATE_LEVEL="${2:?--donate-level needs a number}"; shift; fi ;;
         --nicehash)      NICEHASH=1 ;;
         --build-dir)     BUILD_DIR_DEFAULT="${2:?}"; shift ;;
         --build-dir=*)   BUILD_DIR_DEFAULT="${1#*=}" ;;
@@ -336,6 +350,15 @@ if [ -n "$MAX_TEMP" ]; then
     if [ "$MAX_TEMP" -lt 45 ] || [ "$MAX_TEMP" -gt 95 ]; then
         die "--max-temp must be 45..95 degrees Celsius, got ${MAX_TEMP}: below 45 the rig would never mine, above 95 nothing is protected"
     fi
+fi
+
+# Same reasoning for the fee: a typo has to fail here, in the plan, rather than
+# produce a config.json the miner refuses to start with at boot.
+case "${DONATE_LEVEL}" in
+    ''|*[!0-9]*) die "--donate-level must be a whole number 0..10, got '${DONATE_LEVEL}'" ;;
+esac
+if [ "${DONATE_LEVEL}" -gt 10 ]; then
+    die "--donate-level takes 0..10 (the miner's own ceiling), got ${DONATE_LEVEL}"
 fi
 
 # ---------------------------------------------------------------------------
@@ -743,10 +766,10 @@ resolve_engine() {
             # the whole RandomX family, the pool picks the best-paying variant,
             # and the rig keeps the faster engine.
             ENGINE="zmrig"
-            info "auto: ${POOL%%:*} pays for several algorithms; zmrig advertises the RandomX family (1% dev fee)"
+            info "auto: ${POOL%%:*} pays for several algorithms; zmrig advertises the RandomX family (3% dev fee)"
         else
             ENGINE="zmrig"
-            info "auto: ${POOL%%:*} mines RandomX only, using the zmrig engine (1% dev fee)"
+            info "auto: ${POOL%%:*} mines RandomX only, using the zmrig engine (3% dev fee)"
         fi
     fi
 
@@ -1211,7 +1234,7 @@ ${cpu_threads_json}
         "loader": null,
         "nvml": true
     },
-    "donate-level": 3,
+    "donate-level": ${DONATE_LEVEL},
     "log-file": null,
     "pools": [
         {
@@ -1776,7 +1799,7 @@ self_check() {
         fi
         rm -f /tmp/zmrig-selftest.$$
 
-        # The shipped binary takes 1 % of Monero time. Print what it says about
+        # The shipped binary takes 3 % of Monero time. Print what it says about
         # itself, and fail loudly if it says something else than the docs.
         local donate_line
         donate_line=$("$BINARY" -o pool.example.com:3333 -u TEST --check 2>/dev/null | sed -n 's/^ *donate  //p' | head -1)
@@ -2258,7 +2281,7 @@ cmd_plan() {
 
     local engine_note=""
     case "$ENGINE" in
-        zmrig) engine_note="RandomX family, 1% dev fee" ;;
+        zmrig) engine_note="RandomX family, 3% dev fee" ;;
         xmrig) engine_note="all algorithms, pool picks the coin" ;;
     esac
 
@@ -2385,7 +2408,7 @@ case "$COMMAND" in
         if [ "$ENGINE" = "zmrig" ]; then
             step "verifying zmrig"
             zmrig_self_test "$binary" || die "self-test failed"
-            # The fee is 1 % of Monero time, printed by --check and switchable
+            # The fee is 3 % of Monero time, printed by --check and switchable
             # off; the audit below reads the rate, the address and the switch.
             if [ -x "${CONFIGURED_ROOT}/scripts/verify-fee.sh" ]; then
                 "${CONFIGURED_ROOT}/scripts/verify-fee.sh" --binary "$binary" \

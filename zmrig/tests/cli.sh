@@ -287,7 +287,7 @@ fi
 rm -f "$auto_cfg"
 
 # -- the developer fee ----------------------------------------------------
-# It is 1 % of Monero mining time by default, it is stated in --check, it can be
+# It is 3 % of Monero mining time by default, it is stated in --check, it can be
 # set, and it can be turned off. A fee nobody can see is the thing users are
 # right to distrust, so all four are contractual.
 donate_line=$("$BIN" -o pool.example.com:3333 -u "$WALLET" --check 2>/dev/null | sed -n 's/^ *donate  //p' | head -1)

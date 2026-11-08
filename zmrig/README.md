@@ -15,7 +15,8 @@ It is not a toy port. It does everything a miner has to do on a pool:
 * live hashrate windows (10 s / 60 s / 15 min), session maximum, share
   counters, dataset and huge-page telemetry;
 * `--version`, `--check`, `--self-test[=light]`, `--bench=N`;
-* 0% developer fee — there is no donation code to audit, only `grep -c donat`.
+* 3% developer fee on the Zig engine — one wallet, printed in `--check`, `--donate-level=0`
+  removes it, and `scripts/verify-fee.sh` fails the build if any document disagrees.
 
 ## Why Zig and not Rust/Go
 

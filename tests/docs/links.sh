@@ -33,7 +33,23 @@ while IFS= read -r file; do files+=("$file"); done < <(
 [ "${#files[@]}" -gt 0 ] || { echo "no Markdown files found" >&2; exit 2; }
 
 # GitHub slugger: lowercase, drop punctuation, spaces to dashes.
+#
+# Docusaurus uses the same algorithm, and it keeps letters outside ASCII: the
+# Vietnamese heading `## Chạy được chưa` has the anchor `#chạy-được-chưa`, which
+# the old ASCII-only version of this function turned into `chy-c`. That made
+# every non-English in-page link unverifiable, so python3 does the unicode part
+# when it is available and the sed version stays as the fallback.
 slug() {
+    if command -v python3 >/dev/null 2>&1; then
+        printf '%s' "$1" | python3 -c '
+import re, sys
+text = sys.stdin.read().lower()
+text = re.sub(r"[`*_]", "", text)
+text = re.sub(r"[^\w\- ]", "", text, flags=re.UNICODE)
+text = re.sub(r"  +", " ", text)
+print(re.sub(r" ", "-", text.strip()).strip("-"))'
+        return
+    fi
     printf '%s' "$1" \
         | tr '[:upper:]' '[:lower:]' \
         | sed -e 's/[`*_]//g' \
@@ -41,6 +57,33 @@ slug() {
               -e 's/  */ /g' \
               -e 's/ /-/g' \
               -e 's/^-//' -e 's/-$//'
+}
+
+# The archived site renders its own Markdown (legacy/assets/md.js), and its
+# slugger folds accents instead of keeping them: `## Cấu hình` becomes
+# `#cau-hinh`. Those files are frozen, so a link that works there is correct
+# even though GitHub would give it a different anchor.
+legacy_slug() {
+    printf '%s' "$1" | python3 -c '
+import re, sys, unicodedata
+text = sys.stdin.read().replace("đ", "d").replace("Đ", "D")
+text = unicodedata.normalize("NFD", text)
+text = "".join(c for c in text if not unicodedata.combining(c))
+text = text.lower()
+print(re.sub(r"[^a-z0-9]+", "-", text).strip("-")[:60])'
+}
+
+# Does this file have a heading whose slug is $2?
+heading_exists() {
+    local file="$1" anchor="$2" heading text fn=slug
+    case "$file" in
+        ./legacy/content/*|legacy/content/*) fn=legacy_slug ;;
+    esac
+    while IFS= read -r heading; do
+        text=$(printf '%s' "$heading" | sed -e 's/^#* *//' -e 's/ *$//')
+        [ "$("$fn" "$text")" = "$anchor" ] && return 0
+    done < <(grep -E '^#{1,6} ' "$file" 2>/dev/null)
+    return 1
 }
 
 # Markdown under legacy/content/ is not read from disk: docs.js renders it
@@ -60,7 +103,38 @@ for file in "${files[@]}"; do
     while IFS= read -r target; do
         [ -z "$target" ] && continue
         case "$target" in
-            http://*|https://*|mailto:*|'#'*|*'{{'*) continue ;;
+            http://*|https://*|mailto:*|*'{{'*) continue ;;
+        esac
+
+        # A same-page anchor (`[Did it work](#did-it-work)`) is a link too: the
+        # heading it names has to exist in this file, or the reader lands at the
+        # top of the page and thinks the documentation lied.
+        case "$target" in
+            '#'*)
+                anchor=${target#\#}
+                [ -z "$anchor" ] && continue
+                case "$file" in
+                    ./legacy/content/*|legacy/content/*)
+                        # The archived site's renderer routes `#slug` to another
+                        # document as well as to a heading, so a page slug is a
+                        # valid anchor there. The manifest is the list of pages.
+                        if heading_exists "$file" "$anchor" ||
+                           grep -q "\"slug\": *\"$anchor\"" "$(dirname "$file")/index.json" 2>/dev/null; then
+                            ok "$file -> #$anchor (legacy page or heading)"
+                        else
+                            bad "$file -> #$anchor (no such legacy page or heading)"
+                        fi
+                        ;;
+                    *.md)
+                        if heading_exists "$file" "$anchor"; then
+                            ok "$file -> #$anchor"
+                        else
+                            bad "$file -> #$anchor (no such heading)"
+                        fi
+                        ;;
+                esac
+                continue
+                ;;
         esac
 
         path=${target%%#*}
@@ -104,12 +178,7 @@ for file in "${files[@]}"; do
         if [ -n "$anchor" ] && [ -f "$resolved" ]; then
             case "$resolved" in
                 *.md)
-                    found=0
-                    while IFS= read -r heading; do
-                        text=$(printf '%s' "$heading" | sed -e 's/^#* *//' -e 's/ *$//')
-                        if [ "$(slug "$text")" = "$anchor" ]; then found=1; break; fi
-                    done < <(grep -E '^#{1,6} ' "$resolved" 2>/dev/null)
-                    if [ "$found" = 1 ]; then
+                    if heading_exists "$resolved" "$anchor"; then
                         ok "$file -> $path#$anchor"
                     else
                         bad "$file -> $path#$anchor (no such heading)"

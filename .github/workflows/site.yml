@@ -37,16 +37,19 @@ jobs:
       - name: Run builder and copy tests
         run: node --test site/tests/*.test.mjs
 
-      # These four walk the repository, not the built site, so they need no
-      # npm at all: link targets, published-page consistency, the install URL
-      # that a repository rename silently breaks, and the appliance's config
-      # keys, which drifted out of both the example file and the doc table.
+      # These five walk the repository, not the built site, so they need no
+      # npm at all: link targets and in-page anchors, published-page
+      # consistency, the install URL that a repository rename silently breaks,
+      # the appliance's config keys, which drifted out of both the example file
+      # and the doc table, and the setup guide's commands, which are the one
+      # thing a reader runs verbatim.
       - name: Run documentation tests
         run: |
           bash tests/docs/links.sh
           bash tests/docs/pages.sh
           bash tests/docs/identity.sh
           bash tests/docs/config-keys.sh
+          bash tests/docs/setup-page.sh
 
       # The web host. `serve/` has no dependencies, so the unit tests need no
       # install step; the last one boots the real process on a socket.
