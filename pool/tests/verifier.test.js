@@ -89,3 +89,141 @@ test('the binary the pool ships with answers on stdout alone', { skip: !fs.exist
     verifier.close();
   }
 });
+
+test('mode fast is passed to the binary, and anything else is not', async () => {
+  // The verifier's speed comes from the child's `--mode`, so the flag has to
+  // reach the child's argv. A typo in VERIFIER_MODE must not become a third
+  // state: `fast` or `light`, nothing else.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zmrig-verifier-'));
+  const fake = path.join(dir, 'echo-args.sh');
+  // Prints its own arguments as the "hash", so the reply says what it was given.
+  fs.writeFileSync(fake, '#!/bin/sh\necho "{\\"hash\\":\\"$*\\"}"\n'
+    + 'while read -r line; do echo "{\\"hash\\":\\"$*\\"}"; done\n');
+  fs.chmodSync(fake, 0o755);
+
+  const fast = new Verifier({ binary: fake, concurrency: 1, timeout: 5000, mode: 'fast' });
+  fast.start();
+  const odd = new Verifier({ binary: fake, concurrency: 1, timeout: 5000, mode: 'FAST ' });
+  odd.start();
+  const typo = new Verifier({ binary: fake, concurrency: 1, timeout: 5000, mode: 'turbo' });
+  typo.start();
+  try {
+    assert.match(await fast.verify(share()), /--verify-share --no-color --mode fast$/);
+    // Padding and case are noise, a different word is not.
+    assert.match(await odd.verify(share()), /--mode fast$/);
+    assert.doesNotMatch(await typo.verify(share()), /--mode/, 'an unknown mode must fall back to light');
+  } finally {
+    fast.close();
+    odd.close();
+    typo.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('replies are matched to shares in the order they were written', async () => {
+  // With a pipeline the child has several shares at once and answers them in
+  // order; the pool must hand each hash back to the share that asked for it.
+  // A queue that resolved "the first promise" instead would credit one rig
+  // with another rig's hash, and the pool would reject both.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zmrig-verifier-'));
+  const fake = path.join(dir, 'echo-nonce.sh');
+  // Answers with the nonce it was given, so the reply identifies the request.
+  fs.writeFileSync(fake, '#!/bin/sh\n'
+    + 'while read -r line; do\n'
+    + '  nonce=$(printf "%s" "$line" | sed -n "s/.*\\"nonce\\":\\"\\([0-9a-f]*\\)\\".*/\\1/p")\n'
+    + '  printf \'{"hash":"%s"}\\n\' "$nonce"\n'
+    + 'done\n');
+  fs.chmodSync(fake, 0o755);
+
+  const verifier = new Verifier({ binary: fake, concurrency: 1, threads: 2, pipeline: 4, timeout: 5000 });
+  verifier.start();
+  try {
+    const nonces = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(8, '0'));
+    const hashes = await Promise.all(nonces.map((nonce) => verifier.verify({ seed: 'aa'.repeat(32), blob: 'bb'.repeat(76), nonce })));
+    assert.deepEqual(hashes, nonces, 'each share got its own answer, in order');
+    assert.equal(verifier.stats.failed, 0);
+  } finally {
+    verifier.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a silent verifier is replaced, not left with a share half answered', async () => {
+  // A timeout with several shares in flight means the replies are out of step
+  // with the requests: the share after the slow one would be answered by the
+  // slow one's hash. The child is killed and every share in it fails - one
+  // failed share is honest, a wrong hash is not.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zmrig-verifier-'));
+  const fake = path.join(dir, 'silent.sh');
+  fs.writeFileSync(fake, '#!/bin/sh\nwhile read -r line; do :; done\n');
+  fs.chmodSync(fake, 0o755);
+
+  const verifier = new Verifier({ binary: fake, concurrency: 1, threads: 2, pipeline: 3, timeout: 300 });
+  verifier.start();
+  try {
+    const results = await Promise.allSettled(Array.from({ length: 3 }, (_, i) => verifier.verify({
+      seed: 'aa'.repeat(32), blob: 'bb'.repeat(76), nonce: String(i + 1).padStart(8, '0'),
+    })));
+    for (const result of results) {
+      assert.equal(result.status, 'rejected');
+      assert.match(result.reason.message, /timed out/);
+    }
+    assert.equal(verifier.stats.failed, 3, 'every share in the dead child is counted, once');
+  } finally {
+    verifier.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('threads reach the child as -t, and one thread is the default', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zmrig-verifier-'));
+  const fake = path.join(dir, 'echo-args.sh');
+  fs.writeFileSync(fake, '#!/bin/sh\necho "{\\"hash\\":\\"$*\\"}"\n'
+    + 'while read -r line; do echo "{\\"hash\\":\\"$*\\"}"; done\n');
+  fs.chmodSync(fake, 0o755);
+
+  const two = new Verifier({ binary: fake, concurrency: 1, threads: 2, timeout: 5000 });
+  two.start();
+  const one = new Verifier({ binary: fake, concurrency: 1, timeout: 5000 });
+  one.start();
+  try {
+    assert.match(await two.verify(share()), /--verify-share --no-color -t 2$/);
+    assert.doesNotMatch(await one.verify(share()), /-t/, 'the default is one thread, named by nobody');
+  } finally {
+    two.close();
+    one.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('threaded verification returns the same hashes as one thread', { skip: !fs.existsSync(MINER) }, async () => {
+  // The whole point of `-t` is that it is the same computation split up. This
+  // is the test that says so with the real binary: same shares, two seeds (so
+  // the dataset is rebuilt while the workers are running), and the answers must
+  // match a single-threaded verifier byte for byte.
+  const seeds = [crypto.randomBytes(32).toString('hex'), crypto.randomBytes(32).toString('hex')];
+  const shares = [];
+  for (const seed of seeds) {
+    for (let i = 0; i < 6; i++) {
+      shares.push({ seed, blob: crypto.randomBytes(76).toString('hex'), nonce: (i + 1).toString(16).padStart(8, '0') });
+    }
+  }
+
+  const single = new Verifier({ binary: MINER, concurrency: 1, timeout: 60000 });
+  const threaded = new Verifier({ binary: MINER, concurrency: 1, threads: 2, pipeline: 4, timeout: 60000 });
+  single.start();
+  threaded.start();
+  try {
+    // Sequential for the reference, all at once for the threaded one.
+    const expected = [];
+    for (const share of shares) expected.push(await single.verify(share));
+
+    const actual = await Promise.all(shares.map((share) => threaded.verify(share)));
+
+    assert.deepEqual(actual, expected, 'two threads agree with one, across a seed change');
+    assert.equal(threaded.stats.failed, 0);
+  } finally {
+    single.close();
+    threaded.close();
+  }
+});

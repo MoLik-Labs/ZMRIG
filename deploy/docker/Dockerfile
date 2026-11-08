@@ -61,7 +61,7 @@ WORKDIR /src
 COPY src ./src
 COPY zmrig ./zmrig
 
-RUN ZIG=/usr/local/bin/zig ./zmrig/build.sh --jobs "${ZMRIG_JOBS}" ${ZMRIG_PORTABLE} --output /out \
+RUN ZIG=/usr/local/bin/zig ./zmrig/build.sh --jobs "${ZMRIG_JOBS}" ${ZMRIG_PORTABLE} --strip --output /out \
  && /out/zmrig --version
 
 # -------------------------------------------------------------- runtime ----

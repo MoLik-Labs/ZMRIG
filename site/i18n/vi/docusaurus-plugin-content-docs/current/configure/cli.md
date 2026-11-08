@@ -239,3 +239,39 @@ không, và miner sẽ chậm khoảng 18 % cho tới khi bạn đặt trang.
 `--check` đọc file và in ra; nó không mở socket và không cấp phát dataset. Nếu
 file chỉ root đọc được thì chạy bằng `sudo`, không thì bạn nhận
 `cannot read …: check the path or run as root`.
+
+## Chế độ pool: `--verify-share`
+
+Pool nào trả tiền cho share thì phải kiểm tra được share đó. `zmrig` trả lời
+qua stdin/stdout, mỗi dòng một JSON vào và một JSON ra, log đi stderr:
+
+```bash
+zmrig --verify-share < shares.jsonl > hashes.jsonl
+```
+
+Ở chế độ `light` (mặc định ở đây, bất kể `--mode` nói gì ở chỗ khác) nó giữ
+cache 256 MB và dựng lại dataset cho từng share: **22 ms** một share, 46
+share/giây trên máy 2 vCPU. `--mode=fast` dựng dataset 2 GiB một lần — 21 s khởi
+động với 2 thread, 42 s với 1 — rồi đọc lại: **2,9 ms** một share, 350 share/giây.
+Cùng hash, khác RAM.
+
+```bash
+zmrig --verify-share --mode=fast < shares.jsonl > hashes.jsonl
+```
+
+Đó là 2336 MB RAM cho mỗi tiến trình, nên miner tự kiểm tra trước khi lấy: với
+`--no-huge-pages`, hoặc trên máy mà bộ nhớ trống cộng số trang huge page trống
+không đủ 2336 MB, nó nói rõ và ở lại cache nhẹ thay vì bị kill giữa share đầu.
+
+```text
+warning --mode fast needs 2336 MB for the dataset and only 1269 MB can be
+        allocated here: using the light cache (about 9x slower per share)
+```
+
+`-t/--threads` trong chế độ này là số share băm cùng lúc, và không tốn thêm RAM —
+các thread dùng chung dataset, mỗi thread một VM, đúng như cách miner tự chạy.
+Trên máy thử 2 vCPU, khi đã ấm và cùng một seed: một thread verify 43 share/giây
+ở chế độ light và 349 ở fast, hai thread được 87 và **626**. Vì vậy pool nên
+tăng `VERIFIER_THREADS` trước khi thêm tiến trình verifier, và chỉ bật `fast` cho
+số tiến trình mà máy có RAM chịu được; `pool/src/index.js --check` làm phép cộng
+đó và in ra con số vừa.

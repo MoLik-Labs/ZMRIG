@@ -7,6 +7,17 @@
 //
 // A verifier that dies is restarted on the next share; a share that cannot be
 // verified within `timeout` is rejected (never accepted on trust).
+//
+// Two ways to use more than one core, and they cost very different amounts of
+// RAM:
+//
+//   concurrency = 2        two processes, 2 x 2336 MB with `fast`
+//   threads = 2           one process, 2336 MB, `-t 2` inside it
+//
+// The second only works if more than one share is in flight per process -
+// `zmrig --verify-share` hashes what it has been given - so a slot keeps up to
+// `pipeline` shares outstanding and matches the replies first in, first out,
+// which is the order the child answers in.
 
 'use strict';
 
@@ -17,9 +28,23 @@ class Verifier {
     this.binary = options.binary || 'zmrig';
     this.concurrency = Math.max(1, Number(options.concurrency || 2));
     this.timeout = Number(options.timeout || 10000);
+    // `light` or `fast`: the miner's own `--mode`, passed through. A verifier
+    // that rebuilds the 2 GiB dataset per share (light) does 22 ms a share on
+    // the test host; with the dataset it is 2.9 ms, for 2.3 GiB of RAM each.
+    this.mode = String(options.mode || 'light').trim().toLowerCase() === 'fast' ? 'fast' : 'light';
+    // Hashing threads inside each child (`-t`). One dataset for all of them.
+    this.threads = Math.min(Math.max(1, Math.floor(Number(options.threads || 1)) || 1), 64);
+    // Shares in flight per child: twice the thread count by default. One per
+    // thread leaves a worker idle for the round trip between a reply and the
+    // next share; measured warm and in `fast` mode, 2 threads did 453 shares/s
+    // at depth 2, 662 at depth 4 and 610-651 at depth 8 - so four, and nothing
+    // deeper. In light mode the hash is long enough that the depth stops
+    // mattering (88 shares/s at 2, 4 and 8).
+    this.pipeline = Math.min(Math.max(1, Math.floor(Number(options.pipeline || this.threads * 2)) || 1), 32);
     this.log = options.logger || (() => {});
     this.slots = [];
     this.queue = [];
+    this.cursor = 0;
     this.closed = false;
     this.stats = { verified: 0, failed: 0, restarts: 0 };
   }
@@ -29,7 +54,11 @@ class Verifier {
   }
 
   spawnSlot(index) {
-    const child = spawn(this.binary, ['--verify-share', '--no-color'], {
+    const args = ['--verify-share', '--no-color'];
+    if (this.mode === 'fast') args.push('--mode', 'fast');
+    if (this.threads > 1) args.push('-t', String(this.threads));
+
+    const child = spawn(this.binary, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env },
     });
@@ -38,7 +67,7 @@ class Verifier {
       index,
       child,
       buffer: '',
-      pending: null,
+      pending: [],          // shares written and not yet answered, oldest first
       alive: true,
       stderr: '',
     };
@@ -59,12 +88,10 @@ class Verifier {
       // path already exists for exactly this.
       if (slot.buffer.length > 64 * 1024) {
         slot.buffer = '';
-        const stuck = slot.pending;
-        slot.pending = null;
-        if (stuck) {
-          clearTimeout(stuck.timer);
-          stuck.reject(new Error('verifier wrote 64 KB without a newline'));
-        }
+        // The replies cannot be matched to the shares any more, so every share
+        // in this slot fails and the child is replaced rather than trusted.
+        this.failSlot(slot, new Error('verifier wrote 64 KB without a newline'));
+        try { slot.child.kill('SIGKILL'); } catch (_) {}
         return;
       }
 
@@ -82,10 +109,12 @@ class Verifier {
         // because its timeout has been cleared.
         if (line.startsWith('[')) continue;
 
-        const waiters = slot.pending;
+        // First in, first out: `zmrig --verify-share` answers in the order it
+        // was asked, and with more than one share in flight that is the only
+        // thing tying a hash to a share.
+        const waiters = slot.pending.shift();
         if (!waiters) continue;
 
-        slot.pending = null;
         clearTimeout(waiters.timer);
 
         try {
@@ -116,11 +145,7 @@ class Verifier {
       this.stats.restarts += 1;
       this.log('warn', `verifier ${index} exited (${signal || code})${slot.stderr ? `: ${slot.stderr.trim().slice(-200)}` : ''}`);
 
-      if (slot.pending) {
-        clearTimeout(slot.pending.timer);
-        slot.pending.reject(new Error('verifier exited'));
-        slot.pending = null;
-      }
+      this.failSlot(slot, new Error('verifier exited'));
 
       // Restart lazily so a missing binary does not spin.
       setTimeout(() => {
@@ -139,15 +164,31 @@ class Verifier {
     this.slots[index] = slot;
   }
 
+  /** Every share this child has been given fails, and the child is forgotten:
+   *  after a desync its next reply would be matched to the wrong share. */
+  failSlot(slot, error) {
+    const waiting = slot.pending;
+    slot.pending = [];
+
+    for (const task of waiting) {
+      clearTimeout(task.timer);
+      this.stats.failed += 1;
+      task.reject(error);
+    }
+  }
+
+  /** A slot with room for one more share. A round-robin cursor, not the first
+   *  one that fits: with the pipeline shallow this spreads the work instead of
+   *  filling slot 0 before touching slot 1. */
   pick() {
-    let best = null;
-    for (const slot of this.slots) {
-      if (!slot || !slot.alive) continue;
-      if (slot.pending) continue;
-      if (!best) best = slot;
+    const count = this.slots.length;
+    for (let i = 0; i < count; i++) {
+      const slot = this.slots[this.cursor % count];
+      this.cursor += 1;
+      if (slot && slot.alive && slot.pending.length < this.pipeline) return slot;
     }
 
-    return best;
+    return null;
   }
 
   /** Resolves with the hash hex string (lowercase) computed by the engine. */
@@ -167,16 +208,21 @@ class Verifier {
       if (!slot) return;
 
       const task = this.queue.shift();
-      const timer = setTimeout(() => {
-        if (slot.pending && slot.pending.task === task) {
-          slot.pending = null;
-          this.stats.failed += 1;
-          task.reject(new Error('verification timed out'));
-          this.drain();
-        }
+      const entry = { task, resolve: task.resolve, reject: task.reject, timer: null };
+
+      // A timeout means replies are out of step with shares: with a pipeline,
+      // the share after this one would be answered by this one's hash. So the
+      // child is killed and every share in it fails, rather than one share
+      // failing and the rest being quietly wrong.
+      entry.timer = setTimeout(() => {
+        // `failSlot` counts each share it rejects; counting this one here too
+        // made a three-share timeout report four failures.
+        this.failSlot(slot, new Error('verification timed out'));
+        this.log('warn', `verifier ${slot.index} timed out after ${this.timeout} ms, restarting it`);
+        try { slot.child.kill('SIGKILL'); } catch (_) {}
       }, this.timeout);
 
-      slot.pending = { task, resolve: task.resolve, reject: task.reject, timer };
+      slot.pending.push(entry);
 
       const line = JSON.stringify({
         seed: task.seed,
@@ -190,8 +236,10 @@ class Verifier {
         slot.child.stdin.write(`${line}\n`);
         this.stats.verified += 1;
       } catch (error) {
-        clearTimeout(timer);
-        slot.pending = null;
+        clearTimeout(entry.timer);
+        // Remove exactly this entry: the shares already in flight stay.
+        const at = slot.pending.indexOf(entry);
+        if (at >= 0) slot.pending.splice(at, 1);
         this.stats.failed += 1;
         task.reject(error);
       }

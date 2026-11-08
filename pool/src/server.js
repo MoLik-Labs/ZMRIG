@@ -3,6 +3,7 @@
 
 'use strict';
 
+const fs = require('node:fs');
 const http = require('node:http');
 const net = require('node:net');
 
@@ -11,6 +12,7 @@ const { JobStore } = require('./jobs');
 const { Ledger } = require('./ledger');
 const { StratumPool } = require('./stratum');
 const { Verifier } = require('./verifier');
+const { fastModeWarning } = require('./fit');
 const { Wallet } = require('./wallet');
 const httpApi = require('./http');
 const ws = require('./ws');
@@ -40,11 +42,30 @@ class PoolServer {
       logger: this.logger,
     });
 
+    // Say it before the children are spawned, not after the OOM killer takes
+    // one: `fast` is 2336 MB per verifier and the default is one per core.
+    if (config.verify_shares && String(config.verifier_mode || '').trim().toLowerCase() === 'fast') {
+      let meminfo;
+      try {
+        meminfo = fs.readFileSync('/proc/meminfo', 'utf8');
+      } catch (_) {
+        // Not Linux: no arithmetic, no warning.
+      }
+      const warning = fastModeWarning(meminfo, {
+        mode: config.verifier_mode,
+        concurrency: config.verifier_concurrency,
+      });
+      if (warning) this.log('warn', warning);
+    }
+
     this.verifier = config.verify_shares
       ? new Verifier({
         binary: config.verifier_binary,
         concurrency: config.verifier_concurrency,
         timeout: config.verifier_timeout,
+        mode: config.verifier_mode,
+        threads: config.verifier_threads,
+        pipeline: config.verifier_pipeline,
         logger: this.logger,
       })
       : null;

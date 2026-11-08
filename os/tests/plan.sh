@@ -422,6 +422,28 @@ eq "without another slot it boots anyway" "boot-anyway" "$(plan_boot_action 3 0)
 eq "a counter that is not a number is zero" "keep" "$(plan_boot_action "" 1)"
 eq "junk in the counter is zero too" "keep" "$(plan_boot_action "x" 1)"
 
+# ------------------------------------------------------- the memory limit rule
+# `/proc/meminfo` is the host's, so the page plan is capped by the cgroup when
+# there is one. Both hierarchies, both nesting shapes, and the two ways of
+# spelling "no limit".
+cg=$(mktemp -d)
+trap 'rm -rf "$cg"' EXIT
+
+eq "v2: the container's own limit is read" "1024" \
+   "$(mkdir -p "$cg/v2/docker/abc" && echo 1073741824 > "$cg/v2/docker/abc/memory.max" && printf '0::/docker/abc\n' > "$cg/v2.self" && ZMRIG_CGROUP_ROOT="$cg/v2" ZMRIG_SELF_CGROUP="$cg/v2.self" plan_memory_limit_mb)"
+eq "v2: a process at the namespace root uses the root's limit" "512" \
+   "$(mkdir -p "$cg/v2root" && echo 536870912 > "$cg/v2root/memory.max" && printf '0::/\n' > "$cg/v2root.self" && ZMRIG_CGROUP_ROOT="$cg/v2root" ZMRIG_SELF_CGROUP="$cg/v2root.self" plan_memory_limit_mb)"
+eq "v2: max means no limit" "" \
+   "$(echo max > "$cg/v2/docker/abc/memory.max" && printf '0::/docker/abc\n' > "$cg/v2.self" && ZMRIG_CGROUP_ROOT="$cg/v2" ZMRIG_SELF_CGROUP="$cg/v2.self" plan_memory_limit_mb)"
+eq "v1: the memory controller's path is read, not the root hierarchy" "2048" \
+   "$(mkdir -p "$cg/v1/memory/docker/abc" && echo 2147483648 > "$cg/v1/memory/docker/abc/memory.limit_in_bytes" && printf '12:cpu,cpuacct:/docker/abc\n7:memory:/docker/abc\n' > "$cg/v1.self" && ZMRIG_CGROUP_ROOT="$cg/v1" ZMRIG_SELF_CGROUP="$cg/v1.self" plan_memory_limit_mb)"
+eq "v1: 9223372036854771712 is unlimited, not a 8 TiB machine" "" \
+   "$(mkdir -p "$cg/v1root/memory" && echo 9223372036854771712 > "$cg/v1root/memory/memory.limit_in_bytes" && printf '7:memory:/\n' > "$cg/v1root.self" && ZMRIG_CGROUP_ROOT="$cg/v1root" ZMRIG_SELF_CGROUP="$cg/v1root.self" plan_memory_limit_mb)"
+eq "a machine with no cgroup has no limit" "" \
+   "$(mkdir -p "$cg/empty" && printf '' > "$cg/empty.self" && ZMRIG_CGROUP_ROOT="$cg/empty" ZMRIG_SELF_CGROUP="$cg/empty.self" plan_memory_limit_mb)"
+eq "junk in memory.max is not a limit" "" \
+   "$(echo nonsense > "$cg/v2root/memory.max" && printf '0::/\n' > "$cg/v2root.self" && ZMRIG_CGROUP_ROOT="$cg/v2root" ZMRIG_SELF_CGROUP="$cg/v2root.self" plan_memory_limit_mb)"
+
 rmroot
 unset ZMRIG_OS_ROOT ZMRIG_OS_DRYRUN ZMRIG_OS_SYS
 

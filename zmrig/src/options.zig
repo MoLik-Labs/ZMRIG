@@ -121,6 +121,7 @@ pub const Seen = struct {
     affinity_mask: bool = false,
     user_agent: bool = false,
     init_threads: bool = false,
+    threads: bool = false,
     priority: bool = false,
     print_time: bool = false,
     retries: bool = false,
@@ -459,6 +460,9 @@ pub const usage =
     \\      --power=W            wall power in watts, used by the report
     \\      --verify-share       read {"seed","blob","nonce"} JSON lines on stdin and
     \\                           print the hashes: share verification for a pool
+    \\                           (--mode=fast builds the dataset once: 9x faster
+    \\                           per share for 2.3 GiB of RAM; -t N hashes N
+    \\                           shares at once over that one dataset)
     \\  -h, --help               this help
     \\  -V, --version            print the version
     \\
@@ -696,6 +700,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseEr
             if (opts.pools.items.len > 0) opts.pools.items[opts.pools.items.len - 1].tls_insecure = true;
         } else if (std.mem.eql(u8, name, "-t") or std.mem.eql(u8, name, "--threads")) {
             opts.threads = try parseNumber(usize, try needValue(args, &i, inline_value));
+            opts.seen.threads = true;
         } else if (std.mem.eql(u8, name, "--mode")) {
             const value = try needValue(args, &i, inline_value);
             if (std.mem.eql(u8, value, "auto")) {

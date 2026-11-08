@@ -81,17 +81,31 @@ plan_need_mb() { # algo mode cores [threads]
 # is the normal case on a host that runs anything else. ZMRIG_CGROUP_ROOT
 # exists for the tests, exactly as it does in zmrig's topology.zig.
 plan_memory_limit_mb() {
-    local root="${ZMRIG_CGROUP_ROOT:-/sys/fs/cgroup}" rel="" value mb
+    local root="${ZMRIG_CGROUP_ROOT:-/sys/fs/cgroup}"
+    local self="${ZMRIG_SELF_CGROUP:-/proc/self/cgroup}"
+    local rel="" value mb
 
-    if [ -r /proc/self/cgroup ]; then
-        rel=$(awk -F: '$1 == "0" { sub(/^[^:]*:[^:]*:/, ""); print; exit }' /proc/self/cgroup 2>/dev/null)
+    # The path this process sits at, in either hierarchy. v2 is the line whose
+    # hierarchy id is 0 and whose controllers field is empty; v1 is the line
+    # that lists `memory` among its controllers. Parsing both is not defensive
+    # programming for its own sake - a v1 host would otherwise read the root
+    # hierarchy, which is unlimited, and silently plan from the host's RAM
+    # again, which is the bug this function exists to fix.
+    if [ -r "$self" ]; then
+        rel=$(awk -F: '$1 == "0" && $3 != "" { print $3; exit }' "$self" 2>/dev/null)
+        case "$rel" in
+            /*) ;;
+            *)
+                rel=$(awk -F: '$2 ~ /(^|,)memory(,|$)/ && $3 != "" { print $3; exit }' "$self" 2>/dev/null)
+                ;;
+        esac
         [ "$rel" = "/" ] && rel=""
     fi
 
     for value in \
         "${root}${rel}/memory.max" \
         "${root}/memory.max" \
-        "${root}${rel}/memory/memory.limit_in_bytes" \
+        "${root}/memory${rel}/memory.limit_in_bytes" \
         "${root}/memory/memory.limit_in_bytes"
     do
         [ -r "$value" ] || continue

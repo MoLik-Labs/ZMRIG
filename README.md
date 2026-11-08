@@ -517,7 +517,11 @@ blueprint is in `render.yaml`, the details in [`doc/WEB.md`](doc/WEB.md).
   on a host that only allows outbound 443.
 * **Every share verified** — the pool re-hashes each submitted blob with
   `zmrig --verify-share`; a hash that does not match closes the connection
-  instead of being paid.
+  instead of being paid. `VERIFIER_MODE=fast` verifies a share in 2.9 ms instead
+  of 22 ms on the same core, for 2.3 GiB of RAM per verifier, and the pool
+  checks that against the host's memory before it starts. Hashing threads
+  (`VERIFIER_THREADS`) share one dataset, so two threads verify 626 shares/s on
+  one 2.3 GiB mapping where two processes would need 4.6 GiB.
 * **PPLNS in BigInt piconero** — no floating point near money, fee rounded down,
   dust listed instead of absorbed.
 * **Auditable** — `/api/audit` and `audit.jsonl` carry the reward, the fee and
@@ -530,7 +534,7 @@ blueprint is in `render.yaml`, the details in [`doc/WEB.md`](doc/WEB.md).
 cd pool
 node src/index.js --check --config config.json   # validate and exit
 node src/index.js --config config.json           # stratum + HTTP
-npm test                                         # 29 tests, includes a real miner
+npm test                                         # 67 tests, includes a real miner
 ```
 
 Fees from a reference deployment go to the wallet in

@@ -355,7 +355,31 @@ pub fn main() !void {
     if (opts.verify_share) {
         // stdout is a protocol here: one JSON line per share, nothing else.
         log.global.stderr_sink = true;
-        try verify.run(allocator, &log.global);
+        // `--mode fast` asks for the 2 GiB dataset, which turns a share from a
+        // dataset rebuild into a single hash. See verify.zig for the numbers and
+        // for why `auto` stays on the light cache.
+        const need_mb = memoryMb(firstAlgo(&opts), .fast, miner_mod.totalMemory());
+        // `availableMemory`, not `usableMemory`: the dataset is mapped from the
+        // free huge pages when there are any (the verifier asks for them and
+        // falls back), and from ordinary RAM when there are not. Both numbers
+        // are in `availableMemory`, neither is in the machine's size.
+        const room_mb = miner_mod.availableMemory(opts.huge_pages) / (1024 * 1024);
+        const wants_fast = opts.mode == .fast;
+        const full = wants_fast and room_mb >= need_mb;
+
+        if (wants_fast and !full) {
+            log.global.warn("--mode fast needs {d} MB for the dataset and only {d} MB can be allocated here: using the light cache (about 9x slower per share)", .{ need_mb, room_mb });
+        }
+        try verify.run(allocator, &log.global, .{
+            .full_memory = full,
+            .init_threads = opts.init_threads,
+            .huge_pages = opts.huge_pages,
+            // `-t` in this mode is hashing threads, not mining threads, and it
+            // is the only place it means that - so it is read from the command
+            // line rather than from the profile's heuristic, which is about
+            // mining and would have quietly given a verifier every core.
+            .threads = if (opts.seen.threads) (opts.threads orelse 1) else 1,
+        });
 
         return;
     }

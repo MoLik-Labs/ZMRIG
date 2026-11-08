@@ -123,9 +123,21 @@ zmrig -o pool.example.com:3333 -u 4YourMoneroAddress.rig1 -t 4
   long-lived `zmrig --verify-share` per core so the 256 MB cache is built once
   per round. `pool/tests/bench-verify.mjs` measures it on your machine; on a
   2 vCPU test box with two verifiers and 200 shares per round the first share
-  costs 0.85 s (cache build) and the steady state is 43 shares/s — a rig at
+  costs 0.58 s (cache build) and the steady state is 46 shares/s — a rig at
   1 kH/s on difficulty 300 submits about 3.3 shares/s, so that box verifies
   roughly a dozen of them.
+- `VERIFIER_MODE=fast` builds the 2 GiB dataset once and reads it per share:
+  **2.9 ms a share instead of 22 ms** (349 shares/s per verifier), measured on
+  the same box, for 2336 MB of RAM *per verifier process* and 21 s of startup.
+  It is opt-in, and the pool adds that up against `/proc/meminfo` at startup —
+  `fast` with the default two verifiers is 4.6 GiB, which a 4 GB VPS does not
+  have. A verifier that cannot get the dataset falls back to the light cache and
+  logs why. Details and the full table are in `pool/README.md`.
+- More than one share at a time is `VERIFIER_THREADS` (threads inside one
+  process, one dataset) rather than `VERIFIER_CONCURRENCY` (more processes, one
+  dataset each). Measured warm on the same box: one process with two threads
+  does **87 shares/s in light mode and 626 in fast mode**, against 74 and a
+  4.6 GiB bill for two processes.
 - `/stratum` faces the internet, so its framing is bounded: a frame over 1 MiB
   closes the connection, a **message** over 256 KiB closes it too (a per-frame
   limit alone leaves a client free to send continuation frames for ever), and a

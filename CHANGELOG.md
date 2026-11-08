@@ -3,6 +3,130 @@
 _Not a release: no tag, no image. This lands on `BETA` and becomes a version when
 the release is cut._
 
+## Verifying on more than one core without buying the RAM twice
+
+Making `fast` mode work raised the obvious next question: a pool with four cores
+wanted four verifiers, which was 4 × 2336 MB. It does not have to be. RandomX is
+one read-only dataset plus a per-thread VM, which is exactly how the miner runs,
+so `zmrig --verify-share -t N` now hashes N shares at once over one dataset.
+
+The pool had to change with it: a verifier answered one share at a time, so a
+second thread inside the process would have had nothing to do. Each verifier
+process now keeps `VERIFIER_PIPELINE` shares in flight (twice its thread count by
+default, which is where the measurements stop improving) and matches the replies
+first in, first out — the order the child answers in. Measured warm, one seed, through `pool/src/verifier.js`:
+
+| Configuration | Processes | Threads | Light | Fast | RAM (`fast`) |
+| --- | --- | --- | --- | --- | --- |
+| `VERIFIER_CONCURRENCY=1` | 1 | 1 | 46 shares/s | 349 shares/s | 2336 MB |
+| `VERIFIER_CONCURRENCY=2` | 2 | 1 | 74 shares/s | 4.6 GiB needed | 4672 MB |
+| `CONCURRENCY=1 VERIFIER_THREADS=2` | 1 | 2 | **87 shares/s** | **626 shares/s** | **2336 MB** |
+
+Two threads in one process beat two processes and use half the memory.
+
+### More than one seed is where it broke
+
+The first threaded build returned *wrong hashes for the whole first round* when
+a client pipelined across a seed change, and the fixed-blob test that came
+before it could not see it. The cause was in the design: `seed` rebuilds the
+cache, and jobs submitted before it were still being hashed by the workers while
+it did. `run` now drains the queue before it changes the seed - and
+`pool/tests/verifier.test.js` has a case that sends two seeds through one
+threaded verifier and compares every hash with a single-threaded run.
+
+### Three bugs found by building it
+
+* The output buffer was only flushed at the top of the read loop, which was fine
+  while the pool sent one share and waited: it now sent one, waited, and the
+  reply sat in a buffer nobody flushed. Input is read with `poll` and replies are
+  written as soon as they are ready — a non-blocking check while shares are in
+  flight, then a 1 ms wake-up so a second share that arrives mid-hash is picked
+  up, and an indefinite wait when there is nothing to hash.
+* The first version waited for the oldest share and wrote whatever happened to
+  be ready, then exited: the last **7 of 2000** replies were never written.
+  `flushAll` keeps going until the queue is empty.
+* A 64 KiB read of many short lines announced `line too long` every time the
+  buffer was emptied, because "buffer full" was checked before "buffer empty".
+  The buffer is compacted and re-searched first; over-long lines are now
+  discarded up to their newline instead of being hashed as fragments.
+
+A timeout now kills the child instead of failing one share: with several shares
+in flight, the next reply would be matched to the wrong one. One failed share is
+honest; a wrong hash is not.
+
+## Verifying a share took 25 ms and did not have to
+
+The pool re-hashes every share it pays for, and that hash was expensive in the
+one way nobody could see from the configuration: `--verify-share` kept a 256 MB
+cache and **rebuilt the dataset for each share**. 2000 shares of one seed,
+measured on the 2 vCPU test box: 51.6 s, 25.5 ms each, 39 shares a second.
+
+The dataset is what a miner builds at startup and then reads for hours. A
+verifier can do the same. `--mode=fast` builds it once and hashes from it:
+
+| | `light` (default) | `fast` |
+| --- | --- | --- |
+| Setup | 0.6 s | 21.5 s at 2 threads, 42.5 s at 1 |
+| Per share, warm | 22 ms | **2.9 ms** |
+| One verifier | 46 shares/s | **349 shares/s** |
+| RAM per verifier | 256 MB | **2336 MB** |
+
+Same hashes from both, byte for byte; the mode changes how RandomX is
+initialised, not what it computes. The pool exposes it as `VERIFIER_MODE=fast`
+(passed to the child as its own `--mode`), and the default stays `light`: one
+verifier per core on a 1 GB VPS is not the place to find out what 2.3 GiB times
+two does.
+
+### The check said yes and the kernel said no
+
+Turning that on exposed a real bug on the way, which is why it is worth writing
+down. The verifier asked whether the dataset fits, was told yes, and was
+OOM-killed before it hashed a single share — on a host with 2.3 GB reserved as
+huge pages and 1.3 GB of ordinary memory. Both facts were true: `usableMemory`
+is capped by the *machine's* size, which is the right number for "does the
+machine have room", and the reserved page pool is part of the machine — but an
+ordinary `mmap` cannot touch it. The question a new allocation asks is
+`MemAvailable` **plus** the free huge pages, and that is now its own function
+(`availableMemory`, which also honours `--no-huge-pages`: a process told not to
+use the pool cannot count it). A verifier that cannot get the dataset now says
+so and uses the light cache instead of dying, and `--check` on the pool adds
+`VERIFIER_CONCURRENCY × 2336 MB` against `/proc/meminfo` and prints the number
+that fits:
+
+```text
+warn  VERIFIER_MODE=fast needs 9344 MB for 4 verifier(s) and 3641 MB can be
+      allocated here: set VERIFIER_CONCURRENCY=1 to fit
+```
+
+## The line splitter held a regex, not a copy
+
+Stratum reads arrive in whatever chunks the network hands over, so every
+connection runs a "find the newline, strip the CR" loop. That loop used
+`line.replace(/\r$/, '')` per line - a regex compile-free but still a regex
+match and a string copy on a path that runs once per share per rig.
+
+400 000 submits read 8 lines at a time, measured: **92 ms → 64 ms** in the pool,
+and the same change in the proxy. It is a small number quoted honestly: with
+`JSON.parse` on both sides of a real share the difference is under the noise of
+this host, and the win only shows up when one read carries many messages. The
+comment in the code says that, because "3x faster" would be a lie at the
+per-share level. A dropped connection now also drops its buffer, which the old
+loop kept until the process exited.
+
+## Two smaller ones from the same sweep
+
+* `Ledger.save()` wrote the state file with two-space indentation. 20 000
+  workers: 7.0 MB on disk and 47.6 ms per save, of which 34.3 ms was
+  `JSON.stringify`. Compact JSON: **4.8 MB**, 18.4 ms of stringify, 39–48 ms per
+  save (this host's write time is the noisy part; the stringify number is the
+  real one).
+* `os/plan.sh` read one cgroup layout. On a cgroup **v1** host it looked at
+  `${root}/memory/memory.limit_in_bytes` - usually `unlimited` - and planned the
+  huge page reservation from the *host's* RAM, which is the bug the v2 path had
+  already been fixed for. It now resolves the controller's own path from
+  `/proc/self/cgroup` and reads both layouts, and seven test cases pin the five
+  layouts that exist in the wild.
+
 ## The container was sized for the host it ran on
 
 Three numbers decided how fast a container mined, and every one of them came from

@@ -182,12 +182,21 @@ class Upstream extends EventEmitter {
       return;
     }
 
-    let index;
-    while ((index = this.buffer.indexOf('\n')) >= 0) {
-      const line = this.buffer.slice(0, index).replace(/\r$/, '');
-      this.buffer = this.buffer.slice(index + 1);
+    // Cursor plus charCodeAt for the CR, as in pool/src/stratum.js: a pool that
+    // answers a batch of shares in one read paid one regular expression per
+    // answer to strip a byte.
+    const text = this.buffer;
+    let start = 0;
+    let end;
+
+    while ((end = text.indexOf('\n', start)) >= 0) {
+      let line = text.slice(start, end);
+      if (line.charCodeAt(line.length - 1) === 13) line = line.slice(0, -1); // CR
+      start = end + 1;
       if (line.trim()) this.onLine(line);
     }
+
+    this.buffer = start === 0 ? text : text.slice(start);
   }
 
   onLine(line) {
