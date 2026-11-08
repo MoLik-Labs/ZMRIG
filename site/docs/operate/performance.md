@@ -177,6 +177,28 @@ steps that go both ways (the dataset being re-touched), while `VmData` and
 1 422 shares accepted, 0 rejected. Eight minutes is not a week, but it does rule
 out an allocation per share or per job that is never returned.
 
+## A CPU quota is not an affinity mask
+
+`docker run --cpus=2`, `systemd CPUQuota=200%` and a Kubernetes `limits.cpu` are
+one mechanism: a CFS quota on the group. The process still sees every CPU, so a
+thread count derived from the CPU count oversubscribes — and then the kernel
+stops the whole group when the quota is spent, so a thread with its scratchpad in
+L3 waits out the rest of the period instead of finishing a share.
+
+The miner reads the quota (`cpu.max` on cgroup v2, `cpu.cfs_quota_us` on v1) and
+uses it as a ceiling on the default thread count:
+
+```console
+$ zmrig --check
+cpu quota: 1 cpu(s) available of 2 visible, using 1 thread(s)
+profile free: 1 thread(s) of 2 logical cpu (2 physical cores)
+```
+
+An explicit `-t` is never lowered, and `--autotune` searches inside the quota
+instead of measuring a throttled number as if it were the machine's best. The
+container image applies the same cap, so `docker run … args` shows the count the
+miner will really use.
+
 ## Measuring it yourself
 
 ```bash

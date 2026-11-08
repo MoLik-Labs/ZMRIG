@@ -255,6 +255,15 @@ pub fn main() !void {
         break :blk memoryMb(algo, mode, miner_mod.totalMemory()) + scratch_mb + 64;
     };
 
+    // `--profile` decides the thread count, so it is resolved before anything
+    // reads `opts.threads` (`--check` included: the summary must not lie).
+    //
+    // Before the benchmark, too: `--bench` used to fall through to the L3
+    // heuristic, so on a rig with a cgroup quota it measured a machine that was
+    // throttled and reported the result as this machine's best. A benchmark is
+    // the number somebody writes down in doc/BENCHMARKS.md.
+    const profile = resolveProfile(&opts, &log.global);
+
     if (opts.benchmark) {
         try requireMemory(dataset_mb);
         _ = try benchmark(allocator, &opts, 180, 0);
@@ -330,9 +339,6 @@ pub fn main() !void {
         std.process.exit(1);
     };
 
-    // `--profile` decides the thread count, so it is resolved before anything
-    // reads `opts.threads` (`--check` included: the summary must not lie).
-    const profile = resolveProfile(&opts, &log.global);
 
     if (opts.autotune) {
         try runAutotune(allocator, &opts, profile, &log.global);
@@ -1577,6 +1583,12 @@ fn resolveProfile(opts: *options.Options, logger: *@import("log.zig").Logger) to
     const logical = miner_mod.cpuCount();
     const physical = topology.physicalCores(logical);
     const battery = topology.batteryState();
+    // A cgroup CPU quota is not an affinity mask: under `docker --cpus=2`,
+    // `systemd CPUQuota=200%` or a Kubernetes limit the process still sees every
+    // CPU, so the heuristic below would ask for one thread per physical core and
+    // the whole group would then be throttled together - slower than the same
+    // work in fewer threads. Only the default is capped; `-t` is never changed.
+    const quota = topology.quotaCpus();
 
     const profile: topology.Profile = switch (opts.profile) {
         .free => .free,
@@ -1609,7 +1621,14 @@ fn resolveProfile(opts: *options.Options, logger: *@import("log.zig").Logger) to
     }
 
     if (opts.threads == null) {
-        const wanted = topology.threadsFor(profile, logical, physical);
+        var wanted = topology.threadsFor(profile, logical, physical);
+
+        if (quota) |cpus| {
+            if (cpus < wanted) {
+                logger.info("cpu quota: {d} cpu(s) available of {d} visible, using {d} thread(s)", .{ cpus, logical, @max(cpus, 1) });
+                wanted = @max(cpus, 1);
+            }
+        }
 
         if (wanted != miner_mod.defaultThreads(logical)) {
             // Say it once: the difference between the L3 heuristic and the
@@ -1636,11 +1655,16 @@ fn runAutotune(
     profile: topology.Profile,
     logger: *@import("log.zig").Logger,
 ) !void {
+    // Measuring more threads than the cgroup allows would report the throttled
+    // number as if it were this machine's best, so the search space is capped
+    // for the same reason the default is.
+    const quota = topology.quotaCpus();
     const logical = miner_mod.cpuCount();
     const physical = topology.physicalCores(logical);
+    const searchable = if (quota) |cpus| @max(@min(logical, cpus), 1) else logical;
 
     var list_buf: [8]usize = undefined;
-    const list = autotune.candidates(profile, logical, physical, &list_buf);
+    const list = autotune.candidates(profile, searchable, physical, &list_buf);
 
     var out = std.io.getStdOut().writer();
     try out.print("autotune: profile {s}, {d} logical cpu, {d} physical cores\n", .{

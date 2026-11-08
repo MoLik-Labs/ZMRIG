@@ -702,6 +702,35 @@ Thread tuning beyond auto-config:
 one thread per **physical** core (affinity list from
 `lscpu -e=cpu,core,cache`), no SMT siblings.
 
+### A CPU quota is a ceiling, and the default respects it
+
+`docker --cpus=2`, `systemd CPUQuota=200%` and a Kubernetes `limits.cpu` are the
+same mechanism: a CFS quota on the *group*, not an affinity mask. The process
+still sees every CPU, so a thread count derived from the CPU count oversubscribes
+and the kernel then stops the whole group when the quota is spent — a thread with
+a scratchpad in L3 waits out the rest of the period instead of finishing a share.
+
+`zmrig` reads the quota (`cpu.max` on cgroup v2, `cpu.cfs_quota_us`/`period` on
+v1, at the path `/proc/self/cgroup` names) and uses it as a ceiling on the
+*default* thread count:
+
+```console
+$ ZMRIG_CGROUP_ROOT=/tmp/cgroup-with-1-cpu zmrig --check
+cpu quota: 1 cpu(s) available of 2 visible, using 1 thread(s)
+profile free: 1 thread(s) of 2 logical cpu (2 physical cores)
+```
+
+An explicit `-t` is never lowered: a person who measured their own machine wins
+over a heuristic, and the quota can be raised at any time. `--autotune` searches
+inside the quota for the same reason — measuring 16 threads under a 2-CPU quota
+reports the throttled number as if it were the machine's best. The same cap is in
+the container's entrypoint, so `docker run --cpus=2 … args` shows the thread count
+the miner is actually going to use.
+
+This is a correctness fix with a performance consequence, and the size of that
+consequence is **unverified here**: the CI sandbox has no quota set on its own
+cgroup and cannot create one, so no before/after number is quoted.
+
 ---
 
 ## 8. How to measure honestly

@@ -172,6 +172,28 @@ phép thử thật cho allocator. 1 422 share được nhận, 0 bị từ chố
 phải một tuần, nhưng nó loại bỏ được kiểu lỗi quan trọng: một cấp phát cho mỗi
 share hoặc mỗi job mà không bao giờ trả lại.
 
+## Hạn mức CPU không phải mặt nạ affinity
+
+`docker run --cpus=2`, `systemd CPUQuota=200%` và `limits.cpu` của Kubernetes là
+cùng một cơ chế: hạn mức CFS trên cả nhóm. Tiến trình vẫn thấy mọi CPU, nên số
+luồng tính theo số CPU sẽ đòi quá mức — và khi hạn mức cạn, kernel dừng cả nhóm,
+nên một luồng đang có scratchpad trong L3 ngồi chờ hết chu kỳ thay vì làm xong
+phần chia của nó.
+
+Miner đọc hạn mức (`cpu.max` ở cgroup v2, `cpu.cfs_quota_us` ở v1) và dùng nó làm
+trần cho số luồng mặc định:
+
+```console
+$ zmrig --check
+cpu quota: 1 cpu(s) available of 2 visible, using 1 thread(s)
+profile free: 1 thread(s) of 2 logical cpu (2 physical cores)
+```
+
+`-t` do người dùng đặt thì không bao giờ bị hạ, và `--autotune` chỉ tìm trong phạm
+vi hạn mức thay vì đo một con số bị throttle rồi coi đó là tốt nhất của máy. Image
+container áp dụng đúng trần đó, nên `docker run … args` in ra số luồng miner thật
+sự dùng.
+
 ## Tự đo
 
 ```bash

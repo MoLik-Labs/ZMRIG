@@ -28,7 +28,11 @@ throttled together — when the quota is spent the whole group stops, and a thre
 with a dataset page in cache sits idle for the rest of the period. The image reads
 the cgroup quota (v2 `cpu.max`, v1 `cpu.cfs_quota_us`) and caps the automatic
 thread count to it. An explicit `THREADS` is always respected; it is only
-mentioned when it is above the quota.
+mentioned when it is above the quota. The miner itself reads the quota too - same
+two files, at the path `/proc/self/cgroup` names - so `systemd CPUQuota=` and a
+Kubernetes `limits.cpu` get the same treatment without a container, and `--bench`
+resolves the profile before it measures instead of reporting a throttled thread
+count as this machine's best.
 
 **A wallet with no default is a refusal, not a convenience.** `WALLET` and `POOL`
 have none: a placeholder wallet hashes for nobody and a default pool would be

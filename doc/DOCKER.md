@@ -121,6 +121,10 @@ zmrig: the container is limited to 2 CPUs (16 visible): 2 mining threads
 is always respected — if it is above the quota the container says so and runs
 anyway, because an operator who typed a number has a reason.
 
+The miner reads the same quota itself (see [PERFORMANCE.md](PERFORMANCE.md)), so
+the shim's cap and the miner's default agree, and a rig limited by `systemd
+CPUQuota=` on the host is sized the same way outside a container.
+
 ### What a container cannot do
 
 These are host decisions, and the image says so rather than failing quietly:

@@ -108,6 +108,121 @@ pub fn physicalCores(logical: usize) usize {
     return @min(cores, logical);
 }
 
+/// Where cgroup v2 lives, overridable so a quota can be tested without one.
+/// Same contract as `cpuRoot`: an override that does not exist means "no quota",
+/// which is the behaviour every machine had before this function existed.
+pub fn cgroupRoot() []const u8 {
+    const override = std.process.getEnvVarOwned(std.heap.page_allocator, "ZMRIG_CGROUP_ROOT") catch return "/sys/fs/cgroup";
+    return override;
+}
+
+/// The CPUs this process is actually allowed to spend, from a cgroup CPU quota,
+/// or null when there is none.
+///
+/// A quota is not an affinity mask: with `--cpus=2`, `systemd CPUQuota=200%` or a
+/// Kubernetes limit, the process still sees every CPU on the host, so the
+/// heuristic below asks for one thread per physical core and the whole group is
+/// then throttled. That is *slower* than the same work in fewer threads - when
+/// the quota is spent the group is stopped together, so a thread with a scratchpad
+/// in L3 sits idle for the rest of the period instead of finishing its share.
+/// Capping to the quota is the only thing that makes the heuristic right there.
+///
+/// cgroup v2 is one line in `cpu.max` ("200000 100000", or "max 100000"); v1 is
+/// two files. The path comes from `/proc/self/cgroup`, because on a host with
+/// systemd the quota is on a slice, not on the root - and inside a container
+/// namespace the same file reads as "/", which is why both are tried.
+/// An explicit `-t` is never overridden here; this only informs the default.
+pub fn quotaCpus() ?usize {
+    return quotaFrom(cgroupRoot(), readSelfCgroup() orelse "");
+}
+
+/// Pure apart from the files under `root`: `self_cgroup` is the text of
+/// /proc/self/cgroup, so every layout can be tested against a fixture.
+pub fn quotaFrom(root: []const u8, self_cgroup: []const u8) ?usize {
+    var path_buf: [256]u8 = undefined;
+    var text_buf: [128]u8 = undefined;
+
+    // --- cgroup v2: "0::/user.slice/session-3.scope" for the process's own
+    // group, and the quota for that group in cpu.max.
+    var v2_path: ?[]const u8 = null;
+    var it = std.mem.splitScalar(u8, self_cgroup, '\n');
+    while (it.next()) |line| {
+        if (std.mem.startsWith(u8, line, "0::")) v2_path = std.mem.trim(u8, line[3..], " \r\t");
+    }
+
+    if (v2_path) |rel| {
+        if (quotaFromMax(root, rel, &path_buf, &text_buf)) |quota| return quota;
+    }
+    if (quotaFromMax(root, "", &path_buf, &text_buf)) |quota| return quota;
+
+    // --- cgroup v1: the cpu controller's own directory ("5:cpu,cpuacct:/docker/ab"),
+    // quota and period in microseconds. The period is 100000 by default, and
+    // 150000/100000 is one CPU, not one and a half: a quota buys whole CPUs'
+    // worth of time, and a thread per fraction has nothing to run on.
+    var v1_path: ?[]const u8 = null;
+    it = std.mem.splitScalar(u8, self_cgroup, '\n');
+    while (it.next()) |line| {
+        const first_colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
+        const second_colon = std.mem.indexOfScalarPos(u8, line, first_colon + 1, ':') orelse continue;
+        const controllers = line[first_colon + 1 .. second_colon];
+        if (std.mem.indexOf(u8, controllers, "cpu") == null) continue;
+        v1_path = std.mem.trim(u8, line[second_colon + 1 ..], " \r\t");
+    }
+
+    var candidates: [2][]const u8 = undefined;
+    var count: usize = 0;
+    if (v1_path) |rel| {
+        if (!std.mem.eql(u8, rel, "/") and rel.len > 0) {
+            candidates[count] = std.fmt.bufPrint(path_buf[0..], "{s}/cpu{s}", .{ root, rel }) catch "";
+            if (candidates[count].len > 0) count += 1;
+        }
+    }
+
+    var fallback_buf: [256]u8 = undefined;
+    const plain = std.fmt.bufPrint(&fallback_buf, "{s}/cpu", .{root}) catch "";
+    if (plain.len > 0) {
+        candidates[count] = plain;
+        count += 1;
+    }
+
+    for (candidates[0..count]) |dir| {
+        const quota = readNumberIn(&text_buf, dir, "cpu.cfs_quota_us") orelse continue;
+        const period = readNumberIn(&text_buf, dir, "cpu.cfs_period_us") orelse 100000;
+        if (quota == 0 or period == 0) continue;
+        return @intCast(@max(quota / period, 1));
+    }
+
+    // A quota of -1 means "no limit" in v1, and parseInt on u64 has already
+    // rejected it, which is the right answer: no quota.
+    return null;
+}
+
+fn quotaFromMax(root: []const u8, rel: []const u8, path_buf: []u8, text_buf: []u8) ?usize {
+    const joined = if (rel.len == 0 or std.mem.eql(u8, rel, "/"))
+        std.fmt.bufPrint(path_buf, "{s}/cpu.max", .{root}) catch return null
+    else
+        std.fmt.bufPrint(path_buf, "{s}{s}/cpu.max", .{ root, rel }) catch return null;
+
+    const text = readFile(text_buf, joined) orelse return null;
+    var fields = std.mem.tokenizeAny(u8, text, " \t\n\r");
+
+    const quota_text = fields.next() orelse return null;
+    if (std.mem.eql(u8, quota_text, "max")) return null;
+
+    const quota = std.fmt.parseInt(u64, quota_text, 10) catch return null;
+    const period = std.fmt.parseInt(u64, fields.next() orelse "100000", 10) catch 100000;
+    if (quota == 0 or period == 0) return null;
+
+    return @intCast(@max(quota / period, 1));
+}
+
+fn readSelfCgroup() ?[]const u8 {
+    const text = readFile(&read_self_buf, "/proc/self/cgroup") orelse return null;
+    return text;
+}
+
+var read_self_buf: [1024]u8 = undefined;
+
 /// Threads to use for a profile. `free` takes everything; `watt` leaves the SMT
 /// siblings idle.
 pub fn threadsFor(profile: Profile, logical: usize, physical: usize) usize {
@@ -589,6 +704,67 @@ test "no topology files: every CPU is its own core, nothing is dropped" {
     var out: [8]usize = undefined;
     try testing.expectEqual(@as(usize, 3), selectCpus(.watt, &flat, &out).len);
     try testing.expectEqual(@as(usize, 3), selectCpus(.free, &flat, &out).len);
+}
+
+test "a cgroup CPU quota is read from v2, v1 and a slice" {
+    const testing = std.testing;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.makePath("cpu");
+    try tmp.dir.makePath("user.slice");
+
+    // v2 on a systemd host: the quota is on the slice, not on the root, and the
+    // process's own cgroup path says which one.
+    try tmp.dir.writeFile(.{ .sub_path = "user.slice/cpu.max", .data = "200000 100000\n" });
+    // The root is unlimited, which is what a host looks like: reading only the
+    // root would miss every quota the operator set.
+    try tmp.dir.writeFile(.{ .sub_path = "cpu.max", .data = "max 100000\n" });
+
+    var root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const root = try tmp.dir.realpath(".", &root_buf);
+
+    try testing.expectEqual(@as(?usize, 2), quotaFrom(root, "0::/user.slice\n"));
+    // A namespace where the process is at the root: 3 CPUs of quota.
+    try tmp.dir.writeFile(.{ .sub_path = "cpu.max", .data = "300000 100000\n" });
+    try testing.expectEqual(@as(?usize, 3), quotaFrom(root, "0::/\n"));
+    // No /proc/self/cgroup at all is the fallback to the root.
+    try testing.expectEqual(@as(?usize, 3), quotaFrom(root, ""));
+
+    // v1: two files, and a fraction of a CPU is one CPU, not zero. A host runs
+    // one hierarchy or the other, so the v2 file goes back to unlimited first -
+    // a fixture with both would be testing a machine that does not exist.
+    try tmp.dir.writeFile(.{ .sub_path = "cpu.max", .data = "max 100000\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "cpu/cpu.cfs_quota_us", .data = "150000\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "cpu/cpu.cfs_period_us", .data = "100000\n" });
+    try testing.expectEqual(@as(?usize, 1), quotaFrom(root, "5:cpu,cpuacct:/\n"));
+
+    // v1 with no limit written as -1: no quota, and no arithmetic on a negative.
+    try tmp.dir.writeFile(.{ .sub_path = "cpu/cpu.cfs_quota_us", .data = "-1\n" });
+    try testing.expect(quotaFrom(root, "5:cpu,cpuacct:/\n") == null);
+
+    // Nothing at all: a bare-metal machine answers null, not one.
+    var empty = testing.tmpDir(.{});
+    defer empty.cleanup();
+    var empty_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const empty_root = try empty.dir.realpath(".", &empty_buf);
+    try testing.expect(quotaFrom(empty_root, "0::/\n") == null);
+}
+
+test "the quota only lowers the default, and never to zero" {
+    const testing = std.testing;
+
+    // What resolveProfile does with the answer: the smaller of the heuristic and
+    // the quota, floored at one. A 16-thread machine with 2 CPUs of quota asks
+    // for 2 threads; it does not ask for 16 and let the kernel throttle them.
+    const logical: usize = 16;
+    const physical = physicalCores(logical);
+    const free = threadsFor(.free, logical, physical);
+
+    try testing.expectEqual(@as(usize, 2), @min(free, @as(usize, 2)));
+    try testing.expectEqual(@as(usize, 1), @max(@min(free, @as(usize, 1)), 1));
+    // A quota larger than the machine changes nothing at all.
+    try testing.expectEqual(free, @min(free, @as(usize, 64)));
 }
 
 test "an empty CPU list produces no threads instead of crashing" {
