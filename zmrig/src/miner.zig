@@ -381,7 +381,7 @@ pub const Engine = struct {
                 .never, .unknown => {
                     const need_pages = (huge_total + (2 * 1024 * 1024) - 1) / (2 * 1024 * 1024);
 
-                    self.logger.warn("transparent huge pages are {s} and no huge pages are reserved: RandomX will read 4 KiB pages, ~20% slower (measured 892-900 H/s against 1088-1095 H/s, alternating, on 2 vCPU)", .{hugepages_mod.thp().label()});
+                    self.logger.warn("transparent huge pages are {s} and no huge pages are reserved: RandomX will read 4 KiB pages, ~18% slower (measured 892-900 H/s against 1088-1095 H/s, alternating, on 2 vCPU; and 771 against 936 on the CI sandbox)", .{hugepages_mod.thp().label()});
                     self.logger.warn("fix it once as root: echo {d} > /proc/sys/vm/nr_hugepages, or boot with transparent_hugepage=madvise (sudo zmrig-tune does both)", .{need_pages});
                 },
                 .always, .madvise => {},
@@ -595,9 +595,16 @@ pub const Miner = struct {
             // dataset anyway, which is how a rig ends up OOM-killed (or in the
             // 10x slower light mode after the allocation is refused) instead
             // of being told, at startup, that it does not fit.
-            const usable = @min(totalMemory(), memoryForDataset());
+            const usable = usableMemory();
             flags.full_memory = memory_mod.fullMemory(sizes, .auto, usable);
             if (!flags.full_memory) {
+                if (memoryBudget()) |budget| {
+                    // Naming the limit is the difference between "my rig is
+                    // broken" and "someone gave this container 1 GB".
+                    logger.warn("this container is limited to {d} MB of memory by its cgroup ({d} MB left), which is less than the dataset needs", .{
+                        budget.limit / (1024 * 1024), budget.available / (1024 * 1024),
+                    });
+                }
                 logger.warn("{s} needs {d} MB and this machine has {d} MB usable, starting in light mode: {d} MB cache, no dataset", .{
                     algo.label(),
                     need / (1024 * 1024),
@@ -991,12 +998,36 @@ pub fn totalMemory() u64 {
 /// huge pages that are reserved but not yet handed out (the kernel does not
 /// count those as available for ordinary allocations, and the dataset is
 /// allocated from exactly those pages).
+///
+/// In a container this is the *host's* number, so it is capped by the cgroup
+/// memory limit when there is one: `/proc/meminfo` is not namespaced, and
+/// `docker run --memory=1g` on a 32 GB host used to look like 30 GB of headroom
+/// right up to the OOM kill. `usableMemory` is the function to ask.
 pub fn memoryForDataset() u64 {
     const available = meminfoBytes("MemAvailable:");
     const free_pages = meminfoValue("HugePages_Free:");
     const page_size = meminfoValue("Hugepagesize:");   // kB per huge page
 
     return available + free_pages * page_size * 1024;
+}
+
+/// The bytes this process can realistically hand to a dataset: the smaller of
+/// what the machine reports and what its cgroup limit leaves. The limit is
+/// checked first because it is the only one that is still true inside a
+/// container, and a dataset that does not fit is an OOM kill during startup,
+/// not a warning.
+pub fn usableMemory() u64 {
+    const machine = @min(totalMemory(), memoryForDataset());
+    const budget = topology.cgroupMemory() orelse return machine;
+
+    return @min(machine, budget.available);
+}
+
+/// The cgroup limit and what is left of it, for the messages that have to
+/// explain the difference between "this machine has 32 GB" and "this container
+/// may use 1".
+pub fn memoryBudget() ?topology.MemoryBudget {
+    return topology.cgroupMemory();
 }
 
 fn meminfoValue(comptime field: []const u8) u64 {

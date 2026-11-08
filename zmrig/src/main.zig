@@ -1503,7 +1503,54 @@ fn printConfigSummary(opts: *const options.Options) !void {
         if (opts.jit) "on" else "off",
     });
 
-    // The single most common reason a VPS mines 25% slower than it should is
+    // What the process can actually allocate, and *why* when the two numbers
+    // differ. `/proc/meminfo` is not namespaced, so `docker run --memory=1g` on a
+    // 32 GB host reports the host: `--check` said "32 GB" and the container was
+    // OOM-killed during startup. The cgroup limit is the number that decides
+    // whether fast mode fits, so it is printed next to it.
+    {
+        const budget = miner_mod.usableMemory();
+        var budget_buf: [192]u8 = undefined;
+        if (miner_mod.memoryBudget()) |cgroup| {
+            try out.print("  budget  {s}\n", .{
+                std.fmt.bufPrint(&budget_buf, "{d} MB usable of {d} MB total: the cgroup limit is {d} MB, {d} MB of it already in use", .{
+                    budget / (1024 * 1024), miner_mod.totalMemory() / (1024 * 1024),
+                    cgroup.limit / (1024 * 1024), (cgroup.limit - cgroup.available) / (1024 * 1024),
+                }) catch "cannot describe the memory budget",
+            });
+        } else {
+            try out.print("  budget  {s}\n", .{
+                std.fmt.bufPrint(&budget_buf, "{d} MB usable of {d} MB total (no cgroup limit)", .{
+                    budget / (1024 * 1024), miner_mod.totalMemory() / (1024 * 1024),
+                }) catch "cannot describe the memory budget",
+            });
+        }
+
+        // And the verdict that follows from it, because "mode auto" is not an
+        // answer: what an operator wants to know is whether this box will run
+        // the 2 GiB dataset or rebuild it line by line at a tenth of the speed.
+        {
+            const algo = firstAlgo(opts);
+            const fit_sizes = sizesFor(algo);
+            const fits = memory_mod.fullMemory(fit_sizes, opts.mode, budget);
+            var fit_buf: [192]u8 = undefined;
+            if (fits) {
+                try out.print("  fit     {s}\n", .{
+                    std.fmt.bufPrint(&fit_buf, "fast mode fits: {d} MB needed, {d} MB usable", .{
+                        (fit_sizes.total() + memory_mod.slack_bytes) / (1024 * 1024), budget / (1024 * 1024),
+                    }) catch "cannot describe the fit",
+                });
+            } else {
+                try out.print("  fit     {s}\n", .{
+                    std.fmt.bufPrint(&fit_buf, "light mode: {d} MB needed, {d} MB usable -> no dataset, about 10x slower", .{
+                        (fit_sizes.total() + memory_mod.slack_bytes) / (1024 * 1024), budget / (1024 * 1024),
+                    }) catch "cannot describe the fit",
+                });
+            }
+        }
+    }
+
+    // The single most common reason a VPS mines 18% slower than it should is
     // that nobody reserved huge pages. Say it during --check, before the user
     // spends a night comparing screenshots of hashrate.
     if (opts.huge_pages) {
@@ -1511,7 +1558,9 @@ fn printConfigSummary(opts: *const options.Options) !void {
         // host sized for Panthera (192 MB) a Monero run needs 2336 MB and the
         // number is the only way to find that out before starting.
         const algo = firstAlgo(opts);
-        const need_mb = memoryMb(algo, opts.mode, miner_mod.totalMemory());
+        // Decision-aware: under `mode auto` in a memory-limited container this
+        // is the cache alone, which is what the miner will map.
+        const need_mb = plannedMemoryMb(opts);
         var mem_buf: [160]u8 = undefined;
 
         try out.print("  memory  {s}\n", .{
@@ -1747,7 +1796,9 @@ fn autoReserveHugePages(opts: *const options.Options, logger: *@import("log.zig"
     if (!opts.huge_pages or !opts.auto_hugepages) return;
 
     const algo = firstAlgo(opts);
-    const need_mb = memoryMb(algo, opts.mode, miner_mod.totalMemory());
+    // Reserving pages for a dataset the miner is about to decline would take
+    // RAM away from the machine for nothing: ask the same question it asks.
+    const need_mb = plannedMemoryMb(opts);
     const before = hugepages_mod.read();
 
     switch (hugepages_mod.shouldReserve(need_mb, true, before)) {
@@ -1764,7 +1815,7 @@ fn autoReserveHugePages(opts: *const options.Options, logger: *@import("log.zig"
         // rx/0 mapping), and the miner verifies that figure after the dataset
         // is built. With THP off, the warning is real and worth acting on.
         switch (hugepages_mod.thp()) {
-            .never, .unknown => logger.warn("huge pages: {d} reserved, {d} needed for {d} MB, and transparent huge pages are {s}: RandomX is ~20% slower on 4 KiB pages. Run as root or set vm.nr_hugepages={d}", .{
+            .never, .unknown => logger.warn("huge pages: {d} reserved, {d} needed for {d} MB, and transparent huge pages are {s}: RandomX is ~18% slower on 4 KiB pages. Run as root or set vm.nr_hugepages={d}", .{
                 before.reserved, want, need_mb, hugepages_mod.thp().label(), want,
             }),
             .always, .madvise => logger.info("huge pages: {d} of {d} reserved; transparent huge pages ({s}) will back the {d} MB mapping instead", .{
@@ -1817,10 +1868,19 @@ fn memoryMb(algo: api.Algo, mode: options.Mode, total_ram: u64) u64 {
     return memory_mod.mibFor(sizesFor(algo), mode, total_ram);
 }
 
+/// The MiB the run will actually map, decided the way `Miner.init` decides it:
+/// `usableMemory()` (host RAM and cgroup limit, whichever is smaller), not
+/// `totalMemory()`. Passing the host number made `--check` and the huge-page
+/// reserve plan a 1 GB container for a 2336 MB dataset under `mode auto`, i.e.
+/// it planned for a mapping the miner was about to decline.
+fn plannedMemoryMb(opts: *const options.Options) u64 {
+    return memoryMb(firstAlgo(opts), opts.mode, miner_mod.usableMemory());
+}
+
 /// Reads the kernel's huge page pool and turns it into one sentence a human can
 /// act on. Kept separate so --check and the warning in miner.zig agree.
 fn hugePageStatus(opts: *const options.Options) []const u8 {
-    const needed_mb = memoryMb(firstAlgo(opts), opts.mode, miner_mod.totalMemory());
+    const needed_mb = plannedMemoryMb(opts);
     const pages_needed = (needed_mb + 1) / 2;
 
     var buf: [32]u8 = undefined;
@@ -1845,7 +1905,7 @@ fn hugePageStatus(opts: *const options.Options) []const u8 {
         return if (thp_ok)
             "no pages reserved; transparent huge pages collapse the mapping instead"
         else
-            "no huge pages and THP off -> 4 KiB pages, ~20% slower; see --help";
+            "no huge pages and THP off -> 4 KiB pages, ~18% slower; see --help";
     }
 
     return "fewer pages reserved than this mode needs; see --help";
@@ -1922,7 +1982,7 @@ fn thpStatus() []const u8 {
     return switch (hugepages_mod.thp()) {
         .always => "always: the kernel collapses anonymous memory into 2 MiB pages without being asked",
         .madvise => "madvise (default): the hint this miner sets is honoured, so no root step is needed",
-        .never => "never: nothing backs the mapping with 2 MiB pages; reserve pages as root or boot with transparent_hugepage=madvise (~20% hashrate)",
+        .never => "never: nothing backs the mapping with 2 MiB pages; reserve pages as root or boot with transparent_hugepage=madvise (~18% hashrate)",
         .unknown => "unknown: this kernel does not report a THP policy; reserve pages as root",
     };
 }
@@ -2155,9 +2215,32 @@ fn lightCheck(algo: api.Algo, hex: []const u8, out: anytype) !bool {
 
 fn requireMemory(needed_mb: u64) !void {
     const memory = report.checkMemory(needed_mb);
-    if (memory.ok) return;
+    // `/proc/meminfo` is the host's, and a container's cgroup limit is not in
+    // it: `docker run --memory=1g` on a 32 GB host passed this check and was
+    // then OOM-killed halfway through building the dataset. Both have to say
+    // yes before the 2 GiB allocation is worth starting.
+    const usable_mb = miner_mod.usableMemory() / (1024 * 1024);
+    if (memory.ok and usable_mb >= needed_mb) return;
 
     var stderr = std.io.getStdErr().writer();
+    if (memory.ok) {
+        var why_buf: [128]u8 = undefined;
+        const why = if (miner_mod.memoryBudget()) |budget|
+            std.fmt.bufPrint(&why_buf, "its cgroup allows {d} MB ({d} MB of it already in use)", .{
+                budget.limit / (1024 * 1024), (budget.limit - budget.available) / (1024 * 1024),
+            }) catch "its cgroup allows less"
+        else
+            "other processes are using it";
+
+        try stderr.print(
+            "zmrig: this machine can give the dataset {d} MB of the {d} MB it needs: {s}\n" ++
+                "       raise the limit, free some memory, or use --mode light\n",
+            .{ usable_mb, needed_mb, why },
+        );
+
+        std.process.exit(2);
+    }
+
     try stderr.print(
         "zmrig: not enough memory for the {d} MB dataset: {d} MB free in huge pages plus {d} MB available\n" ++
             "       stop other miners (or lower vm.nr_hugepages) and try again, or use --mode light\n",

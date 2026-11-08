@@ -238,6 +238,15 @@ one session, no reservation either way:
 | THP `always` | 99 % of the mapping collapsed | 1088 / 1095 |
 | THP `never` | 4 KiB | 892.8 / 900.5 |
 
+A third session, in the 2 vCPU CI sandbox and while auditing the container path,
+reproduced the same shape with the harness `--bench=20000`:
+
+| Pages | Backing | H/s |
+|---|---|---:|
+| 1168 reserved | `MAP_HUGETLB`, unprivileged | 936.4 |
+| none reserved | THP `always` | 920.5 |
+| none reserved | THP `never`, 4 KiB | 771.0 |
+
 **4 KiB → 2 MiB is worth +21 %**, and the reserved pool adds a few per cent on
 top of that (1090 / 1094 against 1088 / 1095 here — inside the noise). The rule
 of thumb that survives both sessions is "about a fifth", which is also what the
@@ -325,9 +334,15 @@ grep Huge /proc/meminfo
 # Hugepagesize:     2048 kB
 ```
 
-The miner must run with `CAP_IPC_LOCK` (root, or
-`setcap cap_ipc_lock,cap_sys_rawio,cap_sys_nice+ep build/xmrig`). Otherwise the
-allocation fails and it falls back to transparent huge pages.
+Root is needed to *reserve* the pages (`/proc/sys/vm/nr_hugepages`), not to map
+them. An anonymous `MAP_HUGETLB` mapping needs no capability, and this section
+used to claim otherwise: measured in this repository's sandbox, a process with
+`CapEff: 0`, no `/dev/hugepages` mount and 1168 reserved pages mapped
+**2336 MB of 2336 MB** from the pool (`huge pages: 2336 MB (explicit, 2 MiB
+pages)`), and benchmarked 936.4 H/s. `CAP_IPC_LOCK` is what `mlock()` needs and
+`cap_sys_rawio` is what `/dev/cpu/*/msr` needs; neither is on the huge-page path.
+What does block the mapping is an empty pool, or a cgroup hugetlb limit of 0 -
+see [DOCKER.md](DOCKER.md) for the container case.
 
 To make the reservation persistent, call the script from a systemd unit, e.g.
 `/etc/systemd/system/xmrig-hugepages.service` (`Type=oneshot`,
@@ -730,6 +745,39 @@ the miner is actually going to use.
 This is a correctness fix with a performance consequence, and the size of that
 consequence is **unverified here**: the CI sandbox has no quota set on its own
 cgroup and cannot create one, so no before/after number is quoted.
+
+### Memory is a cgroup too, and `/proc/meminfo` is the host's
+
+The same trap one level up: `docker run --memory=1g` on a 32 GB host reports
+32 GB of RAM, so the miner sized itself for a 2336 MB mapping, started building
+it, and was OOM-killed. `zmrig` now reads `memory.max` (v2) or
+`memory.limit_in_bytes` (v1) and uses **the smaller of that and the machine** for
+every memory decision: the fast/light verdict, the huge-page plan, and the
+`--bench` pre-flight.
+
+`--check` states it in two lines, because the first one alone is ambiguous:
+
+```console
+$ docker run --rm --memory=1g … zmrig --check
+  budget  924 MB usable of 3939 MB total: the cgroup limit is 1024 MB, 100 MB of it already in use
+  fit     light mode: 2847 MB needed, 924 MB usable -> no dataset, about 10x slower
+  memory  rx/0 maps 256 MB, 128 pages of 2 MiB (or 1 of 1 GiB): no pages reserved …
+```
+
+The `memory` line is the *decision*, not the request: with the limit above it
+prints 256 MB (the cache, which is all light mode maps), and on an open machine
+it prints 2336 MB. It used to print the host figure in both cases, which is a
+plan for a mapping the miner had already declined.
+
+The benchmark path was worse, because it is silent: `--bench` refused to start
+only when `/proc/meminfo` was short, and inside a 1 GB container that file is
+the host's. It now asks both, and names the cgroup when that is the reason:
+
+```console
+$ docker run --rm --memory=1g … zmrig --bench=1000
+zmrig: this machine can give the dataset 924 MB of the 2404 MB it needs: its cgroup allows 1024 MB (100 MB of it already in use)
+       raise the limit, free some memory, or use --mode light
+```
 
 ---
 

@@ -67,6 +67,48 @@ plan_need_mb() { # algo mode cores [threads]
     fi
 }
 
+# MiB this process may actually use, when a cgroup says so, otherwise nothing.
+#
+# `/proc/meminfo` is the *host's*, and it is not namespaced: a VPS whose
+# container has 2 GB of a 32 GB machine reports 32 GB, and a page count computed
+# from that number reserves 2.3 GB of the host's pool for a dataset that will
+# never fit in the container. The cgroup limit is the only memory figure that is
+# still true inside one, so it is what the plan is capped against.
+#
+# v2 is `memory.max` in bytes or "max"; v1 is `memory.limit_in_bytes`, where
+# "unlimited" is a number close to 2^63. Both are read at the path
+# `/proc/self/cgroup` names, falling back to the root, because a nested cgroup
+# is the normal case on a host that runs anything else. ZMRIG_CGROUP_ROOT
+# exists for the tests, exactly as it does in zmrig's topology.zig.
+plan_memory_limit_mb() {
+    local root="${ZMRIG_CGROUP_ROOT:-/sys/fs/cgroup}" rel="" value mb
+
+    if [ -r /proc/self/cgroup ]; then
+        rel=$(awk -F: '$1 == "0" { sub(/^[^:]*:[^:]*:/, ""); print; exit }' /proc/self/cgroup 2>/dev/null)
+        [ "$rel" = "/" ] && rel=""
+    fi
+
+    for value in \
+        "${root}${rel}/memory.max" \
+        "${root}/memory.max" \
+        "${root}${rel}/memory/memory.limit_in_bytes" \
+        "${root}/memory/memory.limit_in_bytes"
+    do
+        [ -r "$value" ] || continue
+        mb=$(cat "$value" 2>/dev/null) || continue
+        case "$mb" in
+            ''|max) continue ;;
+            *[!0-9]*) continue ;;
+        esac
+        # v1 spells "no limit" as 9223372036854771712, which is 19 digits: no
+        # real limit has that many, and comparing it in shell arithmetic is the
+        # kind of overflow that turns a diagnostic into an abort.
+        [ "${#mb}" -ge 19 ] && continue
+        printf '%s' "$(( mb / 1048576 ))"
+        return 0
+    done
+}
+
 # Pages of `page_kb` to reserve. An explicit override (zmrig.os.hugepages=N) is
 # obeyed exactly, including 0 for "none". Otherwise the answer is plan_need_mb,
 # capped at the machine's RAM minus 512 MiB: a partial pool is still worth

@@ -620,6 +620,30 @@ Precedence, lowest to highest: the image, `/zmrig/os.conf` on the media, the
 `ZMRIGDATA` partition, `/etc/zmrig/kernel.conf` (written from the kernel command
 line).
 
+### A value outside its domain is not a rig that will not boot
+
+Every key above has a domain — threads `1..128` or `auto`, the fee `0..10`, the
+thermal ceiling `0` or `45..95`, a port `0..65535`, `MODE` one of five words,
+`ALGO` one of the shipped configurations — and a value outside it would otherwise
+reach the miner's argument parser, which exits. The supervisor counts an exit as a
+crash, five crashes trigger the unattended reboot, and a typo in a file nobody is
+watching becomes a rig that reboots every ten minutes forever.
+
+So out-of-range values are replaced with the default and reported, once each, on
+stderr:
+
+```console
+$ zmrig-os args
+warning: THREADS=abc in os.conf is not a thread count; using auto
+warning: DONATE=99 in os.conf is not a percentage between 0 and 10; using 3
+-o gulf.moneroocean.stream:10001 -u 4… -p my-rig-- --donate-level 3 --profile free …
+```
+
+`WORKER` and `API_TOKEN` are reduced to the character set a stratum login and an
+`Authorization` header can carry (`A-Za-z0-9._~+/=-`, 64 characters), because a
+space in `WORKER` used to split the argument list and turn the rest of the rig
+name into a flag.
+
 ## Kernel command line
 
 ```

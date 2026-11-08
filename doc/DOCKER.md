@@ -125,20 +125,62 @@ The miner reads the same quota itself (see [PERFORMANCE.md](PERFORMANCE.md)), so
 the shim's cap and the miner's default agree, and a rig limited by `systemd
 CPUQuota=` on the host is sized the same way outside a container.
 
+### The fastest container
+
+Three things decide how fast a container mines, and two of them are usually
+missing without a word in the log. `docker run … args` prints what the container
+asked for, the thread count it derived, and what it can see:
+
+```console
+$ docker run --rm -e WALLET=4… -e POOL=gulf.moneroocean.stream:10001 \
+    ghcr.io/molik-labs/zmrig args
+zmrig: huge pages: none are reserved on the host, so RandomX reads 4 KiB pages instead of 2 MiB (about 18 % slower, measured); reserve them once on the host: sysctl -w vm.nr_hugepages=1168
+/usr/local/bin/zmrig -o gulf.moneroocean.stream:10001 -u 4… -p x -t 2 --profile free …
+```
+
+**1. Huge pages: one host command, no container flags.** The pool belongs to the
+host — `sysctl -w vm.nr_hugepages=1168` (2.3 GiB, the size of `rx/0`) or
+`zmrig-os hugepages` on the appliance — and an unprivileged container maps it.
+This was the one thing this file used to get wrong. An anonymous `MAP_HUGETLB`
+mapping needs no capability: measured in this repository's sandbox, a process
+with `CapEff: 0` and no `/dev/hugepages` mount mapped 2336 MB from the pool, and
+the miner logged `huge pages: 2336 MB of 2336 MB came from the reserved pool`.
+`--cap-add=IPC_LOCK` is about `mlock()`, and a `/dev/hugepages` volume is about
+hugetlbfs files; neither is the path the miner takes. The two things that *do*
+block it are an empty pool and a cgroup hugetlb limit of 0
+(`/sys/fs/cgroup/hugetlb.2MB.max`, only set when someone passes `--hugetlb-2m`).
+`args` reports both, by name.
+
+**2. A cpuset, not a quota, when both are on the table.** `--cpus=2` limits the
+group; `--cpuset-cpus=0,1` gives it those two CPUs and nothing else. With a cpuset
+the kernel hides the rest and the miner sizes itself correctly; with a quota the
+shim caps the thread count (see above) and the kernel still stops the whole group
+when the quota is spent. Same average, less jitter, so cpuset is the faster way to
+say the same thing.
+
+**3. Memory: `--memory` below 3 GiB turns fast mode off.** `rx/0` needs a 2336 MB
+mapping. Under a smaller limit the miner builds the cache only and rebuilds the
+dataset per hash: about 10× slower. It says so at startup, and `docker run … args`
+shows the decision-aware figure — 256 MB, not 2336 MB — because planning a
+mapping the miner is about to decline is how a rig gets sized wrong. Give the
+container 3 GiB or more, or accept light mode deliberately with `MODE=light`.
+
 ### What a container cannot do
 
 These are host decisions, and the image says so rather than failing quietly:
 
-* **Huge pages** are reserved by the kernel at boot (`sysctl vm.nr_hugepages`, or
-  `zmrig-os hugepages` on the appliance). A container needs `--cap-add=IPC_LOCK`
-  and a `/dev/hugepages` mount to use them. Without that the miner runs on 4 KiB
-  pages, which costs a few percent.
-* **MSR writes** (`MSR=on`) need `/dev/cpu/*/msr`. Opening that from a container
-  lets it poke CPU registers; the default `MSR=auto` leaves the decision to the
-  miner's probe, which will say no.
+* **MSR writes** (`MSR=on`) need `/dev/cpu/*/msr` *and* root inside the
+  container: `--device /dev/cpu/0/msr --cap-add SYS_RAWIO --user 0`, one
+  `--device` per CPU. That is a root container writing CPU registers — worth
+  5-15 % on bare metal, nothing in a VM, and a trade to make only on a host that
+  exists to mine. The default `MSR=auto` leaves the decision to the miner's
+  probe, which will say no.
 * **Thermal readings** come from `/sys/class/hwmon`, which is not namespaced.
   `MODE=safe` sees the host's sensors, which is what you want, but it is also
   why the governor belongs on the host when the host has more than one container.
+* **The CPU governor and interrupt affinity** are host-wide. `--profile free`
+  is the miner's half of that; `scripts/tune-linux.sh` (or `zmrig-os tune`) is
+  the other half, and it belongs on the host.
 
 ## The other job: the pool
 

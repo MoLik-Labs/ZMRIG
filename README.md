@@ -188,18 +188,28 @@ appliance and the container are configured with the same vocabulary. `WALLET` an
 pool would be choosing a custodian on your behalf, so the image names the missing
 variable and exits 2.
 
-Two things are specific to a container. The wallet is checked at startup by the
-miner itself (`ghcr.io/molik-labs/zmrig check` does it on demand), so the verdict
-is in the log of every container. And a CPU *quota* is not an affinity mask:
-`--cpus=2` limits the group while the process still sees every host CPU, so the
-image reads the cgroup quota and caps the automatic thread count to it — otherwise
-the rig asks for one thread per core and then has all of them throttled together.
+Three things are specific to a container, and all three used to be answered with
+the host's numbers. The wallet is checked at startup by the miner itself
+(`ghcr.io/molik-labs/zmrig check` does it on demand), so the verdict is in the log
+of every container. A CPU *quota* is not an affinity mask: `--cpus=2` limits the
+group while the process still sees every host CPU, so the image reads the cgroup
+quota, sizes itself from `availableParallelism()` and caps the automatic thread
+count to it. And memory is a cgroup too: `/proc/meminfo` is the host's, so
+`--memory=1g` on a 32 GB box looked like 30 GB of headroom until the OOM kill —
+the budget is now `min(cgroup, machine)`.
+
+`docker run --rm -e WALLET=… -e POOL=… ghcr.io/molik-labs/zmrig args` prints the
+command line, the thread count it derived, and the two things that cost a
+container the most when they are missing: a host with no huge page pool (~18 %
+of hashrate, measured) and `/dev/cpu/*/msr` for the prefetcher preset. Huge pages
+themselves need no container flags — the pool is the host's and an unprivileged
+container maps it.
 
 Updating is `deploy/docker/zmrig-docker-update --check` (exit 0 current, 3
 available, 2 cannot tell) and `--apply`, which pulls first and recreates second,
 so a failed pull leaves the running miner alone. A daily systemd timer is in the
 same directory. [`doc/DOCKER.md`](doc/DOCKER.md) has the full table, the compose
-file, and what a container cannot do (huge pages, MSR, thermal sensors).
+file, and what a container cannot do (MSR, thermal sensors, the governor).
 
 ## Bootable image
 

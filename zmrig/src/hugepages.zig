@@ -9,7 +9,7 @@
 //     1200 pages reserved             1033.0 H/s   (+20.7%)
 //
 // Every fresh install starts at zero, because reserving pages is a root action
-// nobody documents. XMRig prints a warning and mines 20% slower forever; this
+// nobody documents. XMRig prints a warning and mines 18% slower forever; this
 // miner reserves what the current mode needs and says so. Failure is never
 // fatal: an unprivileged miner, a container without CAP_SYS_ADMIN and a kernel
 // without hugetlbfs all keep mining on THP.

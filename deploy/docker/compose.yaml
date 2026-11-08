@@ -40,16 +40,26 @@ services:
     # Nothing is persisted: the config is the environment and the log is the
     # container's stdout. `docker compose logs` is the log file.
     #
-    # A miner needs no privileges. Huge pages are reserved by the *host*
-    # (`sysctl vm.nr_hugepages`, or `zmrig-os hugepages`); to let the container
-    # use them, add:
+    # A miner needs no privileges, and huge pages need no flags either: the pool
+    # belongs to the host (`sysctl -w vm.nr_hugepages=1168`, or `zmrig-os
+    # hugepages`), and an unprivileged container maps them from that pool -
+    # measured, see doc/PERFORMANCE.md. The old recipe
+    # (`cap_add: IPC_LOCK` plus a /dev/hugepages volume) was a recipe for
+    # `mlock()` and hugetlbfs files; this miner maps MAP_HUGETLB anonymously and
+    # needs neither.
     #
-    #   cap_add: [IPC_LOCK]
-    #   volumes: ["/dev/hugepages:/dev/hugepages"]
+    # What is worth setting is the CPU budget, and cpuset is the faster of the
+    # two ways to say it:
     #
-    # MSR writes need /dev/cpu/*/msr, which is a host-level decision and a
-    # security trade (it lets the container poke CPU registers): leave MSR=auto
-    # and the miner's probe will say no.
+    #   cpuset: "0-3"    # these cores and no others: the miner sizes itself
+    #   # cpus: "3"      # a CFS quota: the same ceiling, but the whole group is
+    #                    # stopped when the quota is spent, so a thread with a
+    #                    # scratchpad in L3 waits instead of hashing. `docker run
+    #                    # ... args` prints the thread count it chose.
+    #
+    # MSR writes need /dev/cpu/*/msr and root, which is a host-level decision and
+    # a security trade (it lets the container poke CPU registers): leave
+    # MSR=auto and the miner's probe will say no.
 
     # `docker stop` sends SIGTERM to tini, which forwards it to the shim, which
     # forwards it to the miner: it logs its last hashrate instead of being killed.

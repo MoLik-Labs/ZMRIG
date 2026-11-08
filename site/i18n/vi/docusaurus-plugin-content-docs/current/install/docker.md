@@ -99,17 +99,32 @@ nên con số một rig phải trả hiện ra trong `args` thay vì nằm trong
 binary. Ba phần trăm là mặc định; `DONATE=0` là tắt, và bản dựng tự hỏng test nếu
 mã và tài liệu nói khác nhau.
 
+**Huge page chỉ cần một lệnh ở host, không cần cờ nào cho container.** Pool thuộc
+về kernel (`sysctl -w vm.nr_hugepages=1168`, hoặc `zmrig-os hugepages` trên máy
+cài image), và container không có quyền đặc biệt vẫn map được: mapping
+`MAP_HUGETLB` ẩn danh không cần capability nào — đã đo, 2336 MB trên 2336 MB lấy
+từ pool với `CapEff: 0` và không mount `/dev/hugepages`. `docker run … args` in ra
+cả hai trường hợp, kèm con số 18 % mà một pool rỗng làm mất.
+
+**`--memory` là giới hạn thật và nó quyết định chế độ.** `rx/0` map 2336 MB; dưới
+hạn mức nhỏ hơn, miner chỉ giữ cache 256 MB và dựng lại dataset cho từng hash,
+chậm khoảng 10 lần. Nó nói rõ lúc khởi động và trong `--check`, và dòng `memory`
+in ra thứ nó *sẽ* map chứ không phải thứ nó muốn map. Cho container 3 GiB, hoặc
+chọn `MODE=light` một cách có ý thức.
+
 ## Thứ container không làm được
 
-Huge page do kernel giữ lúc boot, ghi MSR cần `/dev/cpu/*/msr`, và cảm biến nhiệt
-không nằm trong namespace. Image nói rõ điều đó thay vì hỏng lặng lẽ:
+Ghi MSR cần `/dev/cpu/*/msr` và quyền root, cảm biến nhiệt không nằm trong
+namespace. Image nói rõ điều đó thay vì hỏng lặng lẽ:
 
-* **Huge page** cần `--cap-add=IPC_LOCK` và mount `/dev/hugepages`, bên cạnh việc
-  host đã giữ sẵn (`sysctl vm.nr_hugepages`, hoặc `zmrig-os hugepages`).
-* **Ghi MSR** (`MSR=on`) cho phép container chọc vào thanh ghi CPU; `MSR=auto` để
-  chính miner tự dò, và nó sẽ nói không.
+* **Ghi MSR** (`MSR=on`) cần `--device /dev/cpu/0/msr --cap-add SYS_RAWIO
+  --user 0`, mỗi CPU một `--device`: container chạy root chọc vào thanh ghi CPU,
+  đáng 5-15 % trên máy thật và không đáng gì trong VM. `MSR=auto` để chính miner
+  tự dò, và nó sẽ nói không.
 * **`MODE=safe`** đọc cảm biến của host — đó là điều bạn muốn, và cũng là lý do bộ
   điều nhiệt nên nằm ở host khi host chạy nhiều hơn một container.
+* **CPU governor và affinity của interrupt** là chuyện của cả host:
+  `scripts/tune-linux.sh` trên host là nửa còn lại của `--profile free`.
 
 ## Cập nhật
 
