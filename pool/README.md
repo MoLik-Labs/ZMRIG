@@ -28,7 +28,7 @@ miner ──stratum/tcp:3333──────────────┐
 | Pool fee             | **1.0 %**, taken from each block reward, rounded *down* |
 | Hidden fees          | none                                                   |
 | Where it goes        | published at `/api/config` and on the status page       |
-| Miner-side dev fee   | 0 % (`zmrig` has none, and the pool is GPL-3.0)         |
+| Miner-side dev fee   | 3 % of Monero time on `zmrig` (`--donate-level=0` turns it off) |
 | Payout threshold     | 0.01 XMR, paid in the network fee                       |
 
 The fee is deducted from the block reward before the PPLNS split, never from a
@@ -109,9 +109,13 @@ Environment names are the upper-case equivalents: `POOL_FEE_PERCENT`,
 the rest of the table above.
 
 `--check` prints the effective configuration and exits non-zero on anything that
-would let the pool take a fee it cannot justify (fee out of range, unknown mode,
-a PPLNS window so short that payouts are a lottery, a non-Monero operator
-address in `wallet` mode).
+would let the pool take a fee it cannot justify: a fee out of range, an unknown
+mode, a PPLNS window so short that payouts are a lottery, or an operator address
+that no wallet can spend. The last one is checked by decoding the address -
+base58, network byte, Keccak-256 checksum - not by matching its shape, because a
+single wrong character in a 95-character string still looks like an address and
+would send every fee payment to a key nobody holds. The fee address never logs
+in, so nothing else in the pool would ever have noticed.
 
 ## Shares, PPLNS and the audit log
 
@@ -131,6 +135,40 @@ address in `wallet` mode).
   ```
 
 `GET /api/audit?limit=20` returns the same records, newest first.
+
+### Verifying shares
+
+`zmrig --verify-share` is a line protocol: one JSON object in, one out, and
+**its log goes to stderr** — `stdout` belongs to the protocol. The pool keeps one
+verifier per core alive and re-uses it, so the 256 MB RandomX cache is built
+once per round rather than once per share. `pool/tests/bench-verify.mjs`
+measures the three numbers that matter, on whatever machine you run it on; on a
+2 vCPU test box with two verifiers and 200 shares per round: the first share of
+a round costs **0.85 s** (the cache build), every share after that takes about
+**23 ms** of wall time, and the steady state is **43 shares per second**. A rig
+at 1 kH/s on difficulty 300 submits about 3.3 shares a second, so that box
+verifies roughly a dozen of them.
+
+Shares queued behind a busy verifier are dispatched as each one frees, not when
+the next share happens to arrive; a share that cannot be verified within
+`verify_timeout` is dropped with `verification unavailable` rather than accepted
+on trust.
+
+### What the WebSocket transport refuses
+
+The pool's `/stratum` endpoint is the one that faces the internet through a
+CDN, so its framing is bounded on purpose:
+
+* a frame over 1 MiB closes the connection, before anything is allocated for it;
+* a *message* over 256 KiB closes it too, and that is the bound that matters.
+  RFC 6455 lets a client open a 1 MiB frame with FIN clear and then send
+  continuation frames for ever; a per-frame limit alone leaves the assembler
+  growing by a megabyte per frame from a single socket;
+* a second data frame arriving while a message is still open is a protocol
+  error. Half a login parsed as a message is worse than a closed connection.
+
+Stratum messages are under a kilobyte, plus a few for a job list; the caps are
+two orders of magnitude above anything a miner sends.
 
 ### Forty rigs, one wallet
 
@@ -284,8 +322,11 @@ rejected and nothing is credited. It skips itself if `zmrig` is not built.
 * **The audit log is append-only.** Rotate it with `logrotate`, never rewrite it;
   miners check their own numbers against it.
 * **A pool with zero miners makes zero money.** The fee is only as good as the
-  hashrate behind it; the miner side of this repository (`zmrig`) is where the
-  users come from, which is why it has no developer fee of its own.
+  hashrate behind it, and the miner side of this repository (`zmrig`) is where
+  the users come from. That miner takes 3 % of Monero mining time for the
+  developer — stated in its banner, in `--check`, and switchable off with
+  `--donate-level=0` — and none of that reaches the pool: the pool fee below is
+  the operator's, from the block, and the two are unrelated.
 
 ## License
 

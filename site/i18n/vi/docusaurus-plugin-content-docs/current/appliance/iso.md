@@ -36,9 +36,19 @@ mức lệnh, và trình cập nhật không bao giờ đưa nhầm bản kia.
 2. Console hiện banner ZMRIG và hỏi địa chỉ Monero.
 3. Dán ví, Enter, và dòng hashrate bắt đầu sau vài giây.
 
-Địa chỉ được kiểm trước khi dùng: 95 hoặc 106 ký tự, bảng chữ base58, bắt đầu
-bằng `4` hoặc `8`. Ví gõ nhầm chữ `0` hay `l` — đúng hai ký tự mà base58 loại bỏ
-vì dễ đọc sai — sẽ bị từ chối thay vì đào vào hư không.
+Địa chỉ được **giải mã** trước khi dùng, không phải chỉ đếm ký tự: độ dài, bảng
+chữ base58, byte mạng, và checksum Keccak-256 bốn byte mà địa chỉ mang theo. Ví
+gõ nhầm `0` hay `l` bị từ chối, và ví bị đổi **một** ký tự sang một ký tự base58
+hợp lệ khác cũng bị từ chối — đúng kiểu gõ nhầm mà phép đếm ký tự không thấy và
+một lần trả thưởng không thể cứu. Câu từ chối nói rõ sai ở đâu:
+
+```console
+zmrig-os: that is not a valid Monero address: checksum does not match: at least
+one character is wrong
+```
+
+`zmrig --check-wallet 4...` cho cùng kết luận mà không cần đụng vào cấu hình máy:
+in ra loại địa chỉ, mạng, cùng khóa spend và view.
 
 ## Không bàn phím, và cả fleet
 
@@ -99,9 +109,19 @@ nó lấy được, không giả vờ lấy đúng như bạn xin.
 Cả hai nửa đều được ghi, vì chỉ một nửa thì không mua được gì:
 
 * tham số khởi động `isolcpus=`, `nohz_full=` và `rcu_nocbs=` — gộp vào GRUB
-  environment block trên ổ đã cài, còn trên USB chỉ đọc thì in ra để bạn tự gõ;
+  environment block trên ổ đã cài và được mọi menu entry đã cài đọc
+  (`${zmrig_extra}`), nên có hiệu lực từ lần boot sau; trên USB chỉ đọc thì in ra
+  để bạn tự gõ. Block đó chỉ giữ một giá trị và được ghi bởi một hàm duy nhất, nên
+  tách CPU sau khi đã đặt trang 1 GiB thì cả hai đều còn, và
+  `zmrig-os hugepages off` không trả CPU lại cho nhân;
 * `--cpu-affinity` cho miner, và mặt nạ ngắt được dời sang các CPU còn lại mỗi
   lần supervisor khởi động.
+
+Cài đặt mang theo tất cả những thứ đó lên ổ: `zmrig-os install` ghi file cấu hình
+của rig đã cài và GRUB environment block của nó bằng đúng đoạn mã ghi trên hệ thống
+đang chạy. Hai chỗ đó từng là hai bản sao của cùng một hàm ghi, và bản của installer
+chưa bao giờ biết `ISOLATE`, `HUGEPAGES` hay `HUGEPAGES_1G` — nên một USB đặt
+`isolate 4` lại cài ra một rig đào trên mọi lõi, với log nói rằng mọi thứ đều ổn.
 
 `ISOLATE=4` trong `/etc/zmrig/os.conf`, hoặc `zmrig.os.isolate=4` trên dòng lệnh
 nhân, để nó sống qua lần khởi động lại; `ISOLATE=0` trả máy lại cho `AFFINITY=auto`,
@@ -312,7 +332,17 @@ zmrig-os auto --apply    # làm ngay thay vì đợi 03:00
   kiểm tra rồi mới thành mặc định cho lần boot sau.
 - **Bản cập nhật không boot được thì tự lùi.** Initramfs đếm số lần boot mà máy
   không trở thành một rig đang đào; ba lần thì nó chuyển sang slot kia và reboot.
-  `zmrig-os slot` xem cả hai, `zmrig-os slot b` chọn một.
+  `zmrig-os slot` xem cả hai, `zmrig-os slot b` chọn một. Lần lùi đó *gộp* GRUB
+  environment block chứ không ghi đè, nên các tham số nhân của máy —
+  `isolcpus=`, `nohz_full=`, mức nhiệt trần — sống qua lần lùi. Rig quay về slot
+  kia vẫn về đúng cấu hình của nó.
+- **Bản cập nhật không có checksum thì bị từ chối.** Manifest ghi sha256 cho
+  binary và cho ảnh; không có thì không cách nào phân biệt một file tải dở hay
+  một trang captive portal với file thật, và cài đúng thứ đó làm miner thì tệ hơn
+  là chậm một phiên bản. Quy tắc này giống nhau cho `zmrig-os update --apply` và
+  cho job hằng ngày: cả hai tải đúng cùng một loại byte, nên không thể có hai quy
+  tắc khác nhau về việc kiểm chúng. `zmrig-os auto` nói đúng một dòng rồi thoát 0,
+  nên job hằng ngày vẫn im lặng.
 - `AUTO_UPDATE=0` tắt toàn bộ. Không với tới được manifest nghĩa là "đang offline",
   không phải lỗi: rig vẫn đào và job thoát 0.
 
@@ -326,7 +356,8 @@ hoặc một unit systemd. Ở đây chúng là mặc định:
   nào làm phân mảnh bộ nhớ. Đó là +4–6 % cộng thêm trên transparent huge pages,
   và là bước gần như không thể làm lại vào cuối ngày.
 - **Transparent huge pages vẫn bật** (`always` ở các mục max). Tắt nó mất khoảng
-  28 % — đã đo, xem [Hiệu năng](/docs/operate/performance).
+  một phần năm — đo bằng cách bật/tắt xen kẽ trong cùng một phiên, xem
+  [Hiệu năng](/docs/operate/performance).
 - **CPU governor là `performance`**, do đúng bước đặt trước bộ nhớ thiết lập,
   trước khi miner chạy.
 - **`swappiness=1`** để dataset 2,3 GiB không bao giờ bị đẩy ra swap; **giới hạn
@@ -345,7 +376,11 @@ Chạy lâu không phải một tính năng mà là một chuỗi:
 
 - miner tự thoát khi bị treo hoặc khi share bị từ chối liên tiếp
   (`--health-restart`, 900 giây), và ghi lý do vào log;
-- `zmrig-os run` khởi động lại sau 10 giây, mãi mãi;
+- `zmrig-os run` khởi động lại sau 10 giây, rồi 20, 40, 80, 160, và từ lần thứ
+  năm trở đi là năm phút: crash loop thường là do pool hoặc mạng, và kết nối lại
+  mười giây một lần biến một lần mất mạng ngắn thành bão socket;
+- một lần chạy sống được mười phút thì xoá bộ đếm đó, nên "năm lần liên tiếp"
+  đúng nghĩa liên tiếp chứ không phải từ tháng trước;
 - năm lần thất bại liên tiếp thì máy reboot, vì lúc đó thứ hỏng là hệ điều hành;
 - log xoay ở 8 MB, nên máy đào một năm vẫn khởi động được;
 - chrony giữ đồng hồ đúng, vì đăng nhập pool qua TLS sẽ hỏng nếu lệch giờ.

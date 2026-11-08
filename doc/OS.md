@@ -256,13 +256,40 @@ initramfs and `zmrig-os` write that block in shell (header, `zmrig_slot=X`, `#`
 padding) because the guest deliberately has no `grub-editenv`.
 
 The initramfs keeps a counter on the boot medium: incremented on every boot of an
-installed system, reset by the supervisor once the miner has been up for five
+installed system, reset by the supervisor once a miner start has lasted ten
 minutes. Three boots that never got that far flip the machine to the other slot,
-write the environment block and reboot.
+write the environment block and reboot. The rule itself lives in `os/plan.sh`
+(`plan_boot_limit`, `plan_boot_action`) so `os/tests/plan.sh` can assert the
+boundary instead of describing it.
+
+Two things about that write are load-bearing, and both were wrong once:
+
+* **It merges.** The block also holds `zmrig_extra` — `isolcpus=`, `nohz_full=`,
+  `rcu_nocbs=`, the thermal cap. The old `write_grubenv` rewrote the block with
+  the slot alone, so a rig that rolled back came up mining on half its cores,
+  configured by nobody, and the log said nothing. `plan_grubenv_block` parses
+  what is there, replaces the one key, and pads back to exactly 1024 bytes.
+* **The installed menu reads it.** Every entry `zmrig-os install` writes passes
+  `${zmrig_extra}`, and `/etc/init.d`-time `load_env` reads the block. The menu
+  did not, for a while: `zmrig-os isolate 4` wrote the parameters, printed
+  "next boot: isolcpus=…", and the next boot ignored them. `tests/` asserts the
+  generated `grub.cfg` contains the reference (`os/tests/control.sh`).
+
+`zmrig.os.nostart=1` is written to `/etc/zmrig/nostart` and, for anything that
+looks there, `/run/zmrig/nostart`. `/run` is the wrong place to keep it — OpenRC
+mounts a fresh tmpfs over it, and the flag written there was gone before the
+supervisor read it.
 
 ## Updates
 
 Installed rigs run `/etc/periodic/daily/zmrig-auto` from busybox `crond`:
+
+An update is refused when the manifest carries no sha256 for the file: a
+download that cannot be verified is a truncated file or a captive portal page
+installed as the miner. Both paths refuse it — `zmrig-os update --apply` as well
+as the daily job. They used to differ, on the theory that an operator watching
+the screen could tell; the operator is exactly who cannot tell, and the
+download is byte-for-byte the same one.
 
 | What | Where it goes | Rollback |
 | --- | --- | --- |
@@ -421,6 +448,45 @@ before the miner does. A wrong pool (`host` with no port), a wallet that is not
 an address, or a mode that does not exist is refused before anything is written,
 and a second run without `--wallet` re-uses the wallet already configured.
 
+## The wallet is decoded, not counted
+
+A Monero address is 95 characters (106 with a payment id) of base58 carrying a
+four-byte Keccak-256 checksum. Counting characters accepts one wrong character in
+fifty, which is the mistake somebody makes copying an address out of a wallet —
+and a rig mining to a wrong address hashes perfectly for a week and is paid
+nothing, because the spend key for that address belongs to nobody.
+
+So `zmrig-os` does not count. `validate_wallet` asks the miner:
+
+```console
+# zmrig --check-wallet 4AdUndXH…684Rge
+valid   4AdUndXH…684Rge
+  check checksum verified (Keccak-256)
+  kind  standard
+  net   mainnet
+  spend eda9fe8d…d11711
+  view  3076a02b…3f09
+```
+
+and `setup` refuses anything else with the reason, rather than "not valid":
+
+```console
+# zmrig-os setup --wallet 4AdUndXH…684Rgf
+zmrig-os: that is not a valid Monero address: checksum does not match: at
+least one character is wrong
+```
+
+The check is also the reason a rig with a bad address stops instead of
+reconnecting for ever: the miner refuses to start under `rx/0` when the checksum
+fails, so `zmrig-os status` shows `stopped`, `reason` says the wallet is not
+valid, and the fleet dashboard raises one alert. `--allow-bad-wallet` starts
+anyway, for the rare rig whose login is address-shaped without being a Monero
+address.
+
+When there is no miner on the machine yet (a first boot before the binary is
+installed, or an ISO being prepared), the tool falls back to the shape check and
+`doctor` says so instead of claiming a verification that did not happen.
+
 ## Keeping the kernel off the mining CPUs
 
 A mining thread that the scheduler moves onto the CPU serving the pool's
@@ -445,8 +511,10 @@ Two halves have to agree, and the command writes both:
 * **kernel space** — `isolcpus=`, `nohz_full=` and `rcu_nocbs=` in the boot
   parameters. On an installed disk they are merged into the GRUB environment
   block as one `zmrig_extra` key, next to `zmrig_slot`, without disturbing it;
-  writing one key never rewrites the other. On a live stick the medium is
-  read-only, so the parameters are printed for the operator to add.
+  writing one key never rewrites the other. The installed menu entries reference
+  `${zmrig_extra}`, which is what makes the write take effect on the next boot.
+  On a live stick the medium is read-only, so the parameters are printed for the
+  operator to add.
 * **user space** — `--cpu-affinity 0x...` for the miner, and the IRQ masks moved
   to the housekeeping CPUs at every supervisor start.
 
@@ -458,6 +526,15 @@ throughput.
 `ISOLATE=N` (or `zmrig.os.isolate=N` on the kernel command line) makes that
 survive a reboot; with `ISOLATE=0` the miner goes back to `AFFINITY=auto`, pinned
 to every physical core.
+
+`zmrig-os install` carries all of it across: the keys the installed rig boots
+from and the parameters in its GRUB environment block are written by the same
+code that writes them on the running system, so a stick set up as `isolate 4`
+installs as a rig with four isolated CPUs, and one with a 1 GiB reservation
+installs with it. Both files used to have their own copy of that writer, and the
+installer's copy had never learned `ISOLATE`, `HUGEPAGES` or `HUGEPAGES_1G`: the
+installed rig came up mining on every core with no reservation, and nothing in
+the log said anything had changed.
 
 ## Where the numbers come from
 
@@ -484,7 +561,9 @@ reserve anything".
 ## The doctor, in a script
 
 `zmrig-os doctor` prints one line per check and exits non-zero when anything
-failed. `--json` is the same list for a fleet, a dashboard or a `cron` job:
+failed. The wallet line says what was actually checked: `checksum verified` when
+the miner decoded the address, `shape only (no miner to verify the checksum)`
+when there is no binary on the machine yet. `--json` is the same list for a fleet, a dashboard or a `cron` job:
 
 ```bash
 zmrig-os doctor --json | jq -r '.checks[] | select(.status != "ok") | "\(.check): \(.detail)"'
@@ -508,23 +587,30 @@ config file cannot execute anything as root.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `WALLET` | — | Monero address (validated: 95/106 chars, base58, 4/8 prefix) |
+| `WALLET` | — | Monero address, decoded and checksum-verified by `zmrig --check-wallet` before it is written; see [The wallet is decoded, not counted](#the-wallet-is-decoded-not-counted) |
 | `POOL` | `gulf.moneroocean.stream:10001` | pool `host:port` |
 | `WORKER` | hostname | rig name in the pool's dashboard |
 | `MODE` | `max` | `max`/`balanced`/`eco`/`light` |
 | `ALGO` | `auto` | `auto` advertises every RandomX variant; or pin one |
 | `THREADS` | `auto` | force `-t N` |
 | `AUTO_AUTOTUNE` | `1` | measure the machine and keep watching it |
+| `AUTOTUNED` | — | marker: this machine has been measured, so it is not measured again |
+| `MEASURED_THREADS` | — | the thread count the measurement pinned, next to `THREADS` |
 | `MEASURED_HS` | — | the rate the measurement recorded; the baseline drift is judged against |
 | `TUNED_AT` | — | when that measurement was taken (epoch seconds) |
+| `AFFINITY` | `auto` | `auto` pins to every physical core, `off` uses the whole machine, or an explicit XMRig mask; `ISOLATE` overrides it |
 | `DONATE` | `3` | the developer fee, 0–10; printed by `zmrig-os doctor`, and `zmrig-os setup --donate N` writes it |
+| `SAFE_TEMP` | `72` | °C: the thermal ceiling `safe` mode and the governor hold, and the value `zmrig.os.maxtemp=` overrides |
 | `MSR` | `auto` | `on`/`off`; `auto` uses it only on bare metal as root |
 | `API_PORT` | `0` | `zmrig`'s HTTP API for external monitoring (off by default) |
 | `API_HOST` | `127.0.0.1` | bind address for that API — `0.0.0.0` only with a token |
 | `API_TOKEN` | — | `Authorization: Bearer` value the API then requires |
 | `HUGEPAGES` | (empty) | pages to reserve: empty sizes the pool from `ALGO`, `0` turns it off, a number is obeyed exactly |
+| `HUGEPAGES_1G` | (empty) | 1 GiB pages to reserve at boot, as a count; empty or `0` means none, and `zmrig-os hugepages 1g N` writes it. `doctor` only suggests a number the machine can afford: a page is worth reserving when 2 GiB still stays for the kernel |
 | `ISOLATE` | `0` | logical CPUs to keep for mining, taken as whole SMT cores; `0` is off |
 | `AUTO_REBOOT` | `1` | reboot after five failed starts in a row |
+| `AUTO_UPDATE` | `1` | update the miner daily, keeping the previous binary so the upgrade can be undone |
+| `AUTO_IMAGE` | `0` | also update the OS image into the other A/B slot (off: a rig is updated when you say so) |
 | `CHANNEL` | `stable` | which update channel to follow |
 | `FLEET_URL` | — | control plane (Telegram/Discord bot); empty means nothing is contacted |
 | `FLEET_INTERVAL` | `60` | seconds between check-ins; the server may lower it |
@@ -577,6 +663,15 @@ stick a partition — which is why `zmrig-os id` says so, loudly, in that case.
 Everything the bot sends is validated again on the machine (`zmrig-os`'s own
 wallet validator, its own mode list), so a malformed or hostile instruction is
 refused there and the refusal is reported back.
+
+Only one check-in runs at a time, and the lock that guarantees it records its
+owner's PID. A lock whose owner is gone — the OOM killer on a 512 MB box, a power
+cut between `mkdir` and the trap — is taken over instead of being honoured
+forever: `/run` is tmpfs, so a stale directory would otherwise keep the rig out
+of the fleet until somebody rebooted it, while it kept mining and looked
+healthy in every other way. A lock whose owner is alive is respected; one with
+no recorded owner is broken after five minutes, which is already longer than any
+check-in can take.
 
 ## Persistence
 
@@ -659,14 +754,14 @@ building anything:
 ```
 
 ```
-ZMRIG OS 6.47.0
+ZMRIG OS 6.48.0
 
   base               Alpine Linux 3.22.1 (x86_64, OpenRC, musl)
   kernel             linux-lts 6.12.61
   root filesystem    squashfs, zstd level 19, 1 MiB blocks
   bootloader         GRUB, BIOS and UEFI, built with the image
 
-  published: v6.47.0
+  published: v6.48.0
              built on Alpine 3.22.1
              os-beta (rolling beta)
 
@@ -749,6 +844,7 @@ The image is rebuilt by the same workflow whenever `os/`, `zmrig/` or
 | console shows GRUB, then nothing | the entry needs `console=ttyS0` for headless; on a TV check the cable, not the image |
 | boots but never mines | `zmrig-os status`, then `zmrig-os logs 100`, then `zmrig-os doctor` |
 | "no wallet configured; waiting" | the wizard had no console; set `zmrig.os.wallet=` or run `zmrig-os setup` |
+| `wallet address is not valid: checksum does not match` in `status` | the address in `os.conf` has one wrong character, so the miner will not start under `rx/0`; re-run `zmrig-os setup --wallet <the address from your wallet>` |
 | hashrate below the table | `zmrig-os doctor` — THP policy, page reservation, and governor are the three lines that matter |
 | update fails | `zmrig-os update --check`; a checksum failure is reported and the binary is left alone |
 

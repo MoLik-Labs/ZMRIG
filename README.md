@@ -8,7 +8,7 @@
 
 by **[@nggkhaiz](https://github.com/NggKhaiz)**
 
-[![release](https://img.shields.io/badge/release-6.47.0-f2763f)](CHANGELOG.md)
+[![release](https://img.shields.io/badge/release-6.48.0-f2763f)](CHANGELOG.md)
 [![licence](https://img.shields.io/badge/licence-GPL--3.0-blue)](LICENSE)
 [![dev fee](https://img.shields.io/badge/developer%20fee-3%25%20%C2%B7%20off%20switch-f2763f)](doc/FEE.md)
 [![platform](https://img.shields.io/badge/platform-Linux%20x86--64%20%C2%B7%20macOS%20%C2%B7%20Windows-lightgrey)](#build-from-source)
@@ -30,6 +30,7 @@ ZMRIG is a complete Monero mining setup, not a loose collection of scripts:
 | **Proxy** — `proxy/` | One pool connection for a farm: extranonce per rig, per-rig difficulty, tunnels for rigs in another building | free |
 | **Pool** — `pool/`, `worker/`, `deploy/` | Self-hosted Monero pool: stratum over TCP and WebSocket, PPLNS, every share re-hashed before it is paid | 1 % of each block, and nothing else |
 | **Image** — `os/` | A bootable ZMRIG OS: kernel, read-only Alpine root, `zmrig`, a wallet wizard, four hashrate modes, verified updates, and CI that rebuilds the ISO on every change | free |
+| **Container** — `deploy/docker/` | One published image, `ghcr.io/molik-labs/zmrig`, holding the miner and the pool: configured with the same variable names as the appliance, wallet-checked at every start, and updated by a script that only pulls when there is something to pull | free |
 | **Fleet** — `fleet/` | Telegram and Discord control, plus a one-password browser dashboard: enrol a rig by its Device ID, then set the wallet, pool, coin and mode from a chat or a phone, with alerts when one goes quiet | free, self-hosted |
 | **Docs** — `site/` | Docusaurus site: command builder, profitability calculator, pool table, every guide — English and Vietnamese | free to host |
 | **Web host** — `serve/` | The same documentation, a download page built from the releases API, a JSON feed and three links that always point at the newest image — one Node process, no dependencies | free to host |
@@ -45,6 +46,7 @@ anywhere in it.
 
 [What makes it different](#what-makes-it-different) ·
 [Install](#install-in-one-command) ·
+[Docker](#docker) ·
 [Bootable image](#bootable-image) ·
 [Check the fee](#check-the-fee) ·
 [Pools, and not getting banned](#pools-and-not-getting-banned) ·
@@ -165,6 +167,39 @@ See every automatic decision and its reason without touching the machine:
 ```bash
 ./oneclick.sh plan
 ```
+
+## Docker
+
+```bash
+docker run -d --name zmrig --restart unless-stopped \
+  -e WALLET=4YourMoneroAddress... \
+  -e POOL=gulf.moneroocean.stream:10001 \
+  ghcr.io/molik-labs/zmrig
+```
+
+One image, two jobs: the miner by default, `pool` for the Ocean Pool from the same
+commit. Nothing to install and nothing to compile, and `docker inspect` answers
+with the commit it was built from.
+
+The variables are the ones `zmrig-os` writes to `/etc/zmrig/os.conf` — `WALLET`,
+`POOL`, `WORKER`, `MODE`, `ALGO`, `THREADS`, `DONATE`, `MSR`, `API_PORT` — so the
+appliance and the container are configured with the same vocabulary. `WALLET` and
+`POOL` have no defaults: a placeholder wallet hashes for nobody, and a default
+pool would be choosing a custodian on your behalf, so the image names the missing
+variable and exits 2.
+
+Two things are specific to a container. The wallet is checked at startup by the
+miner itself (`ghcr.io/molik-labs/zmrig check` does it on demand), so the verdict
+is in the log of every container. And a CPU *quota* is not an affinity mask:
+`--cpus=2` limits the group while the process still sees every host CPU, so the
+image reads the cgroup quota and caps the automatic thread count to it — otherwise
+the rig asks for one thread per core and then has all of them throttled together.
+
+Updating is `deploy/docker/zmrig-docker-update --check` (exit 0 current, 3
+available, 2 cannot tell) and `--apply`, which pulls first and recreates second,
+so a failed pull leaves the running miner alone. A daily systemd timer is in the
+same directory. [`doc/DOCKER.md`](doc/DOCKER.md) has the full table, the compose
+file, and what a container cannot do (huge pages, MSR, thermal sensors).
 
 ## Bootable image
 
@@ -569,23 +604,27 @@ checks while two of the rows are wrong.
 | --- | ---: | --- |
 | `web` `node --test legacy/tests/` | 57 | the archived site: wizard and builder produced the same command, pool table matched `oneclick.sh`, branch names, donation address |
 | `proxy` `npm test` | 60 | extranonce allocation, vardiff, real sockets, WebSocket rig, banned pool left alone |
-| `pool` `npm test` | 29 | PPLNS in BigInt, share verification, payouts, audit log, end-to-end with a real miner |
-| `zmrig/tests/unit.sh` | 19 modules | options, hashing, health, report codes, stratum parsing, proxy handshakes, the per-algorithm memory rule, and the thermal governor's every edge |
-| `zmrig/tests/cli.sh` | 49 | flags, exit codes, `--help` covers the parser, `--check` reports the memory of the coin it was asked about and which huge-page mechanism backs it |
+| `pool` `npm test` | 52 | PPLNS in BigInt, share verification, payouts, audit log, end-to-end with a real miner |
+| `zmrig/tests/unit.sh` | 20 modules | options, hashing, health, report codes, stratum parsing, proxy handshakes, the per-algorithm memory rule, the cgroup CPU quota read from v2, v1 and a systemd slice, and the thermal governor's every edge |
+| `zmrig/tests/cli.sh` | 66 | flags, exit codes, `--help` covers the parser, `--check` reports the memory of the coin it was asked about and which huge-page mechanism backs it |
 | `zmrig/tests/net.sh` | 29 | TCP/TLS/WS/WSS against a fake pool, ban and refusal handling, failover, seed change |
 | `zmrig/tests/health.sh` | 7 | the watchdog, both directions: an honest pool is not a fault, an all-reject pool is |
-| `tests/oneclick/*.sh` | 77 | plan, config, governor, tuner targets (against a fake `/proc` and `/sys`), purge (removes only its own paths), branch switching, `--coin` mapping and the algorithm-name guard |
-| `fleet` `npm test` | 84 | the control plane without a token: Device ID derivation, the store's atomic writes and corrupt-file rescue, enrolment rules, the roster (three JSON shapes, a broken one reported rather than thrown, and a fleet that is still enrolled after its disk is emptied), reconciliation (one correction, not one a minute), every command's validation and refusals, the HTTP protocol end to end, the Telegram and Discord renderers, configuration that refuses to start half-done, and the dashboard — login and throttling, CSRF refusal, queued actions, escaping, Brotli/`ETag`/`304`, a GitHub releases call that fails without taking the page down, and the two hashrate alerts: one against the previous check-in, one against the rate the rig measured on itself, and hashrate added up per wallet so a shed of rigs is one number |
-| `tests/upstream/upstream.test.sh` | 17 |
-| `tests/lint/no-debug.sh` | 3 | no `set -x` in a boot script, no `console.debug` in the agent, no `--inspect`, no stray `TODO` anywhere this project ships | what the image is built from, and whether the weekly rebuild has anything to do: the Alpine point release and kernel are read from the mirror's own index, an older base in the published manifest means rebuild, a legacy manifest without one triggers exactly one, an unreachable mirror is reported instead of crashed on |
+| `tests/oneclick/*.sh` | 80 | plan, config, governor, tuner targets (against a fake `/proc` and `/sys`), purge (removes only its own paths), branch switching, `--coin` mapping and the algorithm-name guard |
+| `fleet` `npm test` | 100 | the control plane without a token: Device ID derivation, the store's atomic writes and corrupt-file rescue, enrolment rules, the roster (three JSON shapes, a broken one reported rather than thrown, and a fleet that is still enrolled after its disk is emptied), reconciliation (one correction, not one a minute), every command's validation and refusals, the HTTP protocol end to end, the Telegram and Discord renderers, configuration that refuses to start half-done, and the dashboard — login and throttling, CSRF refusal, queued actions, escaping, Brotli/`ETag`/`304`, a GitHub releases call that fails without taking the page down, and the two hashrate alerts: one against the previous check-in, one against the rate the rig measured on itself, and hashrate added up per wallet so a shed of rigs is one number |
+| `tests/upstream/upstream.test.sh` | 17 | what the image is built from, and whether the weekly rebuild has anything to do: the Alpine point release and kernel are read from the mirror's own index, an older base in the published manifest means rebuild, a legacy manifest without one triggers exactly one, an unreachable mirror is reported instead of crashed on |
+| `tests/lint/no-debug.sh` | 3 | no `set -x` in a boot script, no `console.debug` in the agent, no `--inspect`, no stray `TODO` anywhere this project ships |
 | `tests/releases/latest-iso.test.sh` | 29 | the download helper against a recorded reply — the GitHub list and the smaller document `serve/` publishes: asset selection by CPU variant, `--beta`, `--json`, `--host`, a checksum that travels with the image, and an API that is down |
-| `serve` `npm test` | 45 | the web host over a real socket: the file table, byte-for-byte negotiation, the 304 path, traversal attempts, HTML escaping of everything GitHub returns (including a `javascript:` asset URL), the three permanent redirects, a release feed that fails, a stale precompressed copy, `q=0` in `Accept-Encoding`, the policy on the only page this process renders, and the process booting and stopping on SIGTERM |
-| `os/tests/fleet.sh` | 26 | the shell agent against that real server: key generation and stability, a wallet applied to `os.conf` and acknowledged, a bad wallet refused with nothing written, stop on a real process, a log request round trip, pacing, and an unreachable server that is not an error |
-| `tests/docs/links.sh` | 99 | every relative link and every `#anchor` in the documentation resolves, including `/docs/…` site routes |
-| `site` `npm test` | 67 | command builder and its blocked states, calculator arithmetic against hand-computed numbers including break-even, pool table vs `oneclick.sh` and `doc/POOLS.md`, coin matrix and ranking (a missing number is never a zero, no invented pool or price), en/vi key parity and no dead or duplicated message |
-| `tests/docs/pages.sh` | 22 | the published site as Pages serves it: Docusaurus entry point, 26 sidebar pages in both locales, all 2808 local `href`/`src`, both sitemaps, language and theme controls, one localised social card per page, a title/description/lang on every page with no leaked placeholder, old-URL redirects, committed build not stale |
+| `serve` `npm test` | 48 | the web host over a real socket: the file table, byte-for-byte negotiation, the 304 path, traversal attempts, HTML escaping of everything GitHub returns (including a `javascript:` asset URL), the three permanent redirects, a release feed that fails, a stale precompressed copy, `q=0` in `Accept-Encoding`, the policy on the only page this process renders, and the process booting and stopping on SIGTERM |
+| `os/tests/fleet.sh` | 32 | the shell agent against that real server: key generation and stability, a wallet applied to `os.conf` and acknowledged, a bad wallet refused with nothing written, stop on a real process, a log request round trip, pacing, and an unreachable server that is not an error |
+| `tests/docs/identity.sh` | 25 | the repository knows its own name: owner and repository derived from the git remote, then checked against `package.json`, the site config, the install command and every published copy, with no file outside `legacy/` naming the previous owner |
+| `os/tests/plan.sh` | 120 | the boot arithmetic on its own: memory plans per algorithm and mode, thread counts, page counts against a machine's RAM, isolated-CPU groups picked from real topology, the GRUB environment block merged and padded to exactly 1024 bytes, and the rollback decision at its boundary |
+| `deploy/docker` `node --test 'deploy/docker/tests/*.test.js'` | 55 | the container: the environment mapped onto the miner's command line (the four modes, the fee always explicit, a donation of 11 % refused, `EXTRA_ARGS` never reaching a shell), the cgroup quota capping the thread count from both v2 and v1, the registry checker against a fake registry that demands a token (index → per-architecture manifest → version label, current/available/cannot-tell as 0/3/2), the host updater against a fake `docker` (no pull when current, no recreate after a failed pull), every environment variable on the page matching the one the code reads, and the Dockerfile itself: every `COPY` source present and not hidden by `.dockerignore`, every `--from` naming a stage, every `${ARG}` declared |
+| `tests/docs/config-keys.sh` | 18 | every setting in `os.conf.example` appears in the `doc/OS.md` table with the same default — the seven keys that had gone missing were the performance ones |
+| `tests/docs/links.sh` | 108 | every relative link and every `#anchor` in the documentation resolves, including `/docs/…` site routes |
+| `site` `npm test` | 68 | command builder and its blocked states, calculator arithmetic against hand-computed numbers including break-even, pool table vs `oneclick.sh` and `doc/POOLS.md`, coin matrix and ranking (a missing number is never a zero, no invented pool or price), en/vi key parity and no dead or duplicated message |
+| `tests/docs/pages.sh` | 22 | the published site as Pages serves it: Docusaurus entry point, 27 sidebar pages in both locales, all 2958 local `href`/`src`, both sitemaps, language and theme controls, one localised social card per page, a title/description/lang on every page with no leaked placeholder, old-URL redirects, committed build not stale |
 | `zmrig/tests/thermal.sh` | 10 | the safe mode against a real process and a real pool: cool is not throttled, heat sheds threads, one thread and hot stops hashing, cooling resumes, no sensor changes nothing |
-| `os/tests/control.sh` | 213 | the appliance tool: wallet validation (length, base58 alphabet, prefix), a command line per mode, kernel-command-line overrides, the supervisor waiting for a wallet, an updater that refuses a checksum mismatch, the installer's partition table and its refusals, A/B slot arithmetic and the 1024-byte GRUB environment block, the tuner running before the measurement, a mode change invalidating it, the physical-core topology read from a fake 8-core/16-thread sysfs (`-t 7`, mask `0xff`, `AFFINITY=off`, a machine that reports no topology at all), the hardware verdict for a Ryzen, a 2 GB box, a CPU without AVX2 and a machine too small to mine, and every version string in the repository agreeing — all with no root, no miner, no disk and no network |
+| `os/tests/control.sh` | 282 | the appliance tool: wallet validation (length, base58 alphabet, **checksum**, decoded by the miner when there is one), the interactive wizard asking again after a typo, a command line per mode, kernel-command-line overrides, the supervisor waiting for a wallet, an updater that refuses a checksum mismatch, the installer's partition table and its refusals, A/B slot arithmetic and the 1024-byte GRUB environment block, an install that carries the config keys and the kernel parameters onto the disk, the tuner running before the measurement, a mode change invalidating it, the physical-core topology read from a fake 8-core/16-thread sysfs (`-t 7`, mask `0xff`, `AFFINITY=off`, a machine that reports no topology at all), the hardware verdict for a Ryzen, a 2 GB box, a CPU without AVX2 and a machine too small to mine, and every version string in the repository agreeing — all with no root, no miner, no disk and no network |
 | `tests/oneclick/tune-targets.sh` | 7 | the two kernel settings a miner wants that are not the CPU: NUMA balancing turned off by path, every writable IRQ moved to CPU 0, unbound workqueues pinned there, `keep` leaving both alone, and a two-core machine keeping its interrupts spread — driven against a fake `/proc` and `/sys`, so it needs no root and no reboot |
 
 ## Documentation
@@ -601,6 +640,9 @@ checks while two of the rows are wrong.
   [Tiếng Việt](https://molik-labs.github.io/ZMRIG/vi/docs/intro): install guide,
   command builder, [profitability calculator](https://molik-labs.github.io/ZMRIG/docs/economics/profitability),
   pools, fleet, benchmarks, architecture, testing.
+* [`doc/DOCKER.md`](doc/DOCKER.md) — the published image: every environment
+  variable, the compose file and the update timer, why a CPU quota caps the thread
+  count, and what a container cannot do.
 * [`doc/OS.md`](doc/OS.md) — the bootable image: boot sequence, modes, the
   sysctl lines and why each one is there, persistence, updates, CI, and the
   troubleshooting table.

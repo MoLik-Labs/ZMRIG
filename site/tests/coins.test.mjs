@@ -9,6 +9,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+// Addresses built from real key material, so the checksum cases are real: the
+// same helper the pool and the fleet tests use.
+import * as monero from "../../tests/common/monero.js";
+
 import {
   ALGOS,
   COINS,
@@ -172,10 +176,27 @@ test("mergePrices keeps good numbers and drops everything else", () => {
 test("walletState checks Monero exactly and other coins plausibly", () => {
   assert.equal(walletState(WALLET).status, "valid");
   assert.equal(walletState(WALLET, "xmr").ok, true);
-  assert.equal(walletState("8" + WALLET.slice(1)).status, "valid");
-  assert.equal(walletState("4" + WALLET.slice(1) + "1".repeat(11)).status, "integrated");
+
+  // A subaddress and an integrated address are built from the real keys rather
+  // than by editing characters of a real address: an edited address is exactly
+  // the case the checksum now catches, so it would prove the wrong thing.
+  assert.equal(walletState(monero.build(42, monero.keysOf(WALLET)), "xmr").status, "valid");
+  assert.equal(walletState(monero.integrated(WALLET), "xmr").status, "integrated");
+
   assert.equal(walletState("0" + WALLET.slice(1)).status, "charset");
   assert.equal(walletState(WALLET + "4", "xmr").status, "length");
+
+  // Right alphabet, right length, wrong checksum: the typo a character count
+  // cannot see. It must block, and the message must be about the checksum.
+  const typo = walletState(monero.substitute(WALLET, 20), "xmr");
+  assert.equal(typo.status, "checksum");
+  assert.equal(typo.ok, false);
+  assert.match(typo.reason, /checksum/);
+
+  // A valid address on another chain is a real address that mainnet cannot pay.
+  const testnet = walletState(monero.onNetwork(WALLET, 53), "xmr");
+  assert.equal(testnet.status, "network");
+  assert.equal(testnet.ok, false);
 
   assert.equal(walletState(WOW, "wow").status, "plausible");
   assert.equal(walletState(WOW, "wow").ok, true);

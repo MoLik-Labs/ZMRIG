@@ -93,6 +93,30 @@ plan_pages() { # algo mode cores total_mb page_kb [threads] [override]
     printf '%s' "$(( (need * 1024 + page_kb - 1) / page_kb ))"
 }
 
+# 1 GiB pages worth reserving at boot for a dataset of `need_mb`.
+#
+# The gigantic pool is the last TLB win available to RandomX - 1040 entries at
+# 2 MiB, two at 1 GiB - and it can only be created before the machine fragments,
+# which is why it is a kernel parameter and not a sysctl. It also never comes
+# back: the memory is out of the machine for as long as it boots. So the answer
+# is a count only when the machine can spare it, and empty when it cannot.
+#
+# 2 GiB is what has to stay for the kernel, the page cache, the shell and the
+# verifier the pool runs. A rig that swaps to serve a TLB win mines slower than
+# the one that never asked.
+plan_gigantic_pages() { # need_mb total_mb
+    local need="${1:-0}" total="${2:-0}" pages
+
+    case "$need" in ''|*[!0-9]*) printf '%s' ''; return 0 ;; esac
+    case "$total" in ''|*[!0-9]*) printf '%s' ''; return 0 ;; esac
+    [ "$need" -gt 0 ] || { printf '%s' ''; return 0; }
+
+    pages=$(( (need + 1023) / 1024 ))
+    [ "$total" -ge $(( pages * 1024 + 2048 )) ] || { printf '%s' ''; return 0; }
+
+    printf '%s' "$pages"
+}
+
 # How many physical cores a set of CPUs amounts to: the number of distinct
 # thread-sibling groups it touches. Isolation takes whole groups, so on an SMT
 # machine this is half the list and on a non-SMT machine it is all of it — and
@@ -100,7 +124,7 @@ plan_pages() { # algo mode cores total_mb page_kb [threads] [override]
 plan_iso_groups() { # sys_root cpus...
     local sys="$1"; shift
     [ "$#" -gt 0 ] || { printf '0'; return 0; }
-    local cpu group seen=""
+    local cpu group
     for cpu in "$@"; do
         group=$(cat "$sys/devices/system/cpu/cpu${cpu}/topology/thread_siblings_list" 2>/dev/null || true)
         [ -n "$group" ] || group="$cpu"
@@ -224,6 +248,89 @@ plan_housekeeping() { # total_cpus isolated...
         print out
         exit
     }'
+}
+
+# How long to wait before starting the miner again after it exited on its own.
+# Ten seconds for the first failure, doubling, five minutes at the top: a crash
+# loop is usually the pool or the network, and a rig that reconnects every ten
+# seconds turns a five-minute outage into a socket storm on the pool's side.
+# A start that lasted this long was a working miner, not a crash: it clears the
+# consecutive-failure count and it is what makes the boot count as good. Ten
+# minutes is long enough that a pool rejecting the wallet, a missing module or a
+# bad config has shown up.
+plan_healthy_run() { printf '%s' 600; }
+
+plan_restart_delay() { # consecutive failures (1 or more)
+    local fails="${1:-1}" delay=10
+    case "$fails" in ''|*[!0-9]*) fails=1 ;; esac
+    [ "$fails" -ge 1 ] || fails=1
+    while [ "$fails" -gt 1 ]; do
+        delay=$((delay * 2))
+        [ "$delay" -ge 300 ] && { printf '%s' 300; return; }
+        fails=$((fails - 1))
+    done
+    printf '%s' "$delay"
+}
+
+# --------------------------------------------------------------- the A/B block
+# GRUB reads its environment from a 1024-byte block: a header, KEY=VALUE lines,
+# '#' padding, no room for a trailing byte. Two things live in it - which root
+# slot boots next, and the kernel parameters this rig needs - and they are
+# written by two different programs at two different moments. So the block is
+# produced here, once:
+#
+#   plan_grubenv_block KEY VALUE [EXISTING]
+#
+# Prints the block. Keys already in EXISTING are kept except the one being
+# replaced. That merge is the whole point: the initramfs used to write the slot
+# and nothing else, so an automatic rollback silently dropped `isolcpus=` and the
+# rig came back mining on half its cores with nothing in the log to say why.
+#
+# Pure: it reads its arguments and one file, and prints. The caller decides
+# whether to replace the real block.
+plan_grubenv_size() { printf '%s' 1024; }
+
+plan_grubenv_block() { # key value [existing-file]
+    local key="${1:?plan_grubenv_block needs a key}" value="${2:-}" into="${3:-}"
+    [ -n "$into" ] && [ -r "$into" ] || into=/dev/null
+    awk -v key="$key" -v value="$value" -v total="$(plan_grubenv_size)" '
+        BEGIN { head = "# GRUB Environment Block\n"; body = "" }
+        {
+            line = $0
+            # Comments and blank lines are not keys. GRUB ignores both, and the
+            # padding is made of them, so keeping them would grow the block on
+            # every write until it overflowed.
+            if (line == "" || substr(line, 1, 1) == "#") next
+            eq = index(line, "=")
+            if (eq > 0 && substr(line, 1, eq - 1) == key) next
+            body = body line "\n"
+        }
+        END {
+            body = key "=" value "\n" body
+            room = total - length(head) - length(body) - 1
+            # A block of any other size is a block GRUB ignores, so too many
+            # keys is a failure to report, not a block to write.
+            if (room < 0) exit 1
+            pad = ""
+            for (i = 0; i < room; i++) pad = pad "#"
+            printf "%s%s%s\n", head, body, pad
+        }' "$into"
+}
+
+# The rollback decision, and the number behind it: an installed rig counts boots
+# that never reached the point where the miner had been up for five minutes, and
+# after plan_boot_limit of them the other slot is worth trying. Returned as a
+# word, so the callers (PID 1 and the tests) cannot drift apart on the boundary.
+plan_boot_limit() { printf '%s' 3; }
+
+# keep          this slot is fine (or it has not failed enough times yet)
+# rollback      switch to the other slot and reboot
+# boot-anyway   it has failed, but there is no other slot to boot
+plan_boot_action() { # count, other-slot-present (0/1)
+    local count="${1:-0}" other="${2:-0}"
+    case "$count" in ''|*[!0-9]*) count=0 ;; esac
+    [ "$count" -ge "$(plan_boot_limit)" ] || { printf 'keep'; return; }
+    [ "$other" = "1" ] && printf 'rollback' || printf 'boot-anyway'
 }
 
 # A comparable description of a CPU set: "4-7" rather than "4 5 6 7", because it

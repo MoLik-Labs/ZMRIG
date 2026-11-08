@@ -159,6 +159,53 @@ Any other host works the same way: Node 20+, one port, the environment.
 | `FLEET_RATE_LIMIT` | `30` | commands per window per operator |
 | `FLEET_QUEUE_LIMIT` | `10` | instructions a rig may have waiting |
 | `FLEET_WEB_PASSWORD` | - | password for the browser dashboard; empty means no dashboard |
+| `FLEET_TRUST_PROXY` | on where the platform says so | believe `X-Forwarded-For` and `X-Forwarded-Proto` |
+| `FLEET_UNOWNED_LIMIT` | `200` | records kept for rigs nobody has enrolled yet |
+| `FLEET_UNOWNED_TTL` | `86400` | seconds before an unenrolled record expires |
+
+Any 64-hex `Authorization: Bearer` token produces a device record, because a rig
+that has never been enrolled still has to be able to knock — and that means
+anybody with `curl` can make one. Each record is memory plus a rewrite of the
+state file, which on Render lives in `/tmp` and is therefore RAM, so the
+unenrolled ones are bounded: past `FLEET_UNOWNED_LIMIT` the **least recently seen
+unenrolled record** is evicted, and one that has been silent for
+`FLEET_UNOWNED_TTL` is dropped on the next check-in from anyone.
+
+Eviction rather than refusal is deliberate. An operator cannot enrol a machine
+whose first check-in was refused: `/enroll` checks the enrolment code against the
+record that check-in would have created. A rig waiting to be enrolled is checking
+in every minute, so it is never the oldest, and a flood of strangers can only
+displace other strangers. Measured: 5 000 anonymous check-ins leave 200 records
+and a 78 KB state file, where before the file grew by one record per request.
+
+Through real HTTP the same handler took **4 662 anonymous check-ins per second**
+for five seconds (23 313 requests, 16 keep-alive sockets, one core): 200 records
+afterwards, a 118 KB state file, 13 debounced writes, 101 MB resident. The
+per-device rate limiter cannot slow this down, because every request arrives
+with a different key — the cap is what bounds it, and the cap does its job.
+
+`FLEET_TRUST_PROXY` decides two things the dashboard does with headers, and both
+are wrong in a way nobody notices until it matters:
+
+* **who is asking.** The login throttle is keyed by address. `X-Forwarded-For`
+  is a list the client starts — a request with `X-Forwarded-For: 1.2.3.4` reaches
+  a proxied service as `1.2.3.4, <the address the proxy saw>` — so reading the
+  first entry (which is what this did, until 6.48.1) lets anybody be a new client
+  on every request and step around the block. The **last** entry is the one the
+  proxy appended, and that is what is used. With no proxy declared the header is
+  ignored entirely and the socket address is used, because a directly connected
+  client writes that header itself.
+* **whether the cookie is `Secure`.** A proxy terminates TLS and says so in
+  `X-Forwarded-Proto`; a direct client says whatever it likes. The default is on
+  for Render and Fly (both set an environment variable naming the platform) and
+  off everywhere else, so `FLEET_TRUST_PROXY=1` is what to set behind nginx,
+  Caddy or Cloudflare.
+
+Whatever the header says, a second budget counts wrong passwords from *every*
+address: past ten in fifteen minutes, each attempt pays a delay of up to two
+seconds first. Rotating addresses buys an attacker a few attempts a second
+instead of thousands, and the owner's correct password still works on the first
+try.
 
 With no admin id the process refuses to start: a bot nobody owns would accept
 commands from an Internet stranger.
@@ -275,6 +322,15 @@ Two details worth knowing:
 
 * An empty wallet or pool field means **leave it alone**, never "clear it". The
   only way to change a wallet is to type a different one.
+* A rig whose reported address fails its checksum is marked in the dashboard
+  (a red **wallet ✗** in the rig list, the reason on its page, and it appears
+  under *needs attention*), not only in the one alert the chat sent. The mark
+  describes the last address the rig reported; the alert fires once.
+* A wallet is **decoded before it is queued**, in the chat, in the browser and in
+  the roster: the checksum is verified and a typo is refused with the reason
+  (`that is not a Monero address - checksum does not match: at least one
+  character is wrong`). Sending a rig an address nobody can spend from would cost
+  a week of hashing that no screen would explain.
 * Enrolling from the browser ties the rig to the primary chat admin, not to
   "the web", so `/devices` in Telegram still lists everything you own.
 
@@ -375,6 +431,13 @@ Sent to every admin, once, with a cooldown:
 * temperature at or above `FLEET_ALERT_TEMP`
 * the miner stopped when it was mining
 * hashrate below half of the previous check-in
+* a rig reporting a wallet address that fails its checksum, or one on another
+  network: `💸 rig-1 has an invalid wallet address - checksum does not match: at
+  least one character is wrong. Nothing mined to it can be paid.` The wallet is
+  the unit, not the rig: rigs that share an address are one message for the
+  whole farm (`💸 5 rigs all mine to an address that cannot be paid - …`), sent
+  once per cooldown, because eleven identical warnings about one typo is how a
+  chat gets muted.
 * every command result, including the refusals
 
 ## What is on the wire
@@ -384,7 +447,7 @@ One request a minute from the rig:
 ```json
 POST /v1/hello
 Authorization: Bearer <64 hex characters: the device key>
-{"device":"ZMR-1A2B-3C4D-5E6F","version":"6.47.0",
+{"device":"ZMR-1A2B-3C4D-5E6F","version":"6.48.0",
  "status":{"state":"mining","hashrate":1201.4,"temp":64,"uptime":86400,
            "mode":"max","wallet":"4...","pool":"gulf.moneroocean.stream:10001",
            "coin":"xmr","threads":"8","slot":"a","installed":true},
@@ -404,8 +467,8 @@ Commands: `setup` (`wallet`, `pool`, `coin`, `mode`, `maxtemp`, `threads`,
 
 The rig validates everything again before applying it — the bot's validation is a
 convenience, not the security boundary. A wallet that fails `zmrig-os`'s own
-validator is refused on the machine, nothing is written, and the refusal is
-reported.
+validator (which asks the miner for a checksum, not a character count) is refused
+on the machine, nothing is written, and the refusal is reported.
 
 ## Security
 

@@ -21,6 +21,7 @@ const sidebars = {
         "install/builder",
         "install/installer",
         "install/engines",
+        "install/docker",
       ],
     },
     {

@@ -10,6 +10,7 @@
 'use strict';
 
 const format = require('./format');
+const address = require('./address');
 
 function mark(record, kind, now) {
   record.alerts = record.alerts || {};
@@ -26,14 +27,41 @@ function name(record) {
   return record.label || record.id;
 }
 
+/** How many rigs report this wallet, and whether one of them has already told
+ *  the chat inside the same cooldown window. */
+function farmOn(store, wallet, config, now, selfId) {
+  if (!store) return { count: 1, others: 0 };
+
+  let count = 0;
+  let others = 0;
+  for (const other of store.devices()) {
+    if (String((other.status && other.status.wallet) || '') !== wallet) continue;
+    count += 1;
+    if (other.id === selfId) continue;
+    const told = (other.alerts || {}).wallet;
+    if (told && now - told <= config.alert_cooldown * 1000) others += 1;
+  }
+
+  return { count: Math.max(count, 1), others };
+}
+
 /** Fires on a check-in, comparing what the rig says now with what it said at the
- *  last one. `before` is that previous status, or null on the first check-in. */
-function onHello(record, config, now, before) {
+ *  last one. `before` is that previous status, or null on the first check-in.
+ *  `store`, when given, is used for one thing: a bad wallet is a property of the
+ *  address, not of the rig, so the message says how many rigs it affects and is
+ *  sent once per cooldown instead of once per rig. */
+function onHello(record, config, now, before, store) {
   const out = [];
   const status = record.status || {};
   const previous = before || {};
 
-  if (previous.state === 'offline' || (record.offline_notified && previous.state !== 'mining')) {
+  // A rig cannot report that it is offline: it is silent, and `sweep` is what
+  // notices. So `offline_notified` is the only evidence that the humans were
+  // told, and a check-in carrying it is the recovery. This used to also require
+  // that the last status was not `mining` - which is what a rig that dropped
+  // out is almost always reporting - so the one case people care about, a rig
+  // that came back and is hashing again, was the one case that stayed quiet.
+  if (record.offline_notified) {
     out.push({ kind: 'online', level: 'info', text: `🟢 **${name(record)}** is back after ${format.duration((now - (record.last_gap || now)) / 1000)}` });
     record.offline_notified = false;
   }
@@ -52,6 +80,43 @@ function onHello(record, config, now, before) {
   ) {
     mark(record, 'stopped', now);
     out.push({ kind: 'stopped', level: 'warn', text: `⏸ **${name(record)}** stopped mining (${status.reason || 'no reason given'})` });
+  }
+
+  // The wallet the rig is mining to. A rig that reports an address with a
+  // broken checksum is mining for nobody: the pool refuses the login, or - on a
+  // pool that only looks at the alphabet - credits an account that can never be
+  // paid. This is checked here, on the dashboard and in the chat, because the
+  // rig itself has no way to notice.
+  const wallet = String(status.wallet || '');
+  if ((wallet.length === 95 || wallet.length === 106) && cooling(record, 'wallet', config, now)) {
+    const verdict = address.check(wallet);
+    if (!verdict.ok || verdict.net !== 'mainnet') {
+      mark(record, 'wallet', now);
+
+      // One farm, one wallet, one message. Every rig on the farm reports the
+      // same address, and they check in within seconds of each other, so the
+      // first version of this alert sent eleven identical warnings about one
+      // typo - and a chat that cries wolf eleven times is a chat people mute.
+      // The rig is still marked, so it will not alert again on its own later;
+      // what it does not do is repeat what another rig just said.
+      // Skipping the message must not skip the rest of the check-in: a rig
+      // whose wallet warning was already sent by its neighbour still gets to
+      // report that its hashrate halved.
+      const farm = farmOn(store, wallet, config, now, record.id);
+      if (farm.others === 0) {
+        const plural = farm.count > 1;
+        const who = plural ? `${farm.count} rigs` : name(record);
+        out.push({
+          kind: 'wallet',
+          level: 'warn',
+          text: verdict.ok
+            ? `💸 **${who}** ${plural ? 'mine' : 'mines'} to a ${verdict.net} address: a mainnet pool cannot pay it`
+            : plural
+              ? `💸 **${who}** all mine to an address that cannot be paid - ${verdict.reason}. Nothing mined to it can be paid.`
+              : `💸 **${who}** has an invalid wallet address - ${verdict.reason}. Nothing mined to it can be paid.`,
+        });
+      }
+    }
   }
 
   const rate = Number(status.hashrate) || 0;

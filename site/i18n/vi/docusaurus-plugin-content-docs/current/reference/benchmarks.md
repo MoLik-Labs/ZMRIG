@@ -85,7 +85,11 @@ cấu hình hai lần, cùng phiên:
 | không đặt trang nào | THP gộp 99 % mapping | 785.9 / 786.1 H/s |
 | không đặt trang nào, THP tắt | 4 KiB | 614.8 / 626.3 H/s |
 
-Vậy bước quan trọng là 4 KiB → 2 MiB (≈ +28 %), còn pool đặt trước thêm 4–6 %
+Ba dòng trên đo liền nhau, và tỉ lệ giữa chúng (+28 %) hoá ra là do cái máy trôi
+— nó dao động tới 20 % giữa các giờ. Đo lại ngày 2026-11-07 bằng cách bật/tắt THP
+xen kẽ trong cùng một phiên, không đặt trước bên nào: **1088 / 1095 H/s với THP so
+với 892,8 / 900,5 H/s trên trang 4 KiB**. Vậy bước quan trọng là 4 KiB → 2 MiB
+(≈ +21 %), còn pool đặt trước thêm vài phần trăm
 nữa. Đó là lý do miner chỉ đòi quyền root khi THP tắt, và tại sao log khởi động
 in chính con số kernel đếm được (`huge pages: 2332 MB via THP (99 % of the
 2336 MB mapping, measured by the kernel)`) thay vì tuyên bố rằng gợi ý đã có

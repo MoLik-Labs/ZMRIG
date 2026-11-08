@@ -339,10 +339,21 @@ pub const Engine = struct {
         // Say what the kernel actually gave us. "huge pages 2336 MB" while
         // running on 4 KiB pages is worse than no report at all: it hides a
         // measured 24% hashrate loss on the validation host.
+        // A 1 GiB mapping and a 2 MiB mapping both report "explicit", and they
+        // are not the same thing: 2080 MB of dataset is 1 040 TLB entries at
+        // 2 MiB and one at 1 GiB. The page size is the useful half of the line.
+        const page_kb = wrapped.hugePageKb();
+        const huge_kind = if (page_kb >= 1024 * 1024)
+            "explicit, 1 GiB pages"
+        else if (page_kb != 0)
+            "explicit, 2 MiB pages"
+        else
+            "explicit";
+
         const huge_text = if (huge_total == 0)
             std.fmt.bufPrint(&huge_buf, "off", .{}) catch "off"
         else if (huge_explicit == huge_total)
-            std.fmt.bufPrint(&huge_buf, "{d} MB (explicit)", .{huge_explicit / (1024 * 1024)}) catch "?"
+            std.fmt.bufPrint(&huge_buf, "{d} MB ({s})", .{ huge_explicit / (1024 * 1024), huge_kind }) catch "?"
         else if (huge_explicit == 0)
             std.fmt.bufPrint(&huge_buf, "0 MB (THP fallback)", .{}) catch "?"
         else
@@ -360,14 +371,17 @@ pub const Engine = struct {
             // huge pages are off as well. With THP in `madvise` (or `always`)
             // the mapping still comes back in 2 MiB pages, and the difference
             // between that and the reserved pool is small; the difference
-            // between a 2 MiB page and a 4 KiB page is not - 800.6 H/s against
-            // 614.8 H/s on the validation host, measured by switching the
-            // MADV_HUGEPAGE hint off rather than by believing the manual.
+            // between a 2 MiB page and a 4 KiB page is not - 1088-1095 H/s
+            // against 892-900 H/s on the validation host, measured 2026-11-07
+            // by alternating THP on and off in one session, because that box
+            // moves by 20 % between hours and a back-to-back pair is worth
+            // nothing. An earlier back-to-back pair read 800.6 against 614.8
+            // and put this warning at 28 %.
             switch (hugepages_mod.thp()) {
                 .never, .unknown => {
                     const need_pages = (huge_total + (2 * 1024 * 1024) - 1) / (2 * 1024 * 1024);
 
-                    self.logger.warn("transparent huge pages are {s} and no huge pages are reserved: RandomX will read 4 KiB pages, ~28% slower (measured 614.8 H/s against 800.6 H/s on 2 vCPU)", .{hugepages_mod.thp().label()});
+                    self.logger.warn("transparent huge pages are {s} and no huge pages are reserved: RandomX will read 4 KiB pages, ~20% slower (measured 892-900 H/s against 1088-1095 H/s, alternating, on 2 vCPU)", .{hugepages_mod.thp().label()});
                     self.logger.warn("fix it once as root: echo {d} > /proc/sys/vm/nr_hugepages, or boot with transparent_hugepage=madvise (sudo zmrig-tune does both)", .{need_pages});
                 },
                 .always, .madvise => {},

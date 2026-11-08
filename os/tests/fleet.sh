@@ -99,6 +99,24 @@ let data='';process.stdin.on('data',(d)=>data+=d).on('end',()=>{
 });")
 [ "$ENROLLED" = "stopped" ] && ok "the rig reports its real state (stopped, no wallet)" || bad "the rig reports its real state (got '$ENROLLED')"
 
+# The temperature in the payload is what the server's alerts compare against
+# `alert_temp`, so a payload that always says 0 is a rig that can never overheat
+# as far as the bot is concerned. This used to happen: the reading is "68 C" and
+# the code testing it for digits rejected the space, so every rig in the fleet
+# reported a temperature of zero.
+FAKESYS="${WORK}/sys"
+mkdir -p "$FAKESYS/class/hwmon/hwmon0" "$FAKESYS/devices/system/cpu"
+printf 'coretemp\n' > "$FAKESYS/class/hwmon/hwmon0/name"
+printf '68000\n' > "$FAKESYS/class/hwmon/hwmon0/temp1_input"
+ZMRIG_OS_SYS="$FAKESYS" zig_tool sync --now >/dev/null 2>&1
+TEMP_SEEN=$(curl -fsS "${CONTROL}/state?id=${ID}" | node -e "
+let data='';process.stdin.on('data',(d)=>data+=d).on('end',()=>{
+  const parsed=JSON.parse(data);
+  process.stdout.write(parsed.device ? String(parsed.device.status.temp) : 'none');
+});")
+[ "$TEMP_SEEN" = "68" ] && ok "the check-in carries the real temperature (68)" ||
+    bad "the check-in carries the real temperature (got '$TEMP_SEEN')"
+
 # ------------------------------------------------------------- enrolment
 
 check "the bot can enrol the rig" bash -c "curl -fsS '${CONTROL}/enrol?id=${ID}&owner=tg:1&label=basement' >/dev/null"
@@ -174,6 +192,51 @@ OUTPUT=$(sh "$TOOL" sync 2>&1)
 [ -z "$OUTPUT" ] && ok "sync stays silent when there is nothing to say" || bad "sync stays silent when there is nothing to say (got '$OUTPUT')"
 
 check "status shows the device and the server" bash -c "sh '$TOOL' status | grep -q '$ID' && sh '$TOOL' status | grep -q '$DEVICE'"
+
+# The heat cap is part of the status, because the roster reconciles it: without
+# it the server cannot see that a rig holds the wrong cap and never sends one.
+zig_tool setup --wallet "$WALLET" --mode safe --max-temp 77 >/dev/null 2>&1
+zig_tool sync --now >/dev/null 2>&1
+CAP_SEEN=$(curl -fsS "${CONTROL}/state?id=${ID}" | node -e "
+let data='';process.stdin.on('data',(d)=>data+=d).on('end',()=>{
+  const parsed=JSON.parse(data);
+  process.stdout.write(parsed.device ? String(parsed.device.status.maxtemp) : 'none');
+});")
+[ "$CAP_SEEN" = "77" ] && ok "the check-in reports the heat cap (77)" ||
+    bad "the check-in reports the heat cap (got '$CAP_SEEN')"
+zig_tool setup --wallet "$WALLET" --mode max >/dev/null 2>&1
+
+# --------------------------------------------------------- a stale lock
+#
+# The failure this covers: SIGKILL (the OOM killer on a 512 MB rig) takes the
+# agent between `mkdir sync.lock` and its trap. The directory stays in /run for
+# as long as the machine is up, and every later check-in returns silently - the
+# rig keeps mining and quietly falls out of the fleet for weeks.
+
+LOCK="${ROOTDIR}/run/zmrig/sync.lock"
+LAST="${ROOTDIR}/run/zmrig/sync.last"
+mkdir -p "$LOCK"
+printf '999999\n' >"$LOCK/pid"
+rm -f "${ROOTDIR}/run/zmrig/sync.next" "$LAST"
+zig_tool sync --now --quiet >/dev/null 2>&1
+[ -s "$LAST" ] && ok "a lock left by a dead process is taken over" || bad "a lock left by a dead process is taken over"
+[ -d "$LOCK" ] && bad "the taken-over lock is released" || ok "the taken-over lock is released"
+
+# A live owner is still respected: two crons must not become two hellos.
+rm -f "${ROOTDIR}/run/zmrig/sync.next" "$LAST"
+mkdir -p "$LOCK"
+printf '%s\n' "$$" >"$LOCK/pid"
+zig_tool sync --now --quiet >/dev/null 2>&1
+[ -s "$LAST" ] && bad "a lock held by a live process is respected" || ok "a lock held by a live process is respected"
+rm -rf "$LOCK"
+
+# No pid at all, and old: the power-cut case, where nothing was ever written.
+rm -f "${ROOTDIR}/run/zmrig/sync.next" "$LAST"
+mkdir -p "$LOCK"
+touch -d '10 minutes ago' "$LOCK"
+zig_tool sync --now --quiet >/dev/null 2>&1
+[ -s "$LAST" ] && ok "an old lock with no owner is taken over" || bad "an old lock with no owner is taken over"
+rm -rf "$LOCK"
 
 # ---------------------------------------------------------- wrong server
 

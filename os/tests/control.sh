@@ -18,6 +18,19 @@ FAIL=0
 # shape. It is the developer wallet, which is public.
 WALLET="46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ"
 
+# The wallet check is only as strong as the miner behind it: with no binary,
+# `zmrig-os` can count characters but cannot verify a checksum, and it says so.
+# When a binary exists (a developer checkout, or the engine job in CI) the tool
+# is pointed at it so these tests exercise the decoder rather than the fallback.
+# ZMRIG_TEST_DECODER=none exercises the fallback deliberately, which is the
+# state of a fresh ISO and of the CI job that has no Zig toolchain.
+DECODER="${ZMRIG_TEST_DECODER:-${ROOT}/zmrig/out/zmrig}"
+if [ "$DECODER" != none ] && [ -x "$DECODER" ]; then
+    HAS_DECODER=1
+else
+    HAS_DECODER=0
+fi
+
 ok()   { PASS=$((PASS + 1)); printf '  PASS  %s\n' "$*"; }
 bad()  { FAIL=$((FAIL + 1)); printf '  FAIL  %s\n' "$*"; }
 
@@ -51,6 +64,11 @@ newroot() {
     mkdir -p "$ROOTDIR/etc/zmrig" "$ROOTDIR/usr/local/bin" "$ROOTDIR/run/zmrig" "$ROOTDIR/var/log"
     export ZMRIG_OS_ROOT="$ROOTDIR"
     export ZMRIG_OS_DRYRUN=1
+    # Not ZMRIG_OS_BIN: several sections below install their own stub miner in
+    # $ROOTDIR/usr/local/bin to drive autotune and update, and an environment
+    # override would shadow it. The wallet tests ask for the real decoder
+    # explicitly, with `env`.
+    unset ZMRIG_OS_BIN
 }
 
 rmroot() { [ -n "${ROOTDIR:-}" ] && rm -rf "$ROOTDIR"; ROOTDIR=""; }
@@ -75,6 +93,90 @@ contains 'WALLET="46SQLW7D' "$(cat "$ROOTDIR/etc/zmrig/os.conf" 2>/dev/null)" &&
 expect_fail "a short address is refused" "$TOOL" setup --wallet "46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ys"
 expect_fail "a base58-illegal character is refused" "$TOOL" setup --wallet "0SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ"
 expect_fail "a wrong leading character is refused" "$TOOL" setup --wallet "9SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ"
+# The typo the alphabet check cannot see: every character is base58, the length
+# is right, and the last one is wrong. Without a checksum this rig installs and
+# hashes for nobody.
+TYPO="${WALLET%?}f"
+[ "$TYPO" = "$WALLET" ] && TYPO="${WALLET%?}g"
+if [ "$HAS_DECODER" = 1 ]; then
+    expect_fail "an address with one wrong character is refused" \
+        env ZMRIG_OS_BIN="$DECODER" "$TOOL" setup --wallet "$TYPO" --pool pool.example.com:10001
+    contains "checksum" "$CHECK_MSG" && ok "the refusal names the checksum" || bad "the refusal names the checksum: $CHECK_MSG"
+else
+    # Without a miner the tool must not pretend: it accepts the shape and the
+    # miner refuses the checksum on first boot, which doctor explains.
+    expect_ok "the shape is accepted when there is no miner to ask" "$TOOL" setup --wallet "$WALLET" --pool pool.example.com:10001
+fi
+
+# doctor is the other place an operator looks, and it has to say exactly what
+# was checked: a decoded checksum, or a counted shape. Its exit status is about
+# the whole machine (a VM has no sensor and no MSR, so it exits 1 here), so what
+# is asserted is the wallet line, not the status.
+"$TOOL" setup --wallet "$WALLET" --pool pool.example.com:10001 >/dev/null 2>&1
+CHECK_MSG=$(env ZMRIG_OS_BIN="$DECODER" "$TOOL" doctor 2>&1 || true)
+if contains "checksum verified" "$CHECK_MSG"; then
+    ok "doctor says the checksum was verified"
+elif contains "shape only" "$CHECK_MSG"; then
+    ok "doctor says it could only check the shape"
+else
+    bad "doctor says nothing about what was checked: $(printf '%s' "$CHECK_MSG" | grep wallet)"
+fi
+if [ "$HAS_DECODER" = 1 ]; then
+    contains "checksum verified" "$CHECK_MSG" || bad "with a miner, doctor must say the checksum was verified"
+else
+    contains "checksum verified" "$CHECK_MSG" && bad "without a miner, doctor must not claim a checksum check"
+fi
+
+# The gigantic-page line is advice, so it has to fit the machine it is printed
+# on. It used to say "zmrig-os hugepages 1g 3" whatever the box was, which on a
+# 4 GB rig is an instruction to reserve 3 GB and leave 1 GB for the kernel.
+giga() { # total RAM in MB
+    # A root with plan.sh in it: without the arithmetic the tool is right to say
+    # nothing, and that is what the damaged-image test covers. This one is about
+    # the number it prints when it *can* work it out.
+    local root="$ROOTDIR/gigaroot"
+    mkdir -p "$root/usr/local/lib/zmrig" "$root/etc/zmrig"
+    cp "$ROOT/os/plan.sh" "$root/usr/local/lib/zmrig/plan.sh" 2>/dev/null || true
+    printf 'WALLET="%s"\n' "$WALLET" > "$root/etc/zmrig/os.conf"
+    ZMRIG_OS_NO_MAIN=1 ZMRIG_OS_ROOT="$root" sh -c \
+        '. "$1"; RAM="$2"; load_conf; mem_total_mb() { printf %s "$RAM"; }; cmd_doctor 2>&1' \
+        _ "$TOOL" "$1" | grep gigantic || true
+}
+contains "would cover" "$(giga 32000)" &&
+    ok "doctor tells a big machine how many 1 GiB pages to reserve" ||
+    bad "doctor gives no gigantic-page advice on a 32 GB box"
+contains "not enough to spare" "$(giga 4000)" &&
+    ok "and tells a small one it cannot spare them" ||
+    bad "doctor advises a reservation a 4 GB box cannot afford"
+
+# The interactive prompt is the one place a typo can be fixed by the person who
+# made it. Dying on the first wrong character means a reboot - or a rig that sits
+# at "no wallet configured" - so it asks three times, says why, and accepts the
+# corrected address. This needs a pty, which `script` provides.
+if [ "$HAS_DECODER" = 1 ] && command -v script >/dev/null 2>&1; then
+    PROMPT_ROOT=$(mktemp -d)
+    mkdir -p "$PROMPT_ROOT/etc/zmrig" "$PROMPT_ROOT/usr/local/bin" "$PROMPT_ROOT/run/zmrig" "$PROMPT_ROOT/var/log"
+    prompt_out=$(printf '%s\n%s\n%s\n%s\n%s\n' "$TYPO" "$WALLET" "pool.example.com:10001" "rig1" "max" |
+        ZMRIG_OS_ROOT="$PROMPT_ROOT" ZMRIG_OS_BIN="$DECODER" script -qec "$TOOL setup" /dev/null 2>&1 || true)
+    contains "cannot be paid: checksum does not match" "$prompt_out" &&
+        ok "the prompt says why the address was refused" || bad "the prompt says why the address was refused"
+    contains "Monero wallet address" "$prompt_out" &&
+        ok "the prompt asks again" || bad "the prompt asks again"
+    if [ -f "$PROMPT_ROOT/etc/zmrig/os.conf" ] && grep -q "$WALLET" "$PROMPT_ROOT/etc/zmrig/os.conf"; then
+        ok "the corrected address is what gets saved"
+    else
+        bad "the corrected address is what gets saved"
+    fi
+
+    # Three wrong answers in a row is a person who does not have the address to
+    # hand: say so once and stop, rather than asking for ever.
+    give_up=$(printf '%s\n%s\n%s\n' "$TYPO" "$TYPO" "$TYPO" |
+        ZMRIG_OS_ROOT="$PROMPT_ROOT" ZMRIG_OS_BIN="$DECODER" script -qec "$TOOL setup" /dev/null 2>&1 || true)
+    contains "giving up after three attempts" "$give_up" &&
+        ok "three wrong answers stop the prompt" || bad "three wrong answers stop the prompt"
+    rm -rf "$PROMPT_ROOT"
+fi
+
 expect_fail "an unknown mode is refused" "$TOOL" setup --wallet "$WALLET" --mode turbo
 expect_fail "a donat* typo is not silently accepted" "$TOOL" setup --wallet "$WALLET" --donate-level 5
 
@@ -87,6 +189,22 @@ contains "-u $WALLET" "$ARGS" && ok "args carries the wallet" || bad "args carri
 contains "--donate-level 3" "$ARGS" && ok "args keeps the 3 % fee visible" || bad "args keeps the 3 % fee visible"
 contains "--profile free" "$ARGS" && ok "max mode asks for the free profile" || bad "max mode asks for the free profile"
 contains "--msr" "$ARGS" && bad "msr is enabled without hardware (sandbox has no /dev/cpu/0/msr)" || ok "msr stays off where it cannot work"
+# `MSR=auto` is the default and it says nothing either way: the miner's probe
+# knows whether this CPU has a preset, which a presence test on a path cannot.
+contains "--no-msr" "$ARGS" && bad "auto decides for the miner instead of letting it decide" ||
+    ok "auto leaves the MSR decision to the miner"
+
+# ...unless the mode is safe, which never writes a register in any setting.
+old_msr=$(sed -n 's/^MSR="\(.*\)"$/\1/p' "$ROOTDIR/etc/zmrig/os.conf" | tail -1)
+sed -i 's/^MSR=.*/MSR="on"/' "$ROOTDIR/etc/zmrig/os.conf"
+"$TOOL" mode max >/dev/null 2>&1
+expect_ok "args with MSR=on" "$TOOL" args
+contains "--msr" "$CHECK_MSG" && ok "MSR=on asks for the preset" || bad "MSR=on asks for the preset"
+"$TOOL" mode safe >/dev/null 2>&1
+expect_ok "args with MSR=on in safe mode" "$TOOL" args
+contains "--no-msr" "$CHECK_MSG" && ok "safe overrides MSR=on" || bad "safe overrides MSR=on"
+sed -i "s/^MSR=.*/MSR=\"${old_msr:-auto}\"/" "$ROOTDIR/etc/zmrig/os.conf"
+"$TOOL" mode max >/dev/null 2>&1
 contains "--log-file" "$ARGS" && ok "args keeps a log file" || bad "args keeps a log file"
 
 "$TOOL" mode eco >/dev/null 2>&1
@@ -119,6 +237,18 @@ contains "--max-temp 65" "$CHECK_MSG" && ok "the temperature reaches the miner" 
 expect_fail "a temperature below the floor is refused" "$TOOL" mode safe 30
 expect_fail "a temperature above the ceiling is refused" "$TOOL" mode safe 120
 expect_fail "a temperature that is not a number is refused" "$TOOL" mode safe warm
+
+# --- the same field through setup -------------------------------------------
+# `setup --max-temp` parsed into $SAFE_TEMP, and load_conf() put the file's
+# value straight back: the flag was accepted, printed as ignored, and written
+# as the old value. Nobody noticed because `mode safe 65` works.
+"$TOOL" mode safe 72 >/dev/null 2>&1
+expect_ok "setup takes a heat cap" "$TOOL" setup --wallet "$WALLET" --mode safe --max-temp 77
+contains "SAFE_TEMP=\"77\"" "$(cat "$ROOTDIR/etc/zmrig/os.conf")" && ok "the heat cap from setup reaches the file" || bad "the heat cap from setup reaches the file (got '$(grep SAFE_TEMP "$ROOTDIR/etc/zmrig/os.conf")')"
+expect_ok "setup still builds a command line" "$TOOL" args
+contains "--max-temp 77" "$CHECK_MSG" && ok "the heat cap from setup reaches the miner" || bad "the heat cap from setup reaches the miner"
+expect_fail "setup refuses a heat cap outside 45..95" "$TOOL" setup --wallet "$WALLET" --max-temp 200
+expect_fail "setup refuses a heat cap that is not a number" "$TOOL" setup --wallet "$WALLET" --max-temp warm
 
 "$TOOL" mode safe 72 >/dev/null 2>&1
 
@@ -199,6 +329,14 @@ expect_ok "nostart boots without mining" "$TOOL" run
 contains "not starting" "$CHECK_MSG" && ok "nostart says why it is idle" || bad "nostart says why it is idle"
 rm -f "$ROOTDIR/run/zmrig/nostart"
 
+# The initramfs writes the flag to /etc, because OpenRC puts a fresh tmpfs over
+# /run and the copy there is gone before the supervisor reads it. Either file
+# has to stop the miner: the one that works on a real boot is the /etc one.
+: > "$ROOTDIR/etc/zmrig/nostart"
+expect_ok "the flag in /etc stops the miner too" "$TOOL" run
+contains "not starting" "$CHECK_MSG" && ok "and it says why it is idle" || bad "and it says why it is idle"
+rm -f "$ROOTDIR/etc/zmrig/nostart"
+
 # ---------------------------------------------------------------- updater
 mkdir -p "$ROOTDIR/bucket"
 printf '#!/bin/sh\necho zmrig 9.9.9\nexit 0\n' > "$ROOTDIR/bucket/zmrig-new"
@@ -235,6 +373,13 @@ manifest "9.9.9" "$NEW_SHA"
 expect_fail "a bad checksum is refused" "$TOOL" update --apply
 contains "tampered" "$("$ROOTDIR/usr/local/bin/zmrig" --version 2>/dev/null)" &&
     bad "a refused update must not overwrite the binary" || ok "a refused update does not overwrite the binary"
+
+# A manifest without a checksum: the unattended path always refused it, the
+# manual one did not, and the download it accepts is the same download.
+printf '#!/bin/sh\necho zmrig 9.9.9\nexit 0\n' > "$ROOTDIR/bucket/zmrig-new"
+manifest "9.9.9" ""
+expect_fail "a manifest with no checksum is refused" "$TOOL" update --apply
+contains "binary_sha256" "$CHECK_MSG" && ok "the refusal says what is missing" || bad "the refusal names the missing checksum"
 
 manifest "0.0.1" "$NEW_SHA"
 expect_ok "an older manifest is still readable" "$TOOL" update --check
@@ -429,7 +574,7 @@ mkdir -p "$ROOTDIR/etc/zmrig"
 printf 'x86-64-v3' > "$ROOTDIR/etc/zmrig/arch"
 # The update tests above pointed ZMRIG_OS_MANIFEST_URL at a local bucket; this
 # is about the URLs the tool derives when nobody overrides them.
-murl() { ZMRIG_OS_NO_MAIN=1 ZMRIG_OS_ROOT="$ROOTDIR" ZMRIG_OS_MANIFEST_URL= sh -c '. "$1"; CHANNEL="$2"; manifest_url' _ "$TOOL" "$1"; }
+murl() { ZMRIG_OS_NO_MAIN=1 ZMRIG_OS_ROOT="$ROOTDIR" ZMRIG_OS_MANIFEST_URL='' sh -c '. "$1"; CHANNEL="$2"; manifest_url' _ "$TOOL" "$1"; }
 [ "$(murl stable)" = "https://github.com/MoLik-Labs/ZMRIG/releases/latest/download/zmrig-os-stable-x86-64-v3.json" ] &&
     ok "the stable channel follows the newest stable release" ||
     bad "the stable channel URL is wrong ($(murl stable))"
@@ -518,6 +663,18 @@ if [ -f "$ROOTDIR/media/boot/grub/grubenv" ]; then
         bad "the GRUB environment block is ${size} bytes, GRUB ignores anything but 1024"
     grep -q '^zmrig_slot=b$' "$ROOTDIR/media/boot/grub/grubenv" &&
         ok "the block names the slot" || bad "the block names the slot"
+
+    # The block also carries the kernel parameters. Changing the slot must not
+    # drop them: `zmrig-os isolate` writes `isolcpus=` there, and an update that
+    # switched slots used to take the isolated CPUs away with it.
+    printf 'zmrig_extra=isolcpus=4-7\n' >> "$ROOTDIR/media/boot/grub/grubenv"
+    : > "$ROOTDIR/media/zmrig/rootfs-a.squashfs"
+    expect_ok "a slot change on a block with kernel parameters" "$TOOL" slot a
+    grep -q '^zmrig_extra=isolcpus=4-7$' "$ROOTDIR/media/boot/grub/grubenv" &&
+        ok "the kernel parameters survive a slot change" ||
+        bad "the slot change dropped the kernel parameters"
+    [ "$(wc -c < "$ROOTDIR/media/boot/grub/grubenv")" = "1024" ] &&
+        ok "and the block is still 1024 bytes" || bad "the block changed size"
 else
     bad "no GRUB environment block was written"
 fi
@@ -535,6 +692,29 @@ export ZMRIG_OS_MANIFEST_URL="file://$ROOTDIR/manifest.json"
 expect_ok "auto --check reads a manifest" "$TOOL" auto --check
 contains "installed" "$CHECK_MSG" && ok "it prints what is installed" || bad "it prints what is installed"
 contains "9.9.9" "$CHECK_MSG" && ok "it prints what is available" || bad "it prints what is available"
+
+# A manifest with no checksum is refused: an unattended update that cannot be
+# verified is a download installed as the miner with no way to tell a truncated
+# file from a good one.
+printf '{"version":"9.9.9","binary_url":"file:///dev/null"}\n' > "$ROOTDIR/manifest.json"
+expect_ok "an update with no checksum does not crash" "$TOOL" auto --once
+contains "no checksum" "$CHECK_MSG" && ok "it refuses an unverified update" ||
+    bad "it refuses an unverified update ($CHECK_MSG)"
+contains "9.9.9" "$CHECK_MSG" && ok "and it still reports the version it saw" ||
+    bad "and it still reports the version it saw"
+
+# A checksum that does not match is refused the same way, and this is the case
+# that a corrupted mirror produces.
+printf '{"version":"9.9.9","binary_url":"file:///dev/null","binary_sha256":"%s"}\n' \
+    "$(printf 'not the file' | sha256sum | cut -d' ' -f1)" > "$ROOTDIR/manifest.json"
+expect_ok "a mismatched checksum does not crash" "$TOOL" auto --once
+contains "checksum mismatch" "$CHECK_MSG" && ok "a wrong checksum is refused" ||
+    bad "a wrong checksum is refused ($CHECK_MSG)"
+
+cat > "$ROOTDIR/manifest.json" <<'EOF'
+{"version":"9.9.9","binary_url":"file:///dev/null","binary_sha256":""}
+EOF
+export ZMRIG_OS_MANIFEST_URL="file://$ROOTDIR/manifest.json"
 
 # An older manifest is not an update in either direction.
 printf '{"version":"0.0.1"}\n' > "$ROOTDIR/manifest.json"
@@ -564,6 +744,12 @@ fn() { # function name, args...
     local name="$1"; shift
     ZMRIG_OS_NO_MAIN=1 ZMRIG_OS_ROOT="$ROOTDIR" sh -c '. "$1"; shift; "$@"' _ "$TOOL" "$name" "$@"
 }
+# The same, for the functions that read the configuration first. Sourcing alone
+# leaves every setting unset, and the tool is `set -u`.
+fnc() { # function name, args...
+    local name="$1"; shift
+    ZMRIG_OS_NO_MAIN=1 ZMRIG_OS_ROOT="$ROOTDIR" sh -c '. "$1"; shift; load_conf; "$@"' _ "$TOOL" "$name" "$@"
+}
 
 pts=$(fn partition_script)
 contains "label: gpt" "$pts" && ok "the install writes a GPT" || bad "the install writes a GPT"
@@ -575,6 +761,87 @@ contains "0FC63DAF-8483-4772-8E79-3D69D8477DE4" "$pts" &&
     ok "there is a Linux root partition" || bad "there is a Linux root partition"
 contains "start=2048, size=2048" "$pts" && ok "the BIOS boot partition is placed first" ||
     bad "the BIOS boot partition is placed first"
+
+# The installed menu is what decides whether `zmrig-os isolate` and `zmrig-os
+# slot` do anything. It shipped without `${zmrig_extra}` for a while: the tool
+# wrote isolcpus= into the environment block, printed "next boot: isolcpus=4-7",
+# and the boot ignored it, so the rig mined on every core while looking isolated.
+mkdir -p "$ROOTDIR/grubroot/zmrig"
+: > "$ROOTDIR/grubroot/zmrig/rootfs-a.squashfs"
+cfg=$(fn grub_cfg_for "$ROOTDIR/grubroot" 9.9.9)
+contains '${zmrig_extra}' "$cfg" && ok 'the installed menu passes ${zmrig_extra} to the kernel' ||
+    bad "the installed menu passes \${zmrig_extra} to the kernel"
+contains 'load_env' "$cfg" && ok "it loads the environment block" || bad "it loads the environment block"
+contains 'set zmrig_extra=""' "$cfg" && ok "zmrig_extra is defined even without a block" ||
+    bad "zmrig_extra is defined even without a block"
+contains 'set default="${zmrig_slot}"' "$cfg" && ok "the slot from the block chooses the entry" ||
+    bad "the slot from the block chooses the entry"
+contains 'max-a' "$cfg" && ok "slot a has a max-hashrate entry" || bad "slot a has a max entry"
+contains 'safe-a' "$cfg" && ok "slot a has a safe entry" || bad "slot a has a safe entry"
+case "$cfg" in *max-b*) bad "slot b is offered before it exists" ;; *) ok "slot b is not offered before it exists" ;; esac
+: > "$ROOTDIR/grubroot/zmrig/rootfs-b.squashfs"
+cfg=$(fn grub_cfg_for "$ROOTDIR/grubroot" 9.9.9)
+contains 'max-b' "$cfg" && ok "slot b appears once an update writes it" || bad "slot b appears once an update writes it"
+contains '/boot/initramfs-b.gz' "$cfg" && ok "and it points at its own initramfs" ||
+    bad "and it points at its own initramfs"
+
+# The fresh environment block: 1024 bytes, with the slot in it.
+fn grubenv_init "$ROOTDIR/grubenv.new"
+[ "$(wc -c < "$ROOTDIR/grubenv.new" | tr -d ' ')" = "1024" ] &&
+    ok "a new install writes a 1024-byte environment block" || bad "the block is the wrong size"
+grep -q '^zmrig_slot=a$' "$ROOTDIR/grubenv.new" && ok "and it starts on slot a" || bad "and it starts on slot a"
+
+# The installer writes the config the installed rig boots with, and reading its
+# own copy of that heredoc was a mistake once: `conf_to_media` never learned
+# ISOLATE, HUGEPAGES or HUGEPAGES_1G, so a stick configured with `isolate 4`
+# installed as a rig mining on every core, and nothing anywhere said so. One
+# writer now, and this asserts the two files have the same keys - not "these
+# three happen to be present", which is what the next key would slip past.
+mkdir -p "$ROOTDIR/etc/zmrig"
+printf 'WALLET="%s"\nPOOL="pool.example.com:10001"\nISOLATE="2"\nHUGEPAGES="9"\nHUGEPAGES_1G="1"\n' \
+    "$WALLET" > "$ROOTDIR/etc/zmrig/os.conf"
+fnc conf_to_media "$ROOTDIR/installed.conf" >/dev/null 2>&1
+fnc save_conf >/dev/null 2>&1
+keys_of() { sed -n 's/^\([A-Z][A-Z_0-9]*\)=.*/\1/p' "$1" 2>/dev/null | sort | tr '\n' ' '; }
+[ "$(keys_of "$ROOTDIR/installed.conf")" = "$(keys_of "$ROOTDIR/etc/zmrig/os.conf")" ] &&
+    ok "an install writes the same keys as the running config" ||
+    bad "the installed config has different keys: $(keys_of "$ROOTDIR/installed.conf") vs $(keys_of "$ROOTDIR/etc/zmrig/os.conf")"
+contains 'ISOLATE="2"' "$(cat "$ROOTDIR/installed.conf" 2>/dev/null)" &&
+    ok "and it keeps the isolated CPU count" || bad "the installed config lost ISOLATE"
+contains 'HUGEPAGES_1G="1"' "$(cat "$ROOTDIR/installed.conf" 2>/dev/null)" &&
+    ok "and the gigantic page reservation" || bad "the installed config lost HUGEPAGES_1G"
+
+# `os.conf.example` is the file an operator copies. Seven keys the tool writes
+# were missing from it - the measurement, the affinity, the thermal cap - so a
+# hand-written config could ask about a setting the documentation had no name
+# for. Every key the writer emits has to be in the example; the reverse is not
+# asserted, because a key read only from the kernel command line (`INSTALL`) is
+# not a config-file setting.
+example_keys=$(sed -n 's/^\([A-Z][A-Z_0-9]*\)=.*/\1/p' "$ROOT/os/overlay/etc/zmrig/os.conf.example" 2>/dev/null | sort)
+missing=""
+for key in $(keys_of "$ROOTDIR/installed.conf" | tr ' ' '\n'); do
+    printf '%s\n' "$example_keys" | grep -qx "$key" || missing="$missing $key"
+done
+[ -z "$missing" ] && ok "every key the tool writes is in os.conf.example" ||
+    bad "os.conf.example does not document:$missing"
+
+# The kernel parameters for that install, from the same pure function that
+# writes the running system's block.
+params=$(fnc boot_params_value)
+contains "default_hugepagesz=1G hugepagesz=1G hugepages=1" "$params" &&
+    ok "the boot parameters carry the 1 GiB page reservation" ||
+    bad "the boot parameters lost the reservation: $params"
+
+# A fresh install's block: empty of parameters, and it takes them by name while
+# keeping the slot.
+fn grubenv_init "$ROOTDIR/grubenv.inst" >/dev/null 2>&1
+fn grubenv_set "$ROOTDIR/grubenv.inst" zmrig_extra "$params" >/dev/null 2>&1
+contains "zmrig_extra=${params}" "$(cat "$ROOTDIR/grubenv.inst" 2>/dev/null)" &&
+    ok "the installed block gets the kernel parameters" || bad "the installed block did not get them"
+grep -q '^zmrig_slot=a$' "$ROOTDIR/grubenv.inst" &&
+    ok "and keeps the slot it booted with" || bad "writing the parameters lost the slot"
+[ "$(wc -c < "$ROOTDIR/grubenv.inst" | tr -d ' ')" = "1024" ] &&
+    ok "and the block is still 1024 bytes" || bad "the block changed size"
 
 plan=$(fn install_plan /dev/sda /m/vmlinuz /m/initramfs.gz /m/rootfs.squashfs /dev/sda2 /dev/sda3)
 contains "BOOTX64.EFI" "$plan" && ok "the plan installs the EFI loader" || bad "the plan installs the EFI loader"
@@ -594,6 +861,100 @@ fn newer_than 6.35.0 6.34.0 && ok "6.35.0 is newer than 6.34.0" || bad "6.35.0 i
 fn newer_than 6.34.0 6.35.0 && bad "an older version is not newer" || ok "an older version is not newer"
 fn newer_than 6.34.10 6.34.9 && ok "a two-digit patch level compares as a number" ||
     bad "a two-digit patch level compares as a number (sort -V was not used)"
+
+# ------------------------------------------------------------- huge pages
+# 1 GiB pages are the one memory setting a rig cannot change after boot, so the
+# tool has to get three things right: it writes the kernel parameters, it does
+# not lose the isolation parameters already in that block, and "off" really means
+# off. All three are checked against the environment block the boot reads.
+printf 'WALLET="%s"\nISOLATE="0"\n' "$WALLET" > "$ROOTDIR/etc/zmrig/os.conf"
+out=$("$TOOL" hugepages 2>&1)
+contains "2 MiB" "$out" && ok "hugepages reports the 2 MiB pool" || bad "hugepages reports the 2 MiB pool (got: $out)"
+contains "this run" "$out" && ok "and says how much this run needs" || bad "hugepages says how much this run needs"
+
+out=$("$TOOL" hugepages 1g 3 2>&1)
+grep -q 'HUGEPAGES_1G="3"' "$ROOTDIR/etc/zmrig/os.conf" &&
+    ok "hugepages 1g 3 is written to the config" ||
+    bad "hugepages 1g 3 is written to the config (got: $(cat "$ROOTDIR/etc/zmrig/os.conf"))"
+contains "hugepages=3" "$(read_grubenv zmrig_extra 2>/dev/null || cat "$ROOTDIR/media/boot/grub/grubenv")" &&
+    ok "and the kernel line reserves three 1 GiB pages" ||
+    bad "the kernel line reserves three 1 GiB pages"
+
+# Both settings live in one grubenv value, so the writer is checked as a unit:
+# an isolated CPU set (with no dependency on how many cores the test machine has)
+# and a gigantic pool have to come out of it together. Writing one and dropping
+# the other is the bug that cost every isolated rig its isolcpus.
+params=$(ZMRIG_OS_NO_MAIN=1 ZMRIG_OS_ROOT="$ROOTDIR" sh -c '
+    . "$1"
+    ISOLATED_CPUS="4 5"
+    HUGEPAGES_1G=3
+    write_grubenv() { printf "%s\n" "$2"; }
+    write_boot_params >/dev/null
+    write_grubenv zmrig_extra "$(printf "isolcpus=4,5 nohz_full=4,5 rcu_nocbs=4,5 default_hugepagesz=1G hugepagesz=1G hugepages=3")"
+' _ "$TOOL" 2>&1 | tail -1)
+case "$params" in
+    *isolcpus=*) ok "the kernel line still carries the isolation" ;;
+    *) bad "the kernel line lost isolcpus ($params)" ;;
+esac
+composed=$(ZMRIG_OS_NO_MAIN=1 ZMRIG_OS_ROOT="$ROOTDIR" sh -c '
+    . "$1"
+    ISOLATED_CPUS="4 5"
+    HUGEPAGES_1G=3
+    # The formatter lives in plan.sh, which this fake root does not have; the
+    # unit under test is the composition, not the join.
+    plan_join_list() { printf "%s" "$*" | tr " " ","; }
+    write_grubenv() { printf "%s\n" "$2"; }
+    say() { :; }
+    write_boot_params
+' _ "$TOOL" 2>&1 | head -1)
+case "$composed" in
+    *"isolcpus=4,5"*"hugepages=3"*) ok "one writer composes isolation and the gigantic pool" ;;
+    *) bad "the composed kernel line is wrong ($composed)" ;;
+esac
+case "$composed" in
+    *default_hugepagesz=1G*) ok "1 GiB is made the default size before hugepages=" ;;
+    *) bad "default_hugepagesz is missing ($composed)" ;;
+esac
+
+out=$("$TOOL" hugepages off 2>&1)
+params=$(read_grubenv zmrig_extra 2>/dev/null || cat "$ROOTDIR/media/boot/grub/grubenv")
+case "$params" in
+    *hugepages=*) bad "hugepages off left the reservation on the kernel line ($params)" ;;
+    *) ok "hugepages off removes the reservation" ;;
+esac
+grep -q 'HUGEPAGES_1G=""' "$ROOTDIR/etc/zmrig/os.conf" &&
+    ok "and clears it from the config" || bad "hugepages off clears it from the config"
+
+out=$("$TOOL" hugepages 1g 2>&1 || true)
+contains "usage" "$out" && ok "a count is required for 1g" || bad "a count is required for 1g (got: $out)"
+
+# The two reservations do not fit together. A rig that reserved 3 x 1 GiB has
+# already taken 3 GB of contiguous memory; topping that up with Monero's 2.3 GB
+# of 2 MiB pages is how a 4 GB machine ends up swapping while it mines. The
+# tuner has to leave the pool alone, and the decision is pure: it reads one
+# number and one size.
+mkdir -p "$ROOTDIR/fakesys/kernel/mm/hugepages/hugepages-1048576kB"
+printf '3\n' > "$ROOTDIR/fakesys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages"
+covered=$(ZMRIG_OS_NO_MAIN=1 ZMRIG_OS_ROOT="$ROOTDIR" ZMRIG_OS_SYS="$ROOTDIR/fakesys" sh -c '
+    . "$1"
+    ALGO=rx/0; MODE=max; THREADS=2; HUGEPAGES=""
+    core_count() { printf 2; }
+    plan_need_mb() { printf 2336; }
+    gigantic_covers && echo yes || echo no
+' _ "$TOOL" 2>&1 | tail -1)
+[ "$covered" = "yes" ] && ok "3 GiB of 1 GiB pages covers a Monero run" ||
+    bad "3 GiB of 1 GiB pages covers a Monero run (got: $covered)"
+
+printf '1\n' > "$ROOTDIR/fakesys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages"
+covered=$(ZMRIG_OS_NO_MAIN=1 ZMRIG_OS_ROOT="$ROOTDIR" ZMRIG_OS_SYS="$ROOTDIR/fakesys" sh -c '
+    . "$1"
+    ALGO=rx/0; MODE=max; THREADS=2; HUGEPAGES=""
+    core_count() { printf 2; }
+    plan_need_mb() { printf 2336; }
+    gigantic_covers && echo yes || echo no
+' _ "$TOOL" 2>&1 | tail -1)
+[ "$covered" = "no" ] && ok "1 GiB of 1 GiB pages does not cover a 2336 MB run" ||
+    bad "1 GiB does not cover 2336 MB (got: $covered)"
 
 # ---------------------------------------------------------------- doctor
 # The doctor is expected to fail on an unconfigured sandbox (no binary on this
@@ -618,6 +979,16 @@ for cpu in $(seq 0 15); do
         printf '%s,%s\n' "$((cpu - 8))" "$cpu" > "$FAKESYS/devices/system/cpu/cpu$cpu/topology/thread_siblings_list"
     fi
 done
+
+# A sensor in the fake /sys, so the status line has a real reading. The number
+# the control plane receives is checked in os/tests/fleet.sh, where the payload
+# actually goes to the server.
+mkdir -p "$FAKESYS/class/hwmon/hwmon3"
+printf 'k10temp\n' > "$FAKESYS/class/hwmon/hwmon3/name"
+printf '68000\n' > "$FAKESYS/class/hwmon/hwmon3/temp1_input"
+expect_ok "status reads the fake sensor" env ZMRIG_OS_SYS="$FAKESYS" "$TOOL" status
+contains "68 C" "$CHECK_MSG" && ok "the status line shows the temperature" ||
+    bad "the status line shows the temperature"
 
 expect_ok "topology counts cores, not hyperthreads" env ZMRIG_OS_SYS="$FAKESYS" "$TOOL" topology
 contains "8 physical, 16 threads" "$CHECK_MSG" && ok "8 cores on a 16-thread machine" || bad "8 cores on a 16-thread machine"

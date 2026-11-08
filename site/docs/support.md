@@ -59,6 +59,19 @@ print(len(raw), body[0], "OK" if digest == checksum else "BAD")
 A bad checksum means a typo, a truncated copy, or something that was never a
 Monero address.
 
+The shortest version of that check is the miner itself, once it is installed:
+
+```console
+$ zmrig --check-wallet 46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ
+valid   46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ
+  check checksum verified (Keccak-256)
+  kind  standard
+  net   mainnet
+```
+
+The documentation site's builder checks any Monero address the same way before
+it gives you a command, and so does `zmrig-os setup`.
+
 ## What a donation does not buy
 
 - **No effect on the miner.** Nothing parses this page at build or run time, and

@@ -1,0 +1,7 @@
+# ShellCheck configuration for this repository.
+#
+# The appliance scripts run under busybox ash, which has `local`: shellcheck's
+# POSIX dialect does not know it and reports one warning per function, which
+# would bury the findings that matter. Everything else stays at the default
+# severity, and CI runs `-S warning`.
+disable=SC3043

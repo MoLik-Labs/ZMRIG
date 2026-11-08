@@ -73,6 +73,20 @@ for page in \
 done
 [ "$prose_mismatch" = "0" ] && pass "the pages state the same rate as the constant"
 
+# 1b2. The site's own title and footer, which are not pages and have no prose to
+#      review: the tab title said "1 % developer fee" for a whole release after the
+#      constant moved to 3, because nothing was looking at the config.
+cfg="${ROOT}/site/docusaurus.config.js"
+if [ -f "$cfg" ]; then
+    stale=$(grep -oE '[0-9]+([.][0-9]+)? ?% (developer )?fee' "$cfg" |
+            grep -vE "^${EXPECTED_PERCENT}([.]0+)? ?%" | head -3)
+    if [ -n "$stale" ]; then
+        fail "site/docusaurus.config.js still advertises: ${stale}"
+    else
+        pass "the site title and footer advertise ${EXPECTED_PERCENT} %"
+    fi
+fi
+
 # 1c. The appliance ships the same default, so an image and a binary from the
 #     same commit cannot disagree about what a fresh rig pays.
 tool_percent=$(grep -E '^DONATE_DEFAULT=' "${ROOT}/os/overlay/usr/local/bin/zmrig-os" | sed 's/.*="//; s/".*//')

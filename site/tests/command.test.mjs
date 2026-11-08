@@ -171,3 +171,25 @@ test("a rig name is quoted, never trusted", () => {
   const result = build({ wallet: WALLET, rig: "rig 1; reboot" });
   assert.match(result.install, /--rig-id 'rig 1; reboot'/);
 });
+
+test("a wallet with one wrong character is refused by the page, not by the miner", () => {
+  // The page is where the address is pasted, and it used to accept this: every
+  // character base58, the right length, one of them wrong. What it produced was
+  // a valid-looking command that mines for a week and pays nobody.
+  const typo = WALLET.slice(0, 20) + (WALLET[20] === "a" ? "b" : "a") + WALLET.slice(21);
+  const state = walletState(typo, "xmr");
+
+  assert.equal(state.status, "checksum");
+  assert.equal(state.ok, false);
+  assert.match(state.reason, /checksum does not match/);
+
+  // `blocked` is what the page renders as a refusal and what disables the copy
+  // button: the command stays visible so the fields it came from can be read,
+  // but it cannot be copied with one click.
+  const built = build({ wallet: typo, coin: "xmr" });
+  assert.equal(built.blocked, "wallet-invalid");
+
+  // The good one still builds, and the page says what was checked.
+  assert.equal(build({ wallet: WALLET, coin: "xmr" }).blocked, null);
+  assert.match(walletState(WALLET, "xmr").status, /valid/);
+});

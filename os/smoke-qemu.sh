@@ -2,7 +2,7 @@
 #
 # smoke-qemu.sh - boot the ISO in a throwaway VM and check that it comes up.
 #
-#   ./os/smoke-qemu.sh os/out/zmrig-os-6.47.0-x86-64-v3.iso
+#   ./os/smoke-qemu.sh os/out/zmrig-os-6.48.0-x86-64-v3.iso
 #   BOOT_TIMEOUT=900 ./os/smoke-qemu.sh image.iso     # slower emulation
 #
 # QEMU is given the image as a CD and the kernel is booted explicitly, so the
@@ -14,7 +14,6 @@ set -euo pipefail
 ISO="${1:?usage: smoke-qemu.sh image.iso}"
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-600}"
 QEMU_MEM="${QEMU_MEM:-3072}"
-HERE=$(cd -- "$(dirname -- "${0}")" && pwd)
 
 command -v qemu-system-x86_64 >/dev/null || { echo "qemu-system-x86_64 not installed" >&2; exit 1; }
 command -v xorriso >/dev/null || { echo "xorriso not installed" >&2; exit 1; }

@@ -29,6 +29,18 @@
 namespace {
 
 constexpr size_t kHugePageSize = 2 * 1024 * 1024;
+#ifndef _WIN32
+/* x86-64's gigantic page, and the encoding that asks for it. MAP_HUGE_SHIFT is
+ * 26 on Linux for every architecture that has MAP_HUGETLB; the size given to
+ * mmap must be a multiple of 1 GiB or the call is EINVAL. Guarded because the
+ * Windows build has neither mmap nor these names, and an unused constant there
+ * is a warning at best. */
+constexpr size_t kGiganticPageSize = 1024ULL * 1024 * 1024;
+#ifndef MAP_HUGE_SHIFT
+#define MAP_HUGE_SHIFT 26
+#endif
+constexpr int kGiganticShift = 30;
+#endif
 constexpr size_t kScratchpad   = RANDOMX_SCRATCHPAD_L3_MAX_SIZE;
 
 /* One mapping. `mmap` returns zeroed pages for free, so the 2 GiB fallback no
@@ -38,12 +50,25 @@ struct Mapping {
     size_t   bytes = 0;
     bool     explicit_huge = false;
     bool     via_mmap = false;
+    /* The page size that backed it: 2 MiB, 1 GiB, or 0 for ordinary pages.
+     * Two mappings of the same byte count do not perform the same, so the
+     * number is worth carrying to the log. */
+    size_t   page_kb = 0;
 };
 
 
-/* 2 MiB aligned, backed by explicit huge pages when the kernel reserved some.
- * Falls back to anonymous memory with a THP hint, which is what a normal build
- * of XMRig ends up with on a host without reserved pages. */
+/* Backed by reserved huge pages when the kernel has them, 1 GiB ones first.
+ *
+ * A 2 GiB RandomX dataset is 1 024 four-KiB TLB entries' worth of random reads
+ * per hash, and 2 MiB pages turn that into 1 024 lookups spread over a TLB that
+ * typically holds that many: a 1 GiB page turns it into two. But gigantic pages
+ * cannot be reserved after the machine has been up for a while — the pool has to
+ * exist before memory fragments — so this only *uses* them: when the operator
+ * reserved a pool (`nr_hugepages` under `hugepages-1048576kB`) and it is big
+ * enough, the mapping comes from it, and when it is not, the next attempt is the
+ * 2 MiB pool, then anonymous memory with a THP hint, which is what a stock
+ * XMRig build ends up with on a host without reserved pages. Every step down is
+ * silent to the caller and visible in the page size this records. */
 Mapping mapPages(size_t bytes, bool huge, size_t *mapped)
 {
     const size_t aligned = (bytes + kHugePageSize - 1) & ~(kHugePageSize - 1);
@@ -62,6 +87,25 @@ Mapping mapPages(size_t bytes, bool huge, size_t *mapped)
 
     return out;
 #else
+    if (huge && aligned >= kGiganticPageSize) {
+        const size_t gigantic = (aligned + kGiganticPageSize - 1) & ~(kGiganticPageSize - 1);
+        void *p = mmap(nullptr, gigantic, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | (kGiganticShift << MAP_HUGE_SHIFT), -1, 0);
+        if (p != MAP_FAILED) {
+            out.ptr = static_cast<uint8_t *>(p);
+            out.bytes = gigantic;
+            out.explicit_huge = true;
+            out.via_mmap = true;
+            out.page_kb = kGiganticPageSize / 1024;
+            *mapped = gigantic;
+
+            return out;
+        }
+
+        /* ENOMEM: no 1 GiB pool, or not enough pages left in it. Nothing to
+         * report — the 2 MiB pool is the next thing tried. */
+    }
+
     if (huge) {
         void *p = mmap(nullptr, aligned, PROT_READ | PROT_WRITE,
                        MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
@@ -70,6 +114,7 @@ Mapping mapPages(size_t bytes, bool huge, size_t *mapped)
             out.bytes = aligned;
             out.explicit_huge = true;
             out.via_mmap = true;
+            out.page_kb = kHugePageSize / 1024;
             *mapped = aligned;
 
             return out;
@@ -163,6 +208,8 @@ struct xmo_engine {
      * ends up claiming "huge pages 2336 MB" while running on 4 KiB pages. */
     size_t huge_explicit = 0;
     size_t huge_requested = 0;
+    /* 0 when the mapping is on ordinary pages, else 2048 or 1048576. */
+    size_t huge_page_kb = 0;
     bool  full_mem      = true;
     bool  jit           = true;
     /* The mapping and the size the algorithm really needs. They differ per
@@ -215,7 +262,10 @@ xmo_engine *xmo_engine_new(int algo, int flags, char *err, size_t errlen)
     }
     if (engine->huge) {
         engine->huge_requested += engine->cache.bytes;
-        if (engine->cache.explicit_huge) engine->huge_explicit += engine->cache.bytes;
+        if (engine->cache.explicit_huge) {
+            engine->huge_explicit += engine->cache.bytes;
+            engine->huge_page_kb = engine->cache.page_kb;
+        }
     }
 
     engine->cache_handle = randomx_create_cache(static_cast<randomx_flags>(cache_flags), engine->cache.ptr);
@@ -244,7 +294,10 @@ xmo_engine *xmo_engine_new(int algo, int flags, char *err, size_t errlen)
         }
         if (engine->huge) {
             engine->huge_requested += engine->data.bytes;
-            if (engine->data.explicit_huge) engine->huge_explicit += engine->data.bytes;
+            if (engine->data.explicit_huge) {
+                engine->huge_explicit += engine->data.bytes;
+                engine->huge_page_kb = engine->data.page_kb;
+            }
         }
 
         engine->dataset = randomx_create_dataset(engine->data.ptr);
@@ -320,6 +373,12 @@ size_t xmo_engine_huge_pages(const xmo_engine *engine)
 size_t xmo_engine_huge_pages_total(const xmo_engine *engine)
 {
     return engine ? engine->huge_requested : 0;
+}
+
+
+size_t xmo_engine_huge_page_kb(const xmo_engine *engine)
+{
+    return engine ? engine->huge_page_kb : 0;
 }
 
 

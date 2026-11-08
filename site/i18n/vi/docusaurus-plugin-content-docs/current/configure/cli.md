@@ -33,6 +33,11 @@ hiện trong ngoặc vuông.
     --ban-cooldown=N       giây bỏ qua một pool sau khi bị ban, bị từ chối ví
                            hoặc nhận thông báo pool đầy [900]
                            trường hợp từ chối ví bị kẹp tối thiểu 30 phút
+    --check-wallet=ADDR    giải mã địa chỉ Monero - độ dài, bảng chữ base58,
+                           byte mạng, checksum Keccak-256 - in ra loại địa chỉ,
+                           mạng và các khóa, thoát 1 nếu pool mainnet không trả được
+    --allow-bad-wallet     vẫn khởi động dù checksum sai. Với rx/0, checksum
+                           sai là bị từ chối: máy sẽ đào mà không bao giờ được trả
     --idle-timeout=N       ngắt kết nối im lặng sau N giây [300, 0 = tắt]
     --keepalive-interval=N [60, 0 = tắt]
 ```
@@ -53,6 +58,42 @@ hiện trong ngoặc vuông.
     --max-temp=C           giữ cảm biến CPU nóng nhất ở mức ≤ C độ
     --thermal-file=PATH    đọc nhiệt độ từ FILE thay vì sysfs
     --no-thermal           tắt bộ điều tiết
+```
+
+## Địa chỉ ví
+
+`-u/--user` nhận địa chỉ mà pool sẽ trả. Với Monero, địa chỉ được giải mã trước
+chia sẻ đầu tiên: 95 ký tự (106 nếu có payment id), base58, byte mạng, và
+checksum Keccak-256 bốn byte. Sai **một** ký tự là kiểu hỏng mà phép đếm ký tự
+không thấy — máy vẫn băm hoàn hảo và tiền trả về một địa chỉ không ai giữ khóa
+spend — nên với `rx/0` đó là lý do từ chối khởi động:
+
+```console
+$ zmrig -o gulf.moneroocean.stream:10001 -u 4AdUndXH...684Rgf
+error 4AdUndXH...684Rgf is not a valid Monero address: checksum does not match: at least one character is wrong
+error this rig would mine and never be paid; check it with `zmrig --check-wallet 4AdUndXH...684Rgf`
+error if that login is not a Monero address, pass --allow-bad-wallet
+```
+
+`--check-wallet ADDR` là đúng phép kiểm đó mà không cần pool, và `--check` in kết
+luận cạnh phần còn lại của cấu hình:
+
+```console
+$ zmrig -o gulf.moneroocean.stream:10001 -u 4... --check
+  wallet  standard mainnet checksum verified
+```
+
+Với mọi thuật toán khác, phép kiểm chỉ là cảnh báo: kho này chỉ nhận là biết định
+dạng của Monero, và một login có dạng địa chỉ nhưng là địa chỉ của đồng CryptoNote
+khác thì không được phép ngăn máy khởi động. `--allow-bad-wallet` biến lý do từ
+chối trở lại thành cảnh báo như trước, cho trường hợp đó. Dòng tóm tắt nói rõ đang
+ở trường hợp nào, để một lần chạy thử của rig Wownero không bị đọc thành "rig này
+sẽ không khởi động":
+
+```console
+$ zmrig -o gulf.moneroocean.stream:10001 -u 4AdUndXH...684Rgf -a rx/wow --check
+  wallet  INVALID: checksum does not match: at least one character is wrong
+          not a Monero address: if this is another coin's address, mining is unaffected (--allow-bad-wallet silences the check)
 ```
 
 ## Log và vòng đời
@@ -173,15 +214,27 @@ config ok
   threads 2 (default would be 2)
   cpus    [0,1] on 2 cpu(s), 2 physical core(s)
   mode    auto, huge pages on, jit on
-  memory  rx/0 maps 2336 MB, 1168 pages of 2 MiB: no pages reserved; transparent huge pages collapse the mapping instead
+  memory  rx/0 maps 2336 MB, 1168 pages of 2 MiB (or 3 of 1 GiB): no pages reserved; transparent huge pages collapse the mapping instead
+  1g      no pool: this mode would need 3 page(s) of 1 GiB, and the mapping uses 2 MiB pages instead (doc/PERFORMANCE.md has the one-line reservation)
   thp     madvise (default): the hint this miner sets is honoured, so no root step is needed
-  msr     intel preset; reading /dev/cpu/0/msr needs root (off: --msr is worth 5-15% on Zen 3/4 …)
+  msr     intel preset; reading /dev/cpu/0/msr needs root (auto: the preset is skipped here; --msr tries anyway)
 ```
+
+Dòng `msr` là câu trả lời, không phải lời nhắc: preset tắt prefetcher đáng
+**5–15 %** trên máy thật, và từ 6.48 nó được áp **tự động** khi máy chịu được
+(`auto`). Phần trong ngoặc cho biết lần chạy này đang ở trạng thái nào —
+`auto: …` (do bước dò quyết định), `on: --msr` (bạn yêu cầu), `off: --no-msr`
+(bị từ chối, và config có `"msr": false` cũng vậy).
+
+Dòng `1g` là pool không thể tạo lúc chạy: nó cho biết các trang 1 GiB mà bộ cấp
+phát muốn dùng có tồn tại không, và `zmrig-os hugepages 1g 3` sẽ đặt chúng ở lần
+boot sau. Không có là câu trả lời bình thường trên máy ảo và không mất gì — gần
+như toàn bộ lợi ích nằm ở trang 2 MiB.
 
 Dòng `memory` là cỡ của chính coin đó — `panthera maps 192 MB, 96 pages` — và
 dòng `thp` trả lời câu hỏi mà nó đặt ra: `madvise` và `always` nghĩa là kernel
 cấp trang 2 MiB cho mapping mà không cần bước nào bằng root, `never` nghĩa là
-không, và miner sẽ chậm khoảng 28 % cho tới khi bạn đặt trang.
+không, và miner sẽ chậm khoảng 20 % cho tới khi bạn đặt trang.
 
 `--check` đọc file và in ra; nó không mở socket và không cấp phát dataset. Nếu
 file chỉ root đọc được thì chạy bằng `sudo`, không thì bạn nhận

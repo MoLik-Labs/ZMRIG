@@ -61,11 +61,15 @@ fi
 
 huge_total=$(awk '$1 == "HugePages_Total:" { print $2 }' /proc/meminfo 2>/dev/null || echo 0)
 thp=$(cat /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null || echo "n/a")
-one_g=$(cat /sys/kernel/mm/transparent_hugepage/hpage_pmd_size 2>/dev/null >/dev/null; ls /sys/kernel/mm/hugepages 2>/dev/null | tr '\n' ' ' || true)
+# Every page size this kernel can reserve, so the report says what it has
+# instead of printing "0" for 1 GB pages on a kernel that has no such file.
+page_sizes=$(ls /sys/kernel/mm/hugepages 2>/dev/null | sed 's/^hugepages-//; s/kB$//' | tr '\n' ' ' || true)
+page_sizes=${page_sizes:-none}
 
 info "binary:       $BINARY"
 info "cpu threads:  $(nproc)"
 info "huge pages:   ${huge_total:-0} reserved, THP: ${thp}"
+info "page sizes:   ${page_sizes} (kB, supported by this kernel)"
 info "1GB pages:    $(cat /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages 2>/dev/null || echo 0) reserved"
 info "run time:     ${SECONDS_TO_RUN}s (+ ~20s dataset init)"
 echo

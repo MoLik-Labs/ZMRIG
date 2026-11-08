@@ -67,9 +67,25 @@ request to the control plane cannot talk a rig into a wallet it would reject.
 * hashrate below half of the rate the rig measured on itself, which catches the
   machine that has been sliding for a week rather than the one that fell over
   just now;
+* a rig mining to a wallet address that fails its checksum, or that belongs to
+  another network — the rig itself has no way to notice, and on a pool that only
+  checks the alphabet nobody else does either. A farm shares one address, so
+  this is one message per address (`💸 5 rigs all mine to an address that cannot
+  be paid — …`), not one per rig;
 * every command result, including refusals.
 
-Each kind has a cooldown per rig, so a hot machine does not shout every minute.
+Each kind has a cooldown per rig, so a hot machine does not shout every minute
+(`FLEET_ALERT_COOLDOWN`, seconds, default 1800). The threshold is
+`FLEET_ALERT_TEMP` (default 85 °C) and the hashrate rule is
+`FLEET_ALERT_HASHRATE_DROP` (default 0.5, meaning "half").
+
+The temperature is the hottest reading the rig can find, not the first one:
+`coretemp`, `k10temp` or `x86_pkg_temp` before the board's Super I/O chip, and
+`acpitz` — which reports a southbridge estimate 10–20 °C below the die — only
+when nothing else exists. A rig whose number is 0 has no sensor at all, and
+`zmrig-os doctor` says so in one line; the alert cannot fire on a machine that
+cannot measure itself, which is why it is worth looking at.
+
 The second hashrate rule is the slow one, and it says what it compared:
 
 ```
@@ -159,6 +175,14 @@ minute, and everything else waits for that call.
 On a live stick the key lives in RAM — install to disk, or give the stick a
 `ZMRIGDATA` partition with `zmrig-os persist`, or the rig reports a new ID after
 a reboot.
+
+Two check-ins never overlap: the one that is running holds a lock that names its
+PID. If the agent is killed outright — the OOM killer, a power cut — the lock
+outlives it, and a lock nobody will ever release is a rig that quietly stops
+checking in while it keeps mining. So a lock whose owner is gone is taken over,
+one with no recorded owner is broken after five minutes, and one whose owner is
+alive is respected. A rig that has fallen out of the fleet for no visible reason
+is worth a `zmrig-os status` before anything else.
 
 ## Without a fleet
 

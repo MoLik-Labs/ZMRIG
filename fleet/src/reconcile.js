@@ -33,9 +33,19 @@ function diff(status = {}, desired = {}) {
 
   if (desired.mode && status.mode !== desired.mode) {
     args.mode = desired.mode;
-    // The heat cap only means anything in safe mode, and the rig has no field
-    // to report it in, so it travels with the mode change or not at all.
+    // The heat cap only means anything in safe mode, so it travels with a mode
+    // change into it. It is also compared on its own below: a roster that only
+    // turns the cap down is a decision, not decoration.
     if (desired.mode === 'safe' && desired.maxtemp) args.maxtemp = desired.maxtemp;
+  }
+
+  // A rig reports the cap it is holding. Until 6.48 it did not, which made the
+  // roster's `maxtemp` unenforceable: the diff could not see a difference, so
+  // changing only the cap queued nothing and the rig kept the old one for ever.
+  // `status.maxtemp` absent means an older agent, and an old agent must not be
+  // told every five minutes about a field it has never heard of.
+  if (desired.maxtemp && status.maxtemp !== undefined && status.maxtemp !== null && status.maxtemp !== '') {
+    if (String(status.maxtemp) !== String(desired.maxtemp)) args.maxtemp = desired.maxtemp;
   }
 
   // `threads` is compared as text because the rig answers `auto` or a number.

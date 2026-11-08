@@ -86,8 +86,12 @@ session:
 | none reserved | THP collapsed 99 % of the mapping | 785.9 / 786.1 H/s |
 | none reserved, THP off | 4 KiB | 614.8 / 626.3 H/s |
 
-So the step that matters is 4 KiB → 2 MiB (≈ +28 %), and the reserved pool is
-worth another 4–6 % on top. That is why the miner only asks for root when THP is
+Those rows were taken back to back, and the ratio between them (+28 %) turned
+out to be the host drifting — this box moves by up to 20 % between hours.
+Re-measured on 2026-11-07 by alternating the two states in one session, no
+reservation either way: **1088 / 1095 H/s with THP against 892.8 / 900.5 H/s on
+4 KiB pages**. So the step that matters is 4 KiB → 2 MiB (≈ +21 %), and the
+reserved pool is worth another few per cent on top. That is why the miner only asks for root when THP is
 off, and why startup prints the kernel's own count of collapsed pages
 (`huge pages: 2332 MB via THP (99 % of the 2336 MB mapping, measured by the
 kernel)`) instead of claiming the hint worked.

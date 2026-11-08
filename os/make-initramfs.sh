@@ -102,26 +102,32 @@ MODULES="loop squashfs overlay isofs sr_mod cdrom sd_mod usb-storage uas usbhid
          e1000 e1000e igb r8169 igc atlantic tg3
          usbnet cdc_ether r8152 ax88179_178a"
 
-copied=0
+staged=0
 for mod in $MODULES; do
     # --show-depends prints insmod lines for the module and everything it needs;
     # copying the paths from those lines is what keeps the initramfs from
     # missing a dependency that only shows up on somebody else's hardware.
-    modprobe --show-depends -S "$KVER" -d / "$mod" 2>/dev/null |
-        awk '/^insmod/ { print $2 }' |
-        while read -r path; do
-            [ -f "$path" ] || continue
-            dest="$STAGE$path"
-            mkdir -p "$(dirname "$dest")"
-            cp -n "$path" "$dest" 2>/dev/null || true
-        done
+    # The paths are collected first and copied in this shell, not in a pipeline:
+    # a subshell cannot report how many modules it staged, and staging nothing
+    # at all is the failure worth catching.
+    deps=$(modprobe --show-depends -S "$KVER" -d / "$mod" 2>/dev/null |
+        awk '/^insmod/ { print $2 }')
+    for path in $deps; do
+        [ -f "$path" ] || continue
+        dest="$STAGE$path"
+        [ -f "$dest" ] && continue
+        mkdir -p "$(dirname "$dest")"
+        if cp "$path" "$dest" 2>/dev/null; then staged=$((staged + 1)); fi
+    done
 done
+printf 'staged %s kernel modules\n' "$staged"
 
 # fscrypt/zstd/lz4 variants of the modules we care about are picked up by the
 # `-n` copy above; compression libraries the kernel needs to decompress the
 # squashfs image itself are not module options, so nothing else is required.
 
-if [ -s /lib/modules/"$KVER"/modules.dep ] && [ -n "$(ls -A "$STAGE"/lib/modules 2>/dev/null)" ]; then
+if [ "$staged" -gt 0 ] && [ -s /lib/modules/"$KVER"/modules.dep ] &&
+   [ -n "$(ls -A "$STAGE"/lib/modules 2>/dev/null)" ]; then
     depmod -b "$STAGE" "$KVER" 2>/dev/null || true
 else
     printf 'warning: no kernel modules staged; the image will only boot from media the kernel already sees\n' >&2

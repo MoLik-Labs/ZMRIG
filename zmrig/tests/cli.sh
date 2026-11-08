@@ -101,6 +101,37 @@ else
     record FAIL "--check does not touch nr_hugepages" "$before -> $after"
 fi
 
+# -- the MSR preset applies itself, and --no-msr really stops it ----------
+# Prefetchers off is worth 5-15 % on bare metal, so it is not opt-in any more:
+# by default the miner probes the machine and says what it decided. `--no-msr`
+# is the instruction, and it has to be obeyed even on a host that could take it
+# (a container passing /dev/cpu through, or a user who wants the CPU untouched).
+msr_auto=$("$BIN" -o pool.example.com:3333 -u "$WALLET" --check 2>/dev/null | grep -E '^  msr ' | head -1)
+case "$msr_auto" in
+    *"auto:"*) record PASS "the MSR preset decides by itself by default" "$msr_auto" ;;
+    *)         record FAIL "the MSR preset decides by itself by default" "got: ${msr_auto:-nothing}" ;;
+esac
+
+msr_off=$("$BIN" -o pool.example.com:3333 -u "$WALLET" --no-msr --check 2>/dev/null | grep -E '^  msr ' | head -1)
+case "$msr_off" in
+    *"off: --no-msr"*) record PASS "--no-msr is reported as an instruction" "$msr_off" ;;
+    *)                 record FAIL "--no-msr is reported as an instruction" "got: ${msr_off:-nothing}" ;;
+esac
+
+msr_on=$("$BIN" -o pool.example.com:3333 -u "$WALLET" --msr --check 2>/dev/null | grep -E '^  msr ' | head -1)
+case "$msr_on" in
+    *"on: --msr"*) record PASS "--msr is reported as an instruction" "$msr_on" ;;
+    *)             record FAIL "--msr is reported as an instruction" "got: ${msr_on:-nothing}" ;;
+esac
+
+# XMRig's own spelling still selects the same thing: a script that passes
+# --randomx-wrmsr must not end up with the automatic decision instead.
+wrmsr=$("$BIN" -o pool.example.com:3333 -u "$WALLET" --randomx-wrmsr --check 2>/dev/null | grep -E '^  msr ' | head -1)
+case "$wrmsr" in
+    *"on: --msr"*) record PASS "--randomx-wrmsr means the same as --msr" "$wrmsr" ;;
+    *)             record FAIL "--randomx-wrmsr means the same as --msr" "got: ${wrmsr:-nothing}" ;;
+esac
+
 # -- the memory --check reports must belong to the coin -------------------
 # Both engines hash seven coins and the coins are not the same size. Reporting
 # Monero's 2336 MB for a Panthera run is how a 512 MB VPS is told it cannot do
@@ -298,6 +329,104 @@ if "$BIN" --help | grep -qF -- "--ban-cooldown=N"; then
     record PASS "--ban-cooldown is documented" ""
 else
     record FAIL "--ban-cooldown is documented" "not in --help"
+fi
+
+
+# -- the wallet address is decoded, not just measured ---------------------
+# A 95-character base58 string with one character wrong mines perfectly and is
+# never paid. These four checks are the contract: the flag answers, it exits
+# non-zero on a bad address, a Monero run refuses to start on one, and the
+# override exists and is documented.
+TYPO=${WALLET%?}f
+expect_exit 0 "--check-wallet accepts a real address" -- "$BIN" --check-wallet "$WALLET"
+expect_exit 1 "--check-wallet rejects a typo" -- "$BIN" --check-wallet "$TYPO"
+
+out=$("$BIN" --check-wallet "$WALLET" 2>/dev/null)
+if printf '%s' "$out" | grep -q '^valid' && printf '%s' "$out" | grep -q 'checksum verified' &&
+    printf '%s' "$out" | grep -q 'net   mainnet' && printf '%s' "$out" | grep -q 'spend [0-9a-f]\{64\}'; then
+    record PASS "--check-wallet names the network and the checksum" "ok"
+else
+    record FAIL "--check-wallet names the network and the checksum" "$("$BIN" --check-wallet "$WALLET" 2>/dev/null | head -3 | tr '\n' ' ')"
+fi
+
+# Captured, not piped: `set -o pipefail` makes a deliberate exit 1 from the
+# miner the status of the pipeline, which would read as "the test failed".
+bad=$("$BIN" --check-wallet "$TYPO" 2>/dev/null)
+if printf '%s' "$bad" | grep -q 'checksum does not match'; then
+    record PASS "--check-wallet says which character class is wrong" "ok"
+else
+    record FAIL "--check-wallet says which character class is wrong" "no reason"
+fi
+
+# Starting is the moment it matters: a rig that hashes for nobody for a week is
+# worse than a rig that does not start. The check happens before any mining, so
+# this costs a millisecond even though the command line asks for a benchmark.
+expect_exit 1 "a typo refuses to start (rx/0)" -- \
+    "$BIN" -o pool.example.com:3333 -u "$TYPO" --bench
+expect_exit 0 "--allow-bad-wallet overrides the refusal" -- \
+    "$BIN" -o pool.example.com:3333 -u "$TYPO" --allow-bad-wallet --check
+
+# --check carries the verdict in the summary, so an operator reading a dry run
+# sees what the pool will see.
+if "$BIN" -o pool.example.com:3333 -u "$WALLET" --check 2>/dev/null | grep -q 'wallet .*checksum verified'; then
+    record PASS "--check states the wallet was verified" "ok"
+else
+    record FAIL "--check states the wallet was verified" "no wallet line"
+fi
+
+# The same address means different things per algorithm, and the summary has to
+# say the true one: under rx/0 the rig will not start, under another coin's
+# algorithm it may be that coin's address and nothing is wrong at all.
+expect_exit 1 "--check refuses a typo under rx/0" -- \
+    "$BIN" -o pool.example.com:3333 -u "$TYPO" --check
+expect_exit 0 "--check accepts a typos-shaped login for another coin" -- \
+    "$BIN" -o pool.example.com:3333 -u "$TYPO" -a rx/wow --check
+wow_check=$("$BIN" -o pool.example.com:3333 -u "$TYPO" -a rx/wow --check 2>/dev/null)
+if printf '%s' "$wow_check" | grep -q 'if this is another coin'; then
+    record PASS "another coin gets the other sentence" "ok"
+else
+    record FAIL "another coin gets the other sentence" "$(printf '%s' "$wow_check" | grep -i wallet | head -2 | tr '\n' ' ')"
+fi
+
+# The site quotes these two messages verbatim, and a page that quotes output the
+# binary no longer prints is a page that lies in the calmest possible tone. Both
+# languages, because the console block is not translated - it is what the tool
+# printed.
+stale=""
+for page in site/docs/configure/cli.md \
+            site/i18n/vi/docusaurus-plugin-content-docs/current/configure/cli.md; do
+    grep -qF 'if this is another coin' "$ROOT/$page" || stale="$stale $page"
+    grep -qF 'this rig would mine and never be paid' "$ROOT/$page" || stale="$stale $page"
+done
+if [ -z "$stale" ]; then
+    record PASS "the docs quote the message the binary prints" "ok"
+else
+    record FAIL "the docs quote the message the binary prints" "stale:$stale"
+fi
+
+# The container page quotes `--check-wallet`, which is a different command with a
+# different shape than `--check` above ("valid/invalid", not "wallet  OK"). It was
+# wrong on the first attempt, in both languages, so it is checked the same way:
+# the first word of the real output has to appear in the page.
+wallet_head=$("$BIN" --check-wallet "$WALLET" 2>/dev/null | head -1 | awk '{print $1}')
+wallet_typo=$("$BIN" --check-wallet "$TYPO" 2>/dev/null | sed -n '2p' | sed 's/^ *//')
+docker_pages="doc/DOCKER.md site/docs/install/docker.md site/i18n/vi/docusaurus-plugin-content-docs/current/install/docker.md"
+stale=""
+for page in $docker_pages; do
+    [ -f "$ROOT/$page" ] || { stale="$stale $page(missing)"; continue; }
+    [ -n "$wallet_head" ] && ! grep -qF "$wallet_head" "$ROOT/$page" && stale="$stale $page(verdict)"
+    [ -n "$wallet_typo" ] && ! grep -qF "$wallet_typo" "$ROOT/$page" && stale="$stale $page(message)"
+done
+if [ -z "$stale" ]; then
+    record PASS "the container page quotes the wallet verdict it prints" "$wallet_head"
+else
+    record FAIL "the container page quotes the wallet verdict it prints" "stale:$stale"
+fi
+
+if "$BIN" --help | grep -qF -- "--allow-bad-wallet"; then
+    record PASS "--allow-bad-wallet is documented" ""
+else
+    record FAIL "--allow-bad-wallet is documented" "not in --help"
 fi
 
 printf '\n    %d passed, %d failed\n' "$pass" "$fail"

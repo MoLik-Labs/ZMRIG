@@ -34,7 +34,9 @@ function build(env = process.env) {
   const log = makeLog(config.quiet);
   // GitHub releases, cached: the download page asks for them on every visit and
   // the answer changes a few times a week.
-  const releases = new Releases({ log });
+  // The fetcher logs the reason a fetch failed; this names it, because the
+  // fleet, the bots and the site all write to the same stream.
+  const releases = new Releases({ log: (message) => log(`releases: ${message}`) });
 
   const platform = {
     telegram: config.telegram_token ? new Telegram({ token: config.telegram_token, log }) : null,

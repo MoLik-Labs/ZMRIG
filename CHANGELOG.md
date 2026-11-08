@@ -1,3 +1,404 @@
+# 6.48.0 — the boot that comes back configured
+
+## There was no container to pull
+
+Everything in this repository assumed the machine. The installer builds on the
+machine, the image boots the machine, and the pool needs a host with Node on it.
+Anyone who wanted to try a rig for ten minutes had to start by compiling.
+
+There is a published image now, `ghcr.io/molik-labs/zmrig`, built by CI from the
+same commit as the release binaries:
+
+```console
+$ docker run --rm -e WALLET=4YourAddress... -e POOL=gulf.moneroocean.stream:10001 \
+    ghcr.io/molik-labs/zmrig
+```
+
+One image, two jobs. The miner is the default; `pool` runs the Ocean Pool from the
+same bytes, so a rig and the pool it mines to cannot be built from different
+commits. The variables are the ones `zmrig-os` writes to `/etc/zmrig/os.conf`, and
+`docker inspect` answers which commit built what is running.
+
+Three things were not obvious until the image existed:
+
+**A CPU quota is not an affinity mask.** `docker run --cpus=2` limits the group,
+but the process still sees every CPU on the host, so a miner that sizes itself
+from the CPU count asks for one thread per physical core and then has all of them
+throttled together — when the quota is spent the whole group stops, and a thread
+with a dataset page in cache sits idle for the rest of the period. The image reads
+the cgroup quota (v2 `cpu.max`, v1 `cpu.cfs_quota_us`) and caps the automatic
+thread count to it. An explicit `THREADS` is always respected; it is only
+mentioned when it is above the quota. The miner itself reads the quota too - same
+two files, at the path `/proc/self/cgroup` names - so `systemd CPUQuota=` and a
+Kubernetes `limits.cpu` get the same treatment without a container, and `--bench`
+resolves the profile before it measures instead of reporting a throttled thread
+count as this machine's best.
+
+**A wallet with no default is a refusal, not a convenience.** `WALLET` and `POOL`
+have none: a placeholder wallet hashes for nobody and a default pool would be
+choosing a custodian on the operator's behalf. The shim names the missing variable
+and exits 2. The wallet is then checked at startup by the miner itself, so the
+verdict is in the log of every container whether or not anyone asked for it, and
+`ghcr.io/molik-labs/zmrig check` asks on demand.
+
+**An update needs two halves.** A container cannot replace its own image without
+a Docker socket, and handing a miner the ability to start any container on the
+machine is not a trade worth making. So `update --check` runs *inside* the image
+(the same code whether the host has Node or not) and resolves the published tag
+over anonymous HTTPS, comparing the release label with the version baked into the
+running container; `zmrig-docker-update --apply` runs on the host, pulls, and only
+then recreates. A failed pull leaves the running miner alone. The exit codes are
+`zmrig-os update`'s: 0 current, 3 available, 2 cannot tell — and the daily timer
+treats 2 as a notice, because a unit that goes red when GitHub is unreachable is a
+unit that gets masked.
+
+`deploy/Dockerfile` (the Render/Fly pool service) is unchanged and stays
+deliberately minimal; `deploy/docker/` is the thing people pull. Both build the
+engine out of `src/` and `zmrig/` in the first stage, so neither can ship a
+verifier that does not match the miner.
+
+## The wallet address is decoded now, not counted
+
+Every address check in this repository was a regex on the alphabet: 95
+characters, starts with `4` or `8`. A Monero address also carries a four-byte
+Keccak-256 checksum, and nothing looked at it — so changing one character to
+another base58 character passed every check there was. A rig configured that
+way mines for a week, is credited correctly by the pool, and the payout goes to
+an address whose spend key nobody holds. The pool cannot tell; the miner cannot
+tell; the person finds out from a balance that never arrives.
+
+There is one decoder now, and everything that accepts an address uses it:
+
+- `lib/address.js` — block base58 (8 bytes to 11 characters) plus Keccak-256,
+  written out because Node's `crypto` only ships the SHA3 variant, which pads
+  differently and produces a different digest. It reports the network
+  (mainnet/stagenet/testnet) and the kind (standard/subaddress/integrated).
+  `pool/src/address.js` and `fleet/src/address.js` re-export it.
+- `zmrig/src/wallet.zig` — the same check inside the miner, allocation-free, so
+  a bad address is refused before the first hash instead of after the first
+  payout.
+
+Where it lands:
+
+| Where an address is typed | Before | Now |
+| --- | --- | --- |
+| `zmrig -u ADDR` | warned | **refuses to start** under `rx/0`, with the reason and the flag to override it |
+| `zmrig --check` | — | prints `wallet  standard mainnet checksum verified`, or `INVALID: …` |
+| `zmrig --check-wallet ADDR` | — | one verdict: kind, net, spend key, view key; exit 0/1 |
+| pool stratum login | accepted | refused with `wallet address is not valid: …`; not payable, not credited |
+| pool `looksLikeAddress()` | regex | regex fast-reject, then the checksum |
+| `zmrig-os setup` / `doctor` | "not a valid Monero address" | the reason: `checksum does not match: at least one character is wrong` |
+| bot `/wallet`, dashboard form, roster | "does not look like a Monero address" | the same reason, before anything is queued |
+| fleet alert | — | a rig reporting an address it cannot be paid on raises one alert, once |
+
+`--allow-bad-wallet` exists because a login can be address shaped without being
+a Monero address: another CryptoNote coin, or a pool account name that happens
+to be 95 characters. Without it, a bad checksum under `rx/0` is a refusal — a
+rig that does not start is better than a rig that hashes for nobody — and for
+every other algorithm the check stays advisory, because this repository only
+claims to know Monero's format.
+
+The pool's tests were the only suite CI did not run. They run now, in a `pool`
+job, together with the fee audit: a change to the payout path could previously
+break the ledger, the address check or the share verifier and merge green.
+
+## The one address nobody checked was the pool's own
+
+Every login is checked, and the fee destination is not a login: it is a value in
+a config file, published at `/api/config` and on the status page, and every fee
+payment goes to it. One wrong character in it is still 95 base58 characters, so
+the shape check that guarded it passed, and the pool would have run happily
+collecting fees for a key nobody holds.
+
+`validateConfig` now decodes it before anything starts. Ledger mode still
+tolerates a placeholder — nothing leaves the box — but a string shaped like an
+address has to decode, checksum included, or the pool refuses to start and says
+which character class is wrong.
+
+## The image was missing the file that decodes addresses
+
+`pool/src/address.js` is a two-line re-export of `lib/address.js`, and
+`deploy/Dockerfile` copied `pool/` but not `lib/`. That was invisible while the
+require was lazy — on the login path — so the image built, started, answered
+`/api/config` and passed every check; the first rig to connect would have
+crashed it. Checking the fee address at startup turned it into a build-time
+failure, which is how it was found.
+
+The image copies `lib/`, a CI step runs the decoder inside the image (a real
+address decodes, a typo is refused), and a test walks every
+`require('../../…')` in `pool/src` and asserts `deploy/Dockerfile` copies that
+directory. Removing the `COPY` makes it fail, which is the only way to know a
+regression test is one.
+
+## One typo, one alert
+
+Every rig on a farm reports the same wallet, and they check in within seconds of
+each other, so a bad address in the shared config produced one alert per rig:
+eleven identical warnings about one problem, which is how a chat gets muted. The
+alert is keyed by the address now — rigs that have already been told stay quiet,
+the message that goes out says how many machines it affects (`💸 5 rigs all mine
+to an address that cannot be paid - …`), and it comes once per cooldown.
+
+Suppressing the repeat also suppressed the rest of that check-in for a while,
+which would have left every rig on such a farm unwatched apart from the first to
+speak; the test asserts a rig whose wallet warning was suppressed still reports
+its hashrate halving.
+
+Five bugs in the installed appliance, all of them quiet: each one made a rig look
+healthier than it was, and none of them printed a warning. Found by reading the
+boot path against the tests that claim to cover it.
+
+## The rollback dropped the kernel parameters
+
+An installed rig keeps a 1024-byte GRUB environment block with `zmrig_slot` in it.
+It also keeps `zmrig_extra`: `isolcpus=`, `nohz_full=`, `rcu_nocbs=` and the
+thermal cap, written there by `zmrig-os isolate` because none of them can be
+applied after boot. The initramfs's `write_grubenv` wrote a block containing the
+slot and nothing else, so the automatic rollback — the path that runs when nobody
+is watching — threw every other key away. The rig came back on the other slot,
+mining on every core, and the log said it had rolled back successfully.
+
+Both writers now build the block with `plan_grubenv_block` in `os/plan.sh`, which
+parses what is there, replaces one key, and pads back to exactly 1024 bytes. A key
+too large for the block is refused rather than written truncated.
+
+## `doctor` advised a reservation the machine could not afford
+
+The gigantic-page line ended with `zmrig-os hugepages 1g 3` whatever it was
+running on, because three is what a Monero dataset needs. On a 4 GB rig that is
+an instruction to take 3 GB of RAM permanently out of the machine and leave 1 GB
+for the kernel, the page cache and the shell — advice that turns a fast rig into
+a swapping one, printed by the tool whose job is to say whether the rig is
+healthy.
+
+`plan_gigantic_pages need_mb total_mb` answers the machine-shaped question: a
+page only when 2 GiB would still be left over. `doctor` prints the number when
+there is one and says the box cannot spare a page when there is not; with no
+`plan.sh` it prints neither, because a damaged image cannot work that out. Seven
+assertions in `os/tests/plan.sh` and two in `os/tests/control.sh`, the second
+running the real `doctor` against a faked 32 GB and a faked 4 GB machine.
+
+## An installed rig forgot how it had been set up
+
+`zmrig-os install` writes the config the installed system boots from, and it did
+that with its own copy of the config heredoc. The running system's copy learned
+`ISOLATE`, `HUGEPAGES` and `HUGEPAGES_1G`; the installer's never did. A stick
+prepared with `zmrig-os isolate 4` and then installed produced a rig with no
+isolation at all — mining on every core, on the machine whose owner had just
+asked it not to — and the log said the install had gone well. It is the same
+failure as the `zmrig_extra` one below, in a different file.
+
+There is one writer for the config (`conf_body`) and one for the environment
+block (`grubenv_set path key value`). The install uses them for the target's
+`/etc/zmrig/os.conf` and for `zmrig_extra` in its GRUB block, so the parameters
+the stick booted with are the parameters the disk boots with. The test asserts
+the two config files have *the same keys*, not that three particular ones are
+present: the next key somebody adds is the one a spot check misses.
+
+## The installed menu never read `zmrig_extra`
+
+Worse than the first one, because it was unconditional: the `grub.cfg` that
+`zmrig-os install` writes implemented `load_env` and then used `${zmrig_params}`
+only. `zmrig-os isolate 4` wrote the parameters, printed `next boot: isolcpus=…`,
+and the next boot ignored them — on every installed rig, from the first release
+that had `isolate`. Every entry now passes `${zmrig_extra}`, `set zmrig_extra=""`
+is in the header so the reference is defined with or without a block, and the
+generator is a function (`grub_cfg_for`) so `os/tests/control.sh` can assert the
+menu rather than the source file.
+
+## `zmrig.os.nostart=1` did not survive the boot
+
+The initramfs wrote the flag to `/run/zmrig/nostart`. OpenRC mounts a fresh tmpfs
+over `/run`, so by the time the supervisor looked, the flag was gone and the rig
+mined. The same file warns, three hundred lines earlier, that `/run` is exactly
+the wrong place for a marker that has to outlive the handover. It is now written
+to `/etc/zmrig/nostart` (overlay, one boot) as well, and the supervisor checks
+both.
+
+## Every rig reported a temperature of zero
+
+`thermal_now` prints `68 C` for people. The fleet payload parsed it with a
+digit test, which rejects the space, and fell back to `0`. So the server's
+`alert_temp` comparison was against zero for every rig in the fleet: the overheat
+alert could never fire, and `/devices` showed a column of `0 °C` that looked like
+a sensor problem. `thermal_c` returns the number, `fleet_body` uses it, and
+`os/tests/fleet.sh` proves 68 arrives at the real server code.
+
+## The supervisor's failure counter never reset
+
+`zmrig-os run` reboots after five failed starts in a row. The count only ever went
+up: a rig that restarted once a month rebooted after five months, and the log said
+"five failed starts" about a run of failures that had started in the spring. A
+start that lasts ten minutes now clears it (`plan_healthy_run`), and the restart
+delay doubles from 10 s to five minutes (`plan_restart_delay`) instead of
+reconnecting to the pool every ten seconds through an outage.
+
+## An update with no checksum is refused
+
+`verify_sha` returned success when the manifest had no `binary_sha256`, which
+means a truncated download, an error page behind a redirect, or a mirror serving
+the wrong file was installed as the miner and the supervisor was restarted into
+it. The automatic path now uses `verify_sha_required` and says so in one line;
+the interactive paths keep the optional behaviour, where an operator is present
+to decide.
+
+## 1 GiB pages are asked for, and the answer is reported
+
+RandomX reads a 2080 MB dataset in random 64-byte stripes. At 4 KiB that is a TLB
+miss per few accesses and about 28 % of the hashrate; at 2 MiB it is 1 040 entries
+spread over a TLB that holds roughly that many; at 1 GiB it is two. The mapper
+always tried 2 MiB. It now tries 1 GiB first, then the 2 MiB pool, then anonymous
+memory with `MADV_HUGEPAGE`, and the startup line says which one answered —
+`huge pages 2336 MB (explicit, 1 GiB pages)` against `(explicit, 2 MiB pages)`
+or `0 MB (THP fallback)`. The claim in the old output was "explicit", which was
+true of both and told nobody anything.
+
+What it cannot do is create the pool. Gigantic pages are contiguous physical
+memory carved out before the machine fragments, so this is a kernel parameter and
+a reboot, not a sysctl — on the validation host, with 3.9 GiB free and nothing
+else running, writing `nr_hugepages` under `hugepages-1048576kB` returns success
+and leaves the pool at 0. The new `zmrig-os hugepages` command makes it a
+decision: `zmrig-os hugepages` prints both pools and what the current algorithm
+needs, `zmrig-os hugepages 1g 3` writes `default_hugepagesz=1G hugepagesz=1G
+hugepages=3` into the GRUB environment block the next boot reads, and `zmrig-os
+hugepages off` removes it.
+
+Reserving both pools is now impossible, which is the bug this would have
+shipped: `hugepages=3` on the kernel line takes 3 GB of physically contiguous
+memory at boot, and the initramfs would then ask `/proc` for Monero's 1 168 × 2 MiB
+as well — 5.3 GB on a 4 GB machine, with the gigantic pool already held, so the
+second write either fails or wins by pushing the rest of the system into swap
+while the dataset is built. `reserve_pages` in the initramfs and `zmrig-os tune`
+both skip the 2 MiB reservation when the gigantic pool already covers what this
+run needs, and say so in the log.
+
+That block also carries `isolcpus=`, and the writer is now one function
+(`write_boot_params`) that composes both settings, because reserving pages and
+then isolating CPUs used to be two writers to one value — the same class of bug
+that cost every isolated rig its `isolcpus=` in 6.48.0. `zmrig --check` prints
+the pool and how many pages this run would take from it, and `doctor` reports it
+as information rather than a failure: not having a 1 GiB pool is normal, and the
+fallback to 2 MiB pages is where most of the gain already is.
+
+The extra 1-3 % is **not measured here** — no 1 GiB page can be reserved in this
+environment, so that path has never run on it. The fallback path has, and so has
+the composition of the kernel parameters.
+
+The pool's share verifier had two faults that only show up with the binary it
+ships with. `zmrig --verify-share` printed its fee banner on **stdout** before
+switching the log to stderr, and stdout is the protocol: the first share after a
+verifier was restarted came back as "unreadable verifier output" and was
+dropped. The binary now sets the sink before the banner, and the pool treats a
+`[timestamp]` line on that pipe as noise rather than as a reply.
+
+The second one is worse and would have shown up as a slow pool: the queue was
+only drained when a caller arrived, so with the default one verifier per core,
+shares queued behind a busy slot waited for the *next* share to arrive — and
+timed out. Measured after the fix: 103 shares/s on 2 vCPU with two verifiers,
+530 ms for the first (cache build).
+
+The fleet's version now has one home. The dashboard footer was printing 6.44.0
+and the Discord user agent 6.37 while the release was 6.48, because a constant in
+source only moves when somebody remembers; both now read `package.json` once, and
+a test fails on any version literal left in `fleet/src`.
+
+The measurement that goes with it: 2026-11-07, `--bench=3000`, alternating
+between the two configurations on the same host, 897–900 H/s on 4 KiB pages
+against 1090–1094 with a reserved 2 MiB pool, **+21.5 %**. A back-to-back pair
+earlier the same day read 678 against 913 and came out at +34.7 %; that was the
+sandbox's throughput moving 20 % between hours. Numbers from this host are only
+worth the difference between two runs that take turns.
+
+## Brotli was spending the wrong resource
+
+The quality policy charged the scarce resource — a tenth of a CPU on a free
+instance — to save bytes nobody is short of. Measured on the same three shapes
+(three runs, best of three): a 32 KB page at quality 11 takes 43 ms and saves
+0.1 KB against quality 10 at 14 ms; the 488 KB bundle at 11 takes 948 ms and
+saves 11 KB against 9 at 44 ms. The policy is now 11 below 8 KB, 10 to 64 KB, 9
+to 1 MB and 6 above, which compresses the whole 175-file site in 1.9 s instead of
+2.2 s and costs 2.7 % more bytes on a page — the trade a 0.1 CPU host wants.
+
+## The hosted site came back unstyled
+
+The committed `web/` is the GitHub Pages build, and in it every internal
+reference is `/ZMRIG/assets/...` — that is what `baseUrl` does. `serve/` answers
+from the root of its own domain, so the home page arrived with a stylesheet link
+to a path that does not exist there, and the CSS, both bundles, the icons and
+every internal link were `404`. The page still rendered, so nothing failed
+loudly: it was just a site with no stylesheet, and the documentation's own
+"why it is fast" numbers were measured on a build where the assets were never
+requested.
+
+`assets.rebase()` now reads the prefix out of the home page at boot and removes
+it from every text body in memory — 125 files, 4 072 references, 20 ms, once.
+Absolute URLs are deliberately untouched, because the canonical link and the
+`og:image` must keep pointing at the Pages site. A request that still carries the
+prefix (`/ZMRIG/docs/intro`, from a bookmark or from a link on the Pages site) is
+a `301` to the stripped path, and `/healthz` reports `site.rebased_from`, so the
+next deploy that lands the wrong build says so in a JSON field instead of in a
+screenshot. Building with `SITE_BASE_URL=/` still produces a build with nothing
+to rewrite.
+
+A test now follows every link in the committed build (`host/tests/site.test.js`,
+61 pages, 73 distinct same-origin references) and fails on a single 404. It is the
+test that was missing: the build's own links were never fetched by anything, which
+is why a site with no stylesheet passed every check in the repository.
+
+Two smaller things found while measuring it. The warm queue — the files
+compressed in the background after the socket opens — was `every page, then every
+asset`, sliced to 24; the site has 61 pages, so it never contained an asset, and
+the stylesheet and both bundles were compressed on first request on every deploy.
+It now takes the two home pages, then the files those pages actually reference
+(parsed out of their HTML, in document order), then the other pages. And the
+HTTP server had no opinion about idle sockets: Node closes one after 5 s, Render's
+proxy keeps it for 60, and a documentation page with thirty assets is enough to
+hand the process a socket it has already dropped. `keepAliveTimeout` is 65 s,
+`headersTimeout` 66 s, `requestTimeout` 30 s.
+
+## The MSR preset is no longer opt-in
+
+Disabling the CPU's hardware prefetchers is worth 5-15 % on bare metal, and it
+was behind a flag almost nobody passed: `--msr` had to be typed, `oneclick.sh`
+wrote `wrmsr: true` and an appliance user got it only if `MSR=on`. The default is
+now `auto`, which probes the machine the way `--check` always did — is there a
+preset for this CPU, does `/dev/cpu/0/msr` answer, can it be written — and then
+applies the preset or prints one line saying why not. Nothing is written on a
+machine that cannot take it, and the old values are still restored on exit.
+
+`--no-msr`, `"msr": false` and `MSR="off"` all still mean what they said; `safe`
+mode never touches a register whatever the setting is. `oneclick.sh` and
+`config/performance.json` now write `"msr": "auto"` instead of `"wrmsr": true`,
+so a config file copied between a laptop and a VPS stops promising a register
+write to whichever machine cannot do it.
+
+## Two settings the image was missing
+
+`scripts/tune-linux.sh` has set `kernel.numa_balancing=0` and
+`transparent_hugepage/defrag=defer` since 6.30. The appliance did neither: an
+installed rig was the one place NUMA balancing stayed on, migrating pages of a
+dataset that is walked uniformly at random, and khugepaged was free to start
+direct compaction against the threads building it. The sysctl file declares the
+first and the initramfs sets the second, before the dataset exists.
+
+## Also
+
+- The site's own title and footer said "1 % developer fee" a release after the
+  constant moved to 3 %. `scripts/verify-fee.sh` now reads
+  `site/docusaurus.config.js` as well, and fails on a stale rate there.
+- Shellcheck runs at `-S warning` in CI, for every script in the repository, in
+  the dialect each shebang asks for (`tests/lint/shellcheck.sh`, 56 scripts). That
+  found a `for` loop over a quoted string that only ever ran once, an `rm -rf` in
+  `scripts/publish-site.sh` that an empty `OWNED_DIRS` could have pointed at `/`,
+  three dead variables, and a keyword used as a variable name.
+- `os/make-initramfs.sh` counts the modules it staged instead of leaving the
+  count in a pipeline's subshell, so "no kernel modules staged" is reported from
+  a number.
+
+Tests: `os/tests/plan.sh` 113, `os/tests/control.sh` 240, `os/tests/fleet.sh` 27,
+`zmrig/tests/cli.sh` 49, `scripts/verify-fee.sh` 10, oneclick ×5,
+`tests/lint/shellcheck.sh` 56 scripts.
+
 # 6.47.0 — a fee that is stated, and the pages that prove it
 
 The developer fee is 3 % of Monero mining time. This is a user-visible change

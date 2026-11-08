@@ -23,7 +23,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const ids = require('./ids');
-const { validWallet, validPool } = require('./commands');
+const { walletProblem, validPool } = require('./commands');
 
 const MODES = new Set(['max', 'balanced', 'eco', 'light', 'safe']);
 const COINS = new Set(['xmr', 'wow', 'arq', 'graft', 'sfx', 'yada', 'xla']);
@@ -68,8 +68,9 @@ function normalise(id, raw, defaults) {
     entry.desired.coin = COINS.has(coin) ? coin : 'xmr';
   }
   if (wallet) {
-    if (validWallet(wallet, entry.desired.coin)) entry.desired.wallet = wallet;
-    else problems.push(`${id}: wallet is not valid for ${entry.desired.coin}`);
+    const problem = walletProblem(wallet, entry.desired.coin);
+    if (!problem) entry.desired.wallet = wallet;
+    else problems.push(`${id}: wallet ${problem}`);
   }
 
   const pool = text(raw.pool) || defaults.pool;

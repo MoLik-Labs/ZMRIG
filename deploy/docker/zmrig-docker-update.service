@@ -1,0 +1,32 @@
+# Install the image that has been published since this container started.
+#
+#   sudo cp deploy/docker/zmrig-docker-update.* /etc/systemd/system/
+#   sudo cp deploy/docker/compose.yaml /etc/zmrig/compose.yaml
+#   sudo systemctl enable --now zmrig-docker-update.timer
+#
+# Type=oneshot, because the work is "pull, then recreate" and nothing should be
+# left running afterwards. `Restart=` is deliberately absent: a registry that
+# answered 2 (cannot tell) must not turn into a restart loop, and the next
+# scheduled run is the retry.
+#
+# The unit runs the script from this repository, so `git pull` in the checkout
+# updates the updater too. If the checkout moves, edit the two paths here.
+
+[Unit]
+Description=Install a newer zmrig container image
+Documentation=https://molik-labs.github.io/ZMRIG/docs/install/docker
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/etc/zmrig
+Environment=CONTAINER=zmrig
+Environment=COMPOSE=/etc/zmrig/compose.yaml
+ExecStart=/usr/local/bin/zmrig-docker-update --apply
+# 2 = "cannot tell" (registry unreachable, no such tag). Not a failure of the
+# host: it is a notice in the journal, and the timer tries again tomorrow.
+SuccessExitStatus=2
+TimeoutStartSec=600
+Nice=10

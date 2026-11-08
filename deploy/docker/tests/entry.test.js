@@ -1,0 +1,198 @@
+'use strict';
+
+// The container's environment -> the miner's command line.
+//
+// No Docker here on purpose. Everything that decides what a rig runs is a pure
+// function (entry.js `plan`), so the interesting cases - a typo in MODE, a
+// donation of 11 %, a container with a two-CPU quota - are checked in
+// milliseconds instead of in a ten-minute image build, and the image job in CI
+// only has to prove that the thing starts.
+
+const test = require('node:test');
+const assert = require('node:assert');
+const os = require('node:os');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const { plan, minerArgs, cgroupCpus, KNOWN_ENV } = require('../entry.js');
+
+const BASE = { WALLET: '4' + 'A'.repeat(94), POOL: 'pool.example:3333' };
+
+function args(env, opts = { cpus: 4, tty: false }) {
+  const decision = plan([], { ...BASE, ...env }, opts);
+  assert.equal(decision.error, undefined, decision.error);
+  return decision.argv;
+}
+
+function has(argv, ...needle) {
+  for (let i = 0; i + needle.length <= argv.length; i += 1) {
+    if (needle.every((value, j) => argv[i + j] === value)) return true;
+  }
+  return false;
+}
+
+test('the wallet, the pool and the worker are the login line', () => {
+  const argv = args({ WORKER: 'rig-7' });
+  assert.deepEqual(argv.slice(0, 6), ['-o', 'pool.example:3333', '-u', BASE.WALLET, '-p', 'rig-7']);
+});
+
+test('no wallet and no pool are refusals, not defaults', () => {
+  const noWallet = plan([], { POOL: 'p:1' });
+  assert.match(noWallet.error, /no wallet/);
+  // The message has to say how to check one, or the next step is a search engine.
+  assert.match(noWallet.error, /zmrig check/);
+
+  const noPool = plan([], { WALLET: BASE.WALLET });
+  assert.match(noPool.error, /no pool/);
+});
+
+test('the fee is always on the command line, so `args` shows what a rig pays', () => {
+  assert.ok(has(args({}), '--donate-level', '3'));
+  assert.ok(has(args({ DONATE: '0' }), '--donate-level', '0'));
+  assert.ok(has(args({ DONATE: '1' }), '--donate-level', '1'));
+});
+
+test('a donation outside 0..10 is refused before the miner sees it', () => {
+  for (const value of ['11', '-1', '3%', 'three']) {
+    const decision = plan([], { ...BASE, DONATE: value });
+    assert.match(decision.error, /DONATE/, value);
+    assert.match(decision.error, /DONATE=0/, 'the message must say how to turn it off');
+  }
+});
+
+test('the four modes map onto the miner the way the appliance maps them', () => {
+  assert.ok(has(args({}), '--profile', 'free'), 'max is the default: full speed');
+  assert.ok(has(args({ MODE: 'eco' }), '--profile', 'watt'));
+  assert.ok(has(args({ MODE: 'light' }), '--mode', 'light'));
+  assert.ok(has(args({ MODE: 'safe' }), '--profile', 'watt'));
+  assert.ok(has(args({ MODE: 'safe' }), '--max-temp', '72'));
+  assert.ok(has(args({ MODE: 'safe', SAFE_TEMP: '65' }), '--max-temp', '65'));
+  assert.match(plan([], { ...BASE, MODE: 'turbo' }).error, /MODE=turbo/);
+});
+
+test('safe never writes an MSR register, whatever MSR says', () => {
+  assert.ok(!has(args({ MODE: 'safe', MSR: 'on' }), '--msr'));
+  assert.ok(has(args({ MODE: 'safe', MSR: 'on' }), '--no-msr'));
+  assert.ok(has(args({ MSR: 'on' }), '--msr'));
+  assert.ok(has(args({ MSR: 'off' }), '--no-msr'));
+  assert.ok(!has(args({ MSR: 'auto' }), '--msr'), 'auto leaves the decision to the miner probe');
+});
+
+test('algo auto is omitted, an explicit algo is passed', () => {
+  assert.ok(!has(args({}), '-a'));
+  assert.ok(has(args({ ALGO: 'auto' }), '-a') === false);
+  assert.ok(has(args({ ALGO: 'rx/wow' }), '-a', 'rx/wow'));
+});
+
+// The one optimisation that is specific to a container, and the reason it
+// matters: `--cpus=2` is a quota, so the miner still sees every host CPU and
+// asks for one thread per core, and the whole group is then throttled together.
+test('a CPU quota caps the automatic thread count', () => {
+  const argv = args({}, { cpus: 16 });
+  // No /sys/fs/cgroup/cpu.max in this test environment that says otherwise, so
+  // drive the quota explicitly through a fixture directory.
+  assert.ok(Array.isArray(argv));
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cgroup-'));
+  fs.writeFileSync(path.join(dir, 'cpu.max'), '200000 100000\n');
+  assert.equal(cgroupCpus({ ZMRIG_CGROUP_DIR: dir }), 2);
+
+  const capped = plan([], { ...BASE, ZMRIG_CGROUP_DIR: dir }, { cpus: 16, tty: false });
+  assert.ok(has(capped.argv, '-t', '2'), 'two CPUs of quota is two mining threads');
+  assert.match(capped.notes.join(' '), /limited to 2 CPUs/);
+
+  // cgroup v1: the same answer from two files.
+  const v1 = fs.mkdtempSync(path.join(os.tmpdir(), 'cgroup1-'));
+  fs.mkdirSync(path.join(v1, 'cpu'));
+  fs.writeFileSync(path.join(v1, 'cpu', 'cpu.cfs_quota_us'), '150000\n');
+  fs.writeFileSync(path.join(v1, 'cpu', 'cpu.cfs_period_us'), '100000\n');
+  assert.equal(cgroupCpus({ ZMRIG_CGROUP_DIR: v1 }), 1);
+
+  // No limit is no answer, not a limit of zero.
+  const open = fs.mkdtempSync(path.join(os.tmpdir(), 'cgroup-none-'));
+  fs.writeFileSync(path.join(open, 'cpu.max'), 'max 100000\n');
+  assert.equal(cgroupCpus({ ZMRIG_CGROUP_DIR: open }), null);
+  assert.equal(cgroupCpus({ ZMRIG_CGROUP_DIR: path.join(open, 'missing') }), null);
+});
+
+test('an explicit thread count is respected, and warned about above the quota', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cgroup-'));
+  fs.writeFileSync(path.join(dir, 'cpu.max'), '200000 100000\n');
+
+  const decision = plan([], { ...BASE, THREADS: '8', ZMRIG_CGROUP_DIR: dir }, { cpus: 16 });
+  assert.ok(has(decision.argv, '-t', '8'), 'the operator typed 8');
+  assert.match(decision.notes.join(' '), /more than the 2-CPU quota/);
+});
+
+test('a thread count that is not a number is refused', () => {
+  assert.match(plan([], { ...BASE, THREADS: 'half' }).error, /THREADS=half/);
+});
+
+test('the API binds where a published port can reach it', () => {
+  assert.ok(!has(args({}), '--http-port'), 'off unless asked for');
+  const on = args({ API_PORT: '8080' });
+  assert.ok(has(on, '--http-port', '8080', '--http-host', '0.0.0.0'));
+  assert.ok(has(args({ API_PORT: '8080', API_TOKEN: 'secret' }), '--http-access-token', 'secret'));
+  assert.ok(has(args({ API_PORT: '8080', API_HOST: '127.0.0.1' }), '--http-host', '127.0.0.1'));
+  assert.match(plan([], { ...BASE, API_PORT: 'eighty' }).error, /API_PORT/);
+});
+
+test('colour is turned off when stdout is not a terminal', () => {
+  assert.ok(has(args({}), '--no-color'));
+  const tty = plan([], BASE, { cpus: 4, tty: true }).argv;
+  assert.ok(!has(tty, '--no-color'));
+});
+
+test('EXTRA_ARGS is split, and never evaluated as a shell', () => {
+  const argv = args({ EXTRA_ARGS: '--print-time 10 --verbose' });
+  assert.ok(has(argv, '--print-time', '10'));
+  assert.ok(has(argv, '--verbose'));
+
+  // A semicolon inside EXTRA_ARGS stays inside one argument: the split is on
+  // whitespace and the result is passed to spawn as an argv array, so there is
+  // no shell to interpret it. The dangerous version of this shim would be
+  // `exec $EXTRA_ARGS`.
+  const quoted = args({ EXTRA_ARGS: '--ws-path /x; rm -rf /' });
+  assert.ok(quoted.includes('/x;'), JSON.stringify(quoted));
+  assert.ok(!quoted.includes(';'), 'the semicolon must not become its own argument either');
+});
+
+test('flags instead of the environment are passed through untouched', () => {
+  const decision = plan(['-o', 'pool.example:3333', '-u', '4abc'], {});
+  assert.equal(decision.command, 'mine');
+  assert.equal(decision.passthrough, true);
+  assert.deepEqual(decision.argv, ['-o', 'pool.example:3333', '-u', '4abc']);
+});
+
+test('the wallet check is a separate command and does not need a pool', () => {
+  const decision = plan(['check'], { WALLET: BASE.WALLET });
+  assert.deepEqual(decision.argv, ['--check-wallet', BASE.WALLET]);
+
+  assert.match(plan(['check'], {}).error, /no wallet/);
+  assert.deepEqual(plan(['check'], { WALLET: '4xyz' }).argv, ['--check-wallet', '4xyz']);
+});
+
+test('the pool job runs the pool from this image, with an optional config', () => {
+  const plain = plan(['pool'], {});
+  assert.equal(plain.command, 'pool');
+  assert.match(plain.argv[0], /pool[\/\\]src[\/\\]index\.js$/);
+
+  const configured = plan(['pool'], { POOL_CONFIG: '/etc/pool.json' });
+  assert.deepEqual(configured.argv.slice(1), ['--config', '/etc/pool.json']);
+});
+
+test('anything else is executed as itself', () => {
+  assert.equal(plan(['sh'], {}).bin, 'sh');
+  assert.deepEqual(plan(['node', '-e', '1'], {}).argv, ['-e', '1']);
+});
+
+test('every variable the shim reads is in the documented list', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'entry.js'), 'utf8');
+  // envOf(env, 'NAME', ...) is the only way this file reads the environment, so
+  // anything it asks for that is not in KNOWN_ENV is an undocumented setting.
+  const used = new Set();
+  for (const match of source.matchAll(/(?:envOf|boolOf|number)\(env, '([A-Z][A-Z0-9_]*)'/g)) used.add(match[1]);
+  for (const name of used) {
+    assert.ok(KNOWN_ENV.includes(name), `${name} is read but not listed in KNOWN_ENV (and so not in doc/DOCKER.md)`);
+  }
+});

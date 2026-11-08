@@ -71,8 +71,12 @@ export const messages = {
       "Dial address must be host:port, for example 203.0.113.10:3333.",
     "builder.blocked.proxy-missing": "Enter the proxy URL.",
     "builder.wallet.empty": "Not entered yet.",
-    "builder.wallet.valid": "Valid Monero address (95 characters).",
-    "builder.wallet.integrated": "Integrated address (106 characters).",
+    "builder.wallet.valid": "Valid Monero address: checksum verified (95 characters).",
+    "builder.wallet.integrated": "Integrated address: checksum verified (106 characters).",
+    "builder.wallet.checksum":
+      "One character is wrong: the checksum does not match. Copy the address again — this is the typo that costs a week of hashing.",
+    "builder.wallet.network":
+      "This is a valid address on another network (stagenet or testnet). A mainnet pool cannot pay it.",
     "builder.wallet.plausible":
       "Base58 address, {n} characters. The pool checks the checksum — this page does not.",
     "builder.wallet.prefix":
@@ -281,8 +285,12 @@ export const messages = {
       "Địa chỉ dial phải là host:port, ví dụ 203.0.113.10:3333.",
     "builder.blocked.proxy-missing": "Nhập địa chỉ proxy.",
     "builder.wallet.empty": "Chưa nhập gì.",
-    "builder.wallet.valid": "Địa chỉ Monero hợp lệ (95 ký tự).",
-    "builder.wallet.integrated": "Địa chỉ tích hợp (106 ký tự).",
+    "builder.wallet.valid": "Địa chỉ Monero hợp lệ: đã xác minh checksum (95 ký tự).",
+    "builder.wallet.integrated": "Địa chỉ tích hợp: đã xác minh checksum (106 ký tự).",
+    "builder.wallet.checksum":
+      "Sai một ký tự: checksum không khớp. Sao chép lại địa chỉ — đây đúng là kiểu gõ nhầm làm mất một tuần đào.",
+    "builder.wallet.network":
+      "Đây là địa chỉ hợp lệ nhưng ở mạng khác (stagenet hoặc testnet). Pool mainnet không trả được cho nó.",
     "builder.wallet.plausible":
       "Địa chỉ base58, {n} ký tự. Pool kiểm tra checksum — trang này thì không.",
     "builder.wallet.prefix":

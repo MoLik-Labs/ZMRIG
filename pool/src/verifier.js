@@ -51,10 +51,36 @@ class Verifier {
     child.stdout.on('data', (chunk) => {
       slot.buffer += chunk;
 
+      // One line in, one line out is the contract. A binary that writes without
+      // ever emitting a newline - a wrong build, a `cat` where the miner should
+      // be, a corrupted file - would otherwise grow this string for as long as
+      // the process lives. Resetting the slot is the honest response: the share
+      // in flight fails, the process is left to its timeout, and the restart
+      // path already exists for exactly this.
+      if (slot.buffer.length > 64 * 1024) {
+        slot.buffer = '';
+        const stuck = slot.pending;
+        slot.pending = null;
+        if (stuck) {
+          clearTimeout(stuck.timer);
+          stuck.reject(new Error('verifier wrote 64 KB without a newline'));
+        }
+        return;
+      }
+
       let newline;
       while ((newline = slot.buffer.indexOf('\n')) >= 0) {
         const line = slot.buffer.slice(0, newline).trim();
         slot.buffer = slot.buffer.slice(newline + 1);
+
+        // A log line is not a share reply. There is exactly one writer on this
+        // pipe and it is `zmrig --verify-share`, which puts its log on stderr -
+        // but a build that predates that, or a binary that is not this miner at
+        // all, would otherwise turn its banner into a rejected share. Skipping
+        // it *before* taking the waiter is the whole point: taking the waiter
+        // and then discarding it leaves the caller's promise unsettled for ever,
+        // because its timeout has been cleared.
+        if (line.startsWith('[')) continue;
 
         const waiters = slot.pending;
         if (!waiters) continue;
@@ -69,6 +95,12 @@ class Verifier {
         } catch (_) {
           waiters.reject(new Error(`unreadable verifier output: ${line.slice(0, 80)}`));
         }
+
+        // The slot is free again. Without this, `drain` only ran when a caller
+        // arrived, so anything queued behind a busy slot sat there until the
+        // next share did the work of sending the last one - which is a share
+        // that times out instead of being verified.
+        this.drain();
       }
     });
 
@@ -92,7 +124,10 @@ class Verifier {
 
       // Restart lazily so a missing binary does not spin.
       setTimeout(() => {
-        if (!this.closed && this.slots[index] === slot) this.spawnSlot(index);
+        if (!this.closed && this.slots[index] === slot) {
+          this.spawnSlot(index);
+          this.drain();
+        }
       }, 1000);
     });
 
@@ -137,6 +172,7 @@ class Verifier {
           slot.pending = null;
           this.stats.failed += 1;
           task.reject(new Error('verification timed out'));
+          this.drain();
         }
       }, this.timeout);
 

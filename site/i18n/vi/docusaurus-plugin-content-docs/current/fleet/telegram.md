@@ -65,10 +65,26 @@ control plane cũng không lừa được rig dùng ví mà nó sẽ từ chối
 * hashrate dưới một nửa lần check-in trước;
 * hashrate dưới một nửa mức rig tự đo được trên chính nó — bắt được cái máy đã
   tụt dần cả tuần, chứ không phải cái vừa ngã trong một phút;
+* rig đào vào địa chỉ ví sai checksum, hoặc địa chỉ của mạng khác — bản thân rig
+  không thể nhận ra, và trên một pool chỉ kiểm tra bảng chữ cái thì cũng không ai
+  nhận ra. Cả farm dùng chung một địa chỉ, nên đây là **một tin cho mỗi địa chỉ**
+  (`💸 5 rigs all mine to an address that cannot be paid — …`), không phải một tin
+  cho mỗi máy;
 * mọi kết quả lệnh, kể cả bị từ chối.
 
 Mỗi loại có thời gian chờ riêng cho từng rig, nên máy nóng không hét lên mỗi
-phút. Luật hashrate thứ hai là luật chậm, và nó nói rõ nó so với cái gì:
+phút (`FLEET_ALERT_COOLDOWN`, giây, mặc định 1800). Ngưỡng là `FLEET_ALERT_TEMP`
+(mặc định 85 °C), còn luật hashrate là `FLEET_ALERT_HASHRATE_DROP` (mặc định 0.5,
+tức "một nửa").
+
+Nhiệt độ là chỉ số nóng nhất mà rig tìm được, không phải chỉ số đầu tiên:
+`coretemp`, `k10temp` hay `x86_pkg_temp` trước, rồi mới tới chip Super I/O của
+bo mạch, và `acpitz` — vốn báo ước lượng từ chip cầu nam, thấp hơn lõi 10–20 °C —
+chỉ khi không còn gì khác. Rig báo 0 là rig không có cảm biến, và `zmrig-os
+doctor` nói đúng một dòng về việc đó; cảnh báo không thể bắn trên một cái máy
+không tự đo được, nên con số 0 đáng để ý.
+
+Luật hashrate thứ hai là luật chậm, và nó nói rõ nó so với cái gì:
 
 ```
 🐌 rig-2 is at 640.0 H/s, 45% of the 1.4 kH/s it measured itself
@@ -151,6 +167,13 @@ nối *vào* rig: rig gọi ra, mỗi phút một lần, mọi thứ khác chờ
 
 Trên USB live, khóa nằm trong RAM — cài lên ổ, hoặc tạo phân vùng `ZMRIGDATA`
 bằng `zmrig-os persist`, nếu không rig sẽ báo ID mới sau khi khởi động lại.
+
+Hai lần check-in không bao giờ chồng nhau: lần đang chạy giữ một lock có ghi PID
+của nó. Nếu agent bị giết thẳng — OOM killer, mất điện — lock đó sống lâu hơn
+tiến trình, và một lock không ai gỡ sẽ là một rig lặng lẽ thôi check-in trong khi
+vẫn đào. Vì vậy lock có chủ đã chết sẽ được tiếp quản, lock không ghi chủ bị phá
+sau năm phút, còn lock có chủ đang sống thì được tôn trọng. Một rig tự nhiên rơi
+khỏi fleet mà không có lý do rõ ràng thì nên chạy `zmrig-os status` trước tiên.
 
 ## Khi không dùng fleet
 

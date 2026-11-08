@@ -117,6 +117,24 @@ Phần kiểm tra link là điểm chính của `npm run build`: `onBrokenLinks`
 `onBrokenMarkdownLinks` đều đặt `throw`, nên một trang bị đổi tên không thể phát
 hành thành 404.
 
+## Container, không cần daemon
+
+```bash
+node --test 'deploy/docker/tests/*.test.js'
+sh -n deploy/docker/zmrig-docker-update
+```
+
+Mọi quyết định của image đều là hàm thuần của môi trường, nên container được test
+mà không cần Docker: ánh xạ biến môi trường sang cờ (bốn chế độ, mức donate 11 %
+bị từ chối, `EXTRA_ARGS` không bao giờ đi qua shell), hạn mức cgroup chặn số luồng
+ở cả hai phiên bản cgroup, bộ kiểm tra registry chạy với một registry giả đòi
+token, và script cập nhật trên host chạy với `docker` giả — đang mới thì không
+pull, pull hỏng thì không dựng lại.
+
+Bản thân image được CI dựng ở mỗi pull request (`Published image`), vì lỗi ở đó
+chỉ image thật mới lộ ra: thiếu `lib/`, một nhãn không được đặt, entrypoint không
+chuyển tiếp SIGTERM.
+
 ## Chạy test trên máy đang đào
 
 Bộ test mạng dùng cổng riêng và pool giả, nên không đụng miner thật. Nhưng nếu

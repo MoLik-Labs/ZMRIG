@@ -1,0 +1,111 @@
+#!/bin/sh
+# zmrig-docker-update: install the image that was published since this container
+# started.
+#
+#   zmrig-docker-update --check          is a newer image published? (exit 3 = yes)
+#   zmrig-docker-update --apply          pull it and recreate the service
+#   zmrig-docker-update --apply --check  check, and apply only if there is something
+#
+# It runs on the *host*, because replacing a container is the host's job: a
+# container has no Docker socket, and giving it one so it can restart itself
+# would hand a miner the ability to start any container on the machine. The
+# Dockerfile's own checker (`update --check`, inside the image) is what --check
+# calls, so both halves agree about what "newer" means and neither has a second
+# version comparison to drift.
+#
+# --apply needs a compose file, because recreating a container means knowing
+# every flag it was created with. `docker run` does not remember that; compose
+# does. The repository ships one: deploy/docker/compose.yaml.
+#
+# Exit codes: 0 current (or updated), 3 an update is available (--check only),
+# 2 cannot tell. A timer that treats 3 as failure will page someone every night;
+# see the timer in this directory for how to ignore it without hiding 2.
+
+set -eu
+
+SELF=$(basename -- "$0")
+APPLY=0
+FORCE=0
+CONTAINER=${CONTAINER:-zmrig}
+COMPOSE=${COMPOSE:-compose.yaml}
+DOCKER=${DOCKER:-docker}
+
+usage() {
+    sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+die() {
+    printf '%s: %s\n' "$SELF" "$*" >&2
+    exit 2
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --check)          APPLY=0 ;;
+        --apply)          APPLY=1 ;;
+        --apply-only)     APPLY=1; FORCE=1 ;;
+        --force)          FORCE=1 ;;
+        --container)      CONTAINER=${2:?--container needs a name}; shift ;;
+        --container=*)    CONTAINER=${1#*=} ;;
+        --compose)        COMPOSE=${2:?--compose needs a path}; shift ;;
+        --compose=*)      COMPOSE=${1#*=} ;;
+        -h|--help)        usage; exit 0 ;;
+        *)                die "unknown option: $1" ;;
+    esac
+    shift
+done
+
+command -v "$DOCKER" >/dev/null 2>&1 || die "no docker on PATH (set DOCKER=/path/to/docker)"
+
+# The image this container was created from. Not `.Image` (that is the local
+# image id): `.Config.Image` is the name it was run with, tag included, which is
+# what has to be pulled again.
+image=$("$DOCKER" inspect --format '{{.Config.Image}}' "$CONTAINER" 2>/dev/null) ||
+    die "no container named $CONTAINER (use --container NAME)"
+
+# 6.48.0 out of the image's own environment, so the check container does not
+# have to guess which release it is looking at.
+version=$("$DOCKER" inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$CONTAINER" 2>/dev/null |
+    sed -n 's/^ZMRIG_VERSION=//p' | head -1)
+
+# The checker lives inside the image, which is already on the disk: running it
+# costs no pull and cannot disagree with the release numbering. `--entrypoint
+# node` skips the shim, and ZMRIG_TAG comes from the tag the container was
+# started with.
+tag=$(printf '%s' "$image" | sed -n 's/.*:\([^:]*\)$/\1/p')
+[ -n "$tag" ] || tag=latest
+
+check() {
+    "$DOCKER" run --rm --entrypoint node \
+        -e "ZMRIG_VERSION=$version" \
+        -e "ZMRIG_IMAGE=${image%:*}" \
+        -e "ZMRIG_TAG=$tag" \
+        "$image" /app/deploy/docker/update.js --check
+}
+
+if [ "$APPLY" -eq 0 ]; then
+    check
+    exit $?
+fi
+
+if [ "$FORCE" -eq 0 ]; then
+    status=0
+    check || status=$?
+    case "$status" in
+        0) printf '%s: %s is current\n' "$SELF" "$image"; exit 0 ;;
+        3) : ;;  # an update exists: fall through and install it
+        *) exit "$status" ;;  # 2 = cannot tell, and pulling blind is not better
+    esac
+fi
+
+[ -f "$COMPOSE" ] || die "no compose file at $COMPOSE (--compose PATH); recreating a container needs the flags it was created with"
+
+# Pull first, then recreate: `up -d` only replaces the container when the image
+# under the tag changed, so a nightly run with nothing new touches nothing.
+"$DOCKER" compose -f "$COMPOSE" pull --quiet ||
+    die "the pull failed; the running container was left alone"
+
+"$DOCKER" compose -f "$COMPOSE" up --detach --remove-orphans ||
+    die "the pull succeeded but the container could not be recreated"
+
+printf '%s: applied %s\n' "$SELF" "$image"

@@ -71,10 +71,11 @@ TLS trên engine Zig.
 
 ## Cái gì được kiểm, cái gì không
 
-Bộ dựng lệnh kiểm địa chỉ Monero chính xác: 95 ký tự, 106 với địa chỉ tích hợp,
-chỉ bảng chữ base58. Với sáu đồng còn lại nó kiểm bảng chữ và độ dài hợp lý, cảnh
-báo khi prefix không phải cái nó biết — nó không nhận là đã kiểm checksum mà nó
-không tính. Pool làm việc đó, và chỉ pool mới làm được.
+Bộ dựng lệnh **giải mã** địa chỉ Monero: 95 ký tự, 106 với địa chỉ tích hợp, bảng
+chữ base58, byte mạng, và checksum Keccak-256. Chỉ một ký tự sai là bị từ chối,
+kèm lý do. Với sáu đồng còn lại nó kiểm bảng chữ và độ dài hợp lý, cảnh báo khi
+prefix không phải cái nó biết — nó không nhận là đã kiểm checksum mà nó không
+tính.
 
 Sai địa chỉ là đào cho người khác, và không trang web nào chứng minh được địa chỉ
 là của bạn. Sao chép từ ví của bạn, dán vào, rồi đối chiếu sáu ký tự đầu và cuối

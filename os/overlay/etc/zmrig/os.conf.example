@@ -8,7 +8,8 @@
 # persists.
 WALLET=""
 POOL="gulf.moneroocean.stream:10001"
-WORKER="rig"
+# Empty means this machine's hostname, which is what a rig with no opinion wants.
+WORKER=""
 MODE="max"
 ALGO="auto"
 THREADS="auto"
@@ -16,6 +17,14 @@ THREADS="auto"
 # is a setting, not a rule: 0 turns it off, 1 to 10 are all accepted, and
 # `zmrig-os doctor` prints the value this machine will actually run with.
 DONATE="3"
+# The temperature the `safe` mode and the thermal governor never go above, in
+# degrees Celsius. 72 is a mining fan curve; a laptop or a small case wants less.
+SAFE_TEMP="72"
+
+# The RandomX MSR preset: prefetchers off, worth 5-15 % on bare metal and nothing
+# in a virtual machine. auto = the miner decides (it knows whether this CPU has a
+# preset and whether /dev/cpu/0/msr answers), on = always ask, off = never open
+# /dev/cpu. `safe` mode never writes these registers whatever this says.
 MSR="auto"
 API_PORT="0"
 API_HOST="127.0.0.1"
@@ -28,11 +37,33 @@ AUTO_UPDATE="1"
 # other A/B slot and only becomes the default once the copy has been verified;
 # three failed boots on a slot roll the machine back to the other one.
 AUTO_IMAGE="0"
+# Measure this machine once, on this machine, and pin the thread count the miner
+# reports as its best. A heuristic from the core count is right most of the time;
+# the measurement is right here. `AUTOTUNED` is the marker that stops it running
+# again, and the two MEASURED_* keys are what it saw - the rate is what the drift
+# check compares against a week later.
+AUTO_AUTOTUNE="1"
+AUTOTUNED=""
+MEASURED_THREADS=""
+MEASURED_HS=""
+TUNED_AT=""
+# Where the miner is pinned: auto = every physical core, off = the whole machine,
+# or an explicit XMRig mask. ISOLATE=N overrides it with the isolated set.
+AFFINITY="auto"
 CHANNEL="stable"
 # Huge pages: empty means "size the pool from ALGO" (2.3 GB for Monero, 192 MB
 # for Scala), 0 turns the reservation off. The initramfs reads this before it
 # reserves, so a light-mode box does not ask for pages it cannot use.
 HUGEPAGES=""
+# 1 GiB pages, as a count to reserve at boot. Empty (or 0) means none, and the
+# miner then reads its dataset through 2 MiB pages, which is what almost every
+# rig does and is far better than 4 KiB. A gigantic pool is worth it for one
+# reason only: a Monero dataset is 1 040 TLB entries at 2 MiB and two at 1 GiB.
+# It cannot be created after the machine has fragmented, so it is a kernel
+# parameter, not a sysctl: `zmrig-os hugepages 1g 3` writes it and the next boot
+# reserves it. The pool is reserved whether or not the miner ends up using it, so
+# a 4 GiB rig that never mines Monero should leave this empty.
+HUGEPAGES_1G=""
 # Logical CPUs kept for mining, as whole SMT cores (0 = shared with the OS).
 # `zmrig-os isolate 4` writes this and the matching kernel parameters; the kernel
 # side (isolcpus, nohz_full, rcu_nocbs) takes effect on the next boot.

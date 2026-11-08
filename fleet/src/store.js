@@ -103,6 +103,65 @@ class Store {
     return this.get(id);
   }
 
+  /**
+   * Devices nobody has enrolled, and how much room they are allowed to take.
+   *
+   * Any 64-hex Bearer token produces a record: the ID is a hash of the key, so a
+   * machine that has never been enrolled still gets somewhere for its first
+   * check-in to land. That is the design, and it is also an open door — a
+   * stranger can post random keys, and each one is a record in memory plus a
+   * rewrite of the whole state file (which on Render lives in /tmp, so it is
+   * RAM). A free instance has 512 MB; a loop with curl has that for breakfast.
+   *
+   * So unenrolled records are capped and they expire. Nothing is lost: an
+   * unenrolled rig cannot be sent commands anyway, and an enrolled one is never
+   * touched. The rig that was pruned re-creates its record on its next check-in,
+   * one minute later, and the only thing that changes is `first_seen`.
+   */
+  unowned() {
+    return Object.values(this.state.devices).filter((device) => !device.owner).length;
+  }
+
+  /** Drop unenrolled records that have been silent for `ttlMs`. Returns how many. */
+  pruneUnowned(ttlMs, now = this.now()) {
+    if (!ttlMs || ttlMs <= 0) return 0;
+    let dropped = 0;
+    for (const [id, device] of Object.entries(this.state.devices)) {
+      if (device.owner) continue;
+      const seen = device.last_seen || device.first_seen || 0;
+      if (now - seen < ttlMs) continue;
+      delete this.state.devices[id];
+      dropped += 1;
+    }
+    if (dropped) this.touch();
+    return dropped;
+  }
+
+  /**
+   * Evict the least recently seen unenrolled record until there is room.
+   *
+   * A cap alone would be a way to deny enrolment to a real rig: the operator
+   * cannot enrol a machine whose first check-in was refused, because the
+   * enrolment code is checked against the record the check-in would have made.
+   * Evicting instead keeps the table bounded without ever locking anybody out —
+   * and the rigs that are unprotected are exactly the ones nobody has seen for
+   * the longest, while a rig waiting to be enrolled is checking in every minute
+   * and therefore never the oldest.
+   */
+  makeRoom(limit, now = this.now()) {
+    if (!limit || limit <= 0) return 0;
+    let dropped = 0;
+    for (;;) {
+      const unowned = Object.values(this.state.devices).filter((device) => !device.owner);
+      if (unowned.length < limit) break;
+      unowned.sort((a, b) => (a.last_seen || a.first_seen || 0) - (b.last_seen || b.first_seen || 0));
+      delete this.state.devices[unowned[0].id];
+      dropped += 1;
+    }
+    if (dropped) this.touch();
+    return dropped;
+  }
+
   claim(secret, meta = {}) {
     const ids = require('./ids');
     const id = ids.deviceId(secret);

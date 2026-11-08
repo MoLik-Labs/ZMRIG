@@ -1,0 +1,426 @@
+#!/usr/bin/env node
+'use strict';
+
+// zmrig in a container: one image, two jobs.
+//
+//   docker run --rm ghcr.io/molik-labs/zmrig version
+//   docker run --rm -e WALLET=4... -e POOL=pool.example:3333 ghcr.io/molik-labs/zmrig
+//   docker run --rm ghcr.io/molik-labs/zmrig pool
+//   docker run --rm -e WALLET=4... ghcr.io/molik-labs/zmrig args
+//
+// Why a dispatcher instead of an ENTRYPOINT of `/usr/local/bin/zmrig`:
+//
+// A miner is configured with flags, and a container is configured with the
+// environment - `docker run -e ...`, a compose file, a Kubernetes manifest, a
+// PaaS form. Those two only meet in a shim, and the shim is this file. It reads
+// the same names the appliance writes to /etc/zmrig/os.conf (WALLET, POOL,
+// MODE, THREADS, DONATE, MSR, ...), so a person who has used `zmrig-os` already
+// knows what to put in a compose file.
+//
+// `args` prints the command line without running it. That is the debugging
+// entry point: when a rig mines with fewer threads than expected, the first
+// question is what the container actually asked the miner to do.
+//
+// The wallet is checked at startup, by the miner itself (`--check-wallet`), so
+// the verdict in the log is the same one `zmrig --check-wallet` prints on a
+// bare-metal rig. The check is advisory: `rx/0` refuses a bad checksum on its
+// own, and a pool on another coin legitimately takes a login that is not a
+// Monero address. Duplicating that policy here would be a second opinion that
+// could disagree with the binary.
+
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawn, spawnSync } = require('node:child_process');
+
+const DEFAULTS = {
+  MODE: 'max',
+  ALGO: 'auto',
+  THREADS: 'auto',
+  DONATE: '3',
+  SAFE_TEMP: '72',
+  MSR: 'auto',
+  API_PORT: '0',
+  WORKER: 'x',
+};
+
+// Every variable this file reads. `deploy/docker/tests/keys.test.js` compares
+// this list with the table in doc/DOCKER.md, so a setting cannot be added here
+// and left undocumented (the appliance has the same test for os.conf).
+const KNOWN_ENV = [
+  'WALLET',
+  'POOL',
+  'WORKER',
+  'MODE',
+  'ALGO',
+  'THREADS',
+  'DONATE',
+  'SAFE_TEMP',
+  'MSR',
+  'API_PORT',
+  'API_HOST',
+  'API_TOKEN',
+  'EXTRA_ARGS',
+  'CHECK_WALLET',
+  'POOL_CONFIG',
+  'ZMRIG_BIN',
+  'ZMRIG_CGROUP_DIR',
+];
+
+const USAGE = `zmrig in a container
+
+  mine | (nothing)   run the miner (the default)
+  pool               run the Ocean Pool in this image
+  check              check WALLET and exit; the miner's own verdict
+  args               print the miner command line and exit
+  update --check     is a newer image published? (exit 3 = yes, 2 = cannot tell)
+  version            print the image and miner versions
+  <command> [args]   run any other command, e.g. sh
+
+Environment (see doc/DOCKER.md): WALLET, POOL, WORKER, MODE, ALGO, THREADS,
+DONATE, SAFE_TEMP, MSR, API_PORT, API_HOST, API_TOKEN, EXTRA_ARGS.
+`;
+
+function envOf(env, name, fallback) {
+  const value = env[name];
+  if (value === undefined || value === null || String(value).trim() === '') return fallback;
+  return String(value).trim();
+}
+
+function boolOf(env, name, fallback) {
+  const value = envOf(env, name, '').toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(value)) return true;
+  if (['0', 'false', 'no', 'off'].includes(value)) return false;
+  return fallback;
+}
+
+// --- the container's real CPU budget ---------------------------------------
+//
+// `--cpus=2` is a CFS quota, not an affinity mask: the process still sees every
+// host CPU, so the miner's "one thread per physical core" heuristic asks for the
+// whole machine and then has to share a fifth of it. Under a quota that is
+// slower than the same number of threads at full speed - the run queue is not
+// throttled thread by thread, the whole group is stopped when the quota is spent,
+// so a thread that has a scratchpad in L3 sits idle for the rest of the period.
+//
+// Two files, because cgroup v2 is one line ("200000 100000", or "max 100000")
+// and cgroup v1 is two, and a host can be either.
+function cgroupCpus(env) {
+  const root = envOf(env, 'ZMRIG_CGROUP_DIR', '/sys/fs/cgroup');
+
+  const v2 = readPair(path.join(root, 'cpu.max'));
+  if (v2) return v2;
+
+  const quota = readNumber(path.join(root, 'cpu', 'cpu.cfs_quota_us'));
+  const period = readNumber(path.join(root, 'cpu', 'cpu.cfs_period_us'));
+  if (quota && period && quota > 0 && period > 0) return Math.max(1, Math.floor(quota / period));
+
+  return null;
+}
+
+function readPair(file) {
+  let text;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch {
+    return null;
+  }
+
+  const [quotaText, periodText] = text.trim().split(/\s+/);
+  if (!quotaText || quotaText === 'max') return null;
+
+  const quota = Number(quotaText);
+  const period = Number(periodText);
+  if (!Number.isFinite(quota) || !Number.isFinite(period) || quota <= 0 || period <= 0) return null;
+
+  return Math.max(1, Math.floor(quota / period));
+}
+
+function readNumber(file) {
+  try {
+    const value = Number(fs.readFileSync(file, 'utf8').trim());
+    return Number.isFinite(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+// Whole numbers only, and a donation of 3 is three: `--donate-level 3%` would be
+// passed straight to a parser that rejects it, one argument after the wallet.
+function number(env, name, fallback) {
+  const raw = envOf(env, name, fallback);
+  if (!/^-?\d+$/.test(raw)) return null;
+  return Number(raw);
+}
+
+// --- the miner command line -----------------------------------------------
+//
+// Pure: environment in, argv out. `plan()` is what the tests drive, so the
+// mapping is checked without Docker, a compiler, or a pool.
+function minerArgs(env, opts = {}) {
+  const notes = [];
+  const mode = envOf(env, 'MODE', DEFAULTS.MODE).toLowerCase();
+  const wallet = envOf(env, 'WALLET', '');
+  const pool = envOf(env, 'POOL', '');
+  const algo = envOf(env, 'ALGO', DEFAULTS.ALGO);
+
+  if (!wallet) {
+    return {
+      error: 'no wallet: pass -e WALLET=<address>. The rig cannot be paid without one.\n' +
+        'Check an address with: docker run --rm -e WALLET=4... ghcr.io/molik-labs/zmrig check',
+    };
+  }
+  if (!pool) {
+    return {
+      error: 'no pool: pass -e POOL=host:port (tcp by default; tls://, ws://, wss:// work too).\n' +
+        'See doc/POOLS.md for the URL forms.',
+    };
+  }
+
+  if (!['max', 'eco', 'safe', 'light'].includes(mode)) {
+    return { error: `MODE=${mode} is not one of max, eco, safe, light` };
+  }
+
+  const donate = number(env, 'DONATE', DEFAULTS.DONATE);
+  if (donate === null || donate < 0 || donate > 10) {
+    return { error: `DONATE=${envOf(env, 'DONATE', '')} is not a percentage between 0 and 10; use DONATE=0 to turn the developer fee off` };
+  }
+
+  const args = ['-o', pool, '-u', wallet, '-p', envOf(env, 'WORKER', DEFAULTS.WORKER)];
+
+  // `auto` is not a missing value: it advertises every RandomX variant so a pool
+  // that pays the best coin per hash can move this rig between them. Passing
+  // `-a auto` explicitly is fine but noise, and the OS image omits it too.
+  if (algo && algo !== 'auto') args.push('-a', algo);
+
+  const threads = envOf(env, 'THREADS', DEFAULTS.THREADS);
+  const quota = cgroupCpus(env);
+  const visible = (opts.cpus || os.cpus().length || 1);
+
+  if (threads !== 'auto') {
+    if (!/^\d+$/.test(threads) || Number(threads) < 1) {
+      return { error: `THREADS=${threads} is not a number; leave it unset to let the miner size itself` };
+    }
+    args.push('-t', threads);
+    // An explicit request is respected even above the quota: an operator who
+    // typed a number has a reason, and `--cpus` can be raised at any time.
+    if (quota && Number(threads) > quota) {
+      notes.push(`THREADS=${threads} is more than the ${quota}-CPU quota allows; the container will be throttled`);
+    }
+  } else if (quota && quota < visible) {
+    args.push('-t', String(quota));
+    notes.push(`the container is limited to ${quota} CPU${quota === 1 ? '' : 's'} (${visible} visible): ${quota} mining thread${quota === 1 ? '' : 's'}`);
+  }
+
+  switch (mode) {
+    case 'eco':
+      args.push('--profile', 'watt');
+      break;
+    case 'safe':
+      args.push('--profile', 'watt', '--max-temp', envOf(env, 'SAFE_TEMP', DEFAULTS.SAFE_TEMP));
+      break;
+    case 'light':
+      args.push('--mode', 'light');
+      break;
+    default:
+      args.push('--profile', 'free');
+  }
+
+  // MSR needs /dev/cpu/0/msr and bare metal. `auto` lets the miner's own probe
+  // decide, which is the only setting that is right in a container it has not
+  // seen yet. `safe` never writes a register, whatever this says.
+  const msr = envOf(env, 'MSR', DEFAULTS.MSR).toLowerCase();
+  if (mode === 'safe') args.push('--no-msr');
+  else if (msr === 'on') args.push('--msr');
+  else if (msr === 'off') args.push('--no-msr');
+
+  // The fee is passed explicitly, always. `zmrig` defaults to 3 % too; writing
+  // it into the command line means `docker run ... args` shows the number a rig
+  // runs with instead of hiding a default inside the binary.
+  args.push('--donate-level', String(donate));
+
+  const apiPort = envOf(env, 'API_PORT', DEFAULTS.API_PORT);
+  if (apiPort !== '0') {
+    if (!/^\d+$/.test(apiPort)) return { error: `API_PORT=${apiPort} is not a port number` };
+    // 0.0.0.0, not the miner's 127.0.0.1: inside a container a loopback bind is
+    // reachable only from inside it, so a published port would answer nothing
+    // and look like a broken API rather than a bind address.
+    args.push('--http-port', apiPort, '--http-host', envOf(env, 'API_HOST', '0.0.0.0'));
+    const token = envOf(env, 'API_TOKEN', '');
+    if (token) args.push('--http-access-token', token);
+  }
+
+  args.push('--print-time', '60', '--health-restart', '900');
+  if (!opts.tty) args.push('--no-color');
+
+  const extra = envOf(env, 'EXTRA_ARGS', '');
+  if (extra) args.push(...extra.split(/\s+/).filter(Boolean));
+
+  return { args, notes, mode, wallet, pool, algo, donate, threads };
+}
+
+// --- plan: what would run, without running it ------------------------------
+function plan(argv, env = process.env, opts = {}) {
+  const command = argv[0] || 'mine';
+  const rest = argv.slice(1);
+  const bin = envOf(env, 'ZMRIG_BIN', '/usr/local/bin/zmrig');
+
+  // `docker run img -o pool -u wallet ...`: flags instead of the environment.
+  // Everything XMRig-shaped works this way, so an operator's existing command
+  // line has to work too - and the env mapping is skipped rather than merged,
+  // because half a command line from each is nobody's intent.
+  if (command.startsWith('-')) {
+    return { command: 'mine', bin, argv, check: false, passthrough: true };
+  }
+
+  switch (command) {
+    case 'mine':
+    case 'miner':
+    case 'run': {
+      const built = minerArgs(env, opts);
+      if (built.error) return { error: built.error };
+      return {
+        command: 'mine',
+        bin,
+        argv: built.args,
+        notes: built.notes,
+        check: boolOf(env, 'CHECK_WALLET', true),
+        wallet: built.wallet,
+      };
+    }
+
+    case 'pool':
+      return {
+        command: 'pool',
+        bin: process.execPath,
+        argv: [path.join(__dirname, '..', '..', 'pool', 'src', 'index.js')].concat(
+          envOf(env, 'POOL_CONFIG', '') ? ['--config', envOf(env, 'POOL_CONFIG', '')] : [],
+          rest,
+        ),
+      };
+
+    case 'check': {
+      const wallet = envOf(env, 'WALLET', '') || rest[0] || '';
+      if (!wallet) return { error: 'no wallet: pass -e WALLET=<address>, or `check <address>`' };
+      return { command: 'check', bin, argv: ['--check-wallet', wallet] };
+    }
+
+    case 'args': {
+      const built = minerArgs(env, opts);
+      if (built.error) return { error: built.error };
+      return { command: 'args', bin, argv: built.args, notes: built.notes };
+    }
+
+    case 'version':
+      return { command: 'version', bin, argv: ['--version'] };
+
+    case 'help':
+    case '-h':
+    case '--help':
+      return { command: 'help' };
+
+    case 'update':
+      return { command: 'update', argv: rest };
+
+    default:
+      // Anything else runs as itself, so `docker run --rm img sh` is a shell in
+      // the image and `docker run --rm img node -e ...` works.
+      return { command: 'exec', bin: command, argv: rest };
+  }
+}
+
+// --- running it -------------------------------------------------------------
+//
+// The child is the miner or the pool; this process is a shim. Signals have to be
+// forwarded, because PID 1 is tini and it signals the shim, not the grandchild:
+// without this, `docker stop` waits out its ten seconds and then kills a miner
+// that never got the chance to write its last share to the log.
+function run(bin, argv, env) {
+  const child = spawn(bin, argv, { stdio: 'inherit', env });
+
+  const forward = (signal) => {
+    try {
+      child.kill(signal);
+    } catch {
+      /* the child is already gone */
+    }
+  };
+
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGQUIT']) process.on(signal, () => forward(signal));
+
+  child.on('error', (error) => {
+    console.error(`zmrig: cannot run ${bin}: ${error.message}`);
+    process.exit(127);
+  });
+
+  child.on('exit', (code, signal) => {
+    if (signal) process.exit(128 + (os.constants.signals[signal] || 0));
+    process.exit(code === null ? 1 : code);
+  });
+}
+
+function describe() {
+  const version = process.env.ZMRIG_VERSION || '';
+  const tag = process.env.ZMRIG_TAG || 'latest';
+  const image = process.env.ZMRIG_IMAGE || 'ghcr.io/molik-labs/zmrig';
+  return { version, tag, image };
+}
+
+function main(argv, env) {
+  const tty = Boolean(process.stdout.isTTY);
+  const decision = plan(argv, env, { tty });
+
+  if (decision.command === 'help') {
+    process.stdout.write(USAGE);
+    return 0;
+  }
+
+  if (decision.error) {
+    console.error(`zmrig: ${decision.error}`);
+    return 2;
+  }
+
+  if (decision.command === 'args') {
+    for (const note of decision.notes || []) console.error(`zmrig: ${note}`);
+    console.log([decision.bin, ...decision.argv].join(' '));
+    return 0;
+  }
+
+  // The image says which release it is, and the binary says which miner it is.
+  // They are built from the same commit, so a mismatch means someone mounted a
+  // different miner over the image - worth one line rather than a mystery.
+  if (decision.command === 'version') {
+    const image = describe();
+    if (image.version) console.log(`image      ${image.image}:${image.tag} (${image.version})`);
+    run(decision.bin, decision.argv, env);
+    return null;
+  }
+
+  if (decision.command === 'update') {
+    const { check } = require('./update.js');
+    return check(decision.argv, env).then((code) => process.exit(code));
+  }
+
+  for (const note of decision.notes || []) console.error(`zmrig: ${note}`);
+
+  // The wallet verdict, from the binary, before the pool is dialled. Printed and
+  // not judged: see the comment at the top of this file.
+  if (decision.command === 'mine' && decision.check) {
+    try {
+      const result = spawnSync(decision.bin, ['--check-wallet', decision.wallet], { stdio: 'inherit' });
+      if (result.error) console.error(`zmrig: cannot check the wallet: ${result.error.message}`);
+    } catch {
+      /* a missing binary fails loudly below, with the miner's own error */
+    }
+  }
+
+  run(decision.bin, decision.argv, env);
+  return null;
+}
+
+if (require.main === module) {
+  const code = main(process.argv.slice(2), process.env);
+  if (typeof code === 'number') process.exit(code);
+}
+
+module.exports = { plan, minerArgs, cgroupCpus, main, KNOWN_ENV, DEFAULTS, describe, USAGE };
