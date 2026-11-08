@@ -4,9 +4,11 @@ The miner and the pool, in one image, published by this repository's CI to
 GitHub's registry:
 
 ```
-ghcr.io/molik-labs/zmrig:6.48.0      one release
-ghcr.io/molik-labs/zmrig:latest      the newest release
-ghcr.io/molik-labs/zmrig:edge        a build of the tip of BETA
+ghcr.io/molik-labs/zmrig:6.48.0      one release, immutable
+ghcr.io/molik-labs/zmrig:6.48        the same release, by minor version
+ghcr.io/molik-labs/zmrig:latest      the newest release - moves on a tag, never on a merge
+ghcr.io/molik-labs/zmrig:edge        the tip of BETA
+ghcr.io/molik-labs/zmrig:sha-c0ffee11  one commit, for bisecting a regression
 ```
 
 Nothing else is needed to run it — no installation, no compiler, no

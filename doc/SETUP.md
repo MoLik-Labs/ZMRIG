@@ -403,9 +403,16 @@ a ledger in git is a payout history in public, and a bad merge is a wrong payout
 
 ### 5e. Make the container image public
 
-`.github/workflows/image.yml` publishes `ghcr.io/molik-labs/zmrig` on a `v*` tag
-and `edge` from `BETA`/`master`, using the workflow's own `GITHUB_TOKEN` — no
-personal access token is involved, and nothing is built on a laptop.
+`.github/workflows/image.yml` publishes `ghcr.io/molik-labs/zmrig`, using the
+workflow's own `GITHUB_TOKEN` — no personal access token is involved, and nothing
+is built on a laptop. What moves which tag:
+
+| Event | Tags published |
+| --- | --- |
+| a `v*` tag | the version, `6.48`, `latest`, `edge` |
+| a push to `BETA` | `edge` |
+| a push to `master` | `sha-<commit>` only: `latest` and `edge` move on a tag, not on a merge |
+| anything else, or a manual run with `publish=false` | `sha-<commit>`, or nothing |
 
 A **new GHCR package is private**, even in a public repository, and the first
 `docker pull` outside CI then asks for a login that most people will not have.

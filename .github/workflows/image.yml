@@ -78,35 +78,51 @@ jobs:
       - name: Decide the tags
         id: tags
         run: |
+          set -eu
           image="${{ steps.name.outputs.image }}"
           version="${{ steps.name.outputs.version }}"
           short="${{ steps.name.outputs.short }}"
+          event="${{ github.event_name }}"
           extra="${{ inputs.tag }}"
           tags=""
-          publish="${{ github.event_name == 'push' }}"
+          publish=""
 
           case "$GITHUB_REF" in
+            # A release tag is the only thing that moves `latest`. `edge` moves
+            # with it because a tag is cut from BETA, so at that moment they are
+            # the same build.
             refs/tags/v*)
-              tags="${image}:${version} ${image}:latest ${image}:edge"
+              tags="${image}:${version} ${image}:latest ${image}:${version%.*}"
+              tags="$tags ${image}:edge"
               ;;
+            # The tip of the development branch. This is what `edge` means.
             refs/heads/BETA)
               tags="${image}:edge"
               ;;
+            # master is where a release tag is cut from, and a push to it is
+            # usually a merge that precedes one. It publishes nothing under a
+            # name: publishing `edge` here would point it at a tree older than
+            # BETA, and publishing `latest` would promise a version the master
+            # tree does not claim. The commit-addressed tag is always published,
+            # so the build is pullable by sha and nothing else moves.
             refs/heads/master)
-              # master is the release branch: what a release tag will be cut
-              # from. It moves `edge` and nothing else, because `latest` on the
-              # release branch would be a promise this workflow cannot keep
-              # (the version constant is bumped in BETA and arrives here later).
-              tags="${image}:edge"
+              tags=""
               ;;
           esac
 
           if [ -n "$extra" ]; then tags="$tags ${image}:${extra}"; fi
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.publish }}" != "true" ]; then
-            publish=""
-            echo "::notice title=Build only::not publishing; set publish=true to push the image"
-          fi
           if [ -z "$tags" ]; then tags="${image}:sha-${short}"; fi
+
+          # Pushing is the default for a branch or tag event, and has to be asked
+          # for on a manual run. The string has to be exactly "true" or the `if:`
+          # on the push step silently skips - which is how a release publishes
+          # nothing and reports success.
+          case "$event" in
+            push) publish=true ;;
+          esac
+          if [ "$event" = "workflow_dispatch" ] && [ "${{ inputs.publish }}" = "true" ]; then
+            publish=true
+          fi
 
           tags=$(printf '%s\n' $tags | sort -u | tr '\n' ' ' | sed 's/ *$//')
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
@@ -260,7 +276,7 @@ jobs:
             if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
               printf '\nRe-run with `publish` set to true to push it.\n'
             else
-              printf '\nPushes to `BETA` and `master` publish `edge`; a `v*` tag publishes\n'
-              printf 'the version and `latest`.\n'
+              printf '\nA `v*` tag publishes the version, `latest` and `edge`; a push to\n'
+              printf '`BETA` moves `edge`; every other push publishes `sha-<commit>`.\n'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
