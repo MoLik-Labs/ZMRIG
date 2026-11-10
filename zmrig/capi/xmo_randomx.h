@@ -44,6 +44,11 @@ enum xmo_algo {
  * 2 GiB dataset.
  */
 xmo_engine *xmo_engine_new(int algo, int flags, char *err, size_t errlen);
+
+/* Make `engine`'s algorithm the active RandomX configuration. Called with the
+ * workers stopped; required after switching to an engine that was created
+ * earlier, because the configuration is process-wide. */
+void xmo_engine_activate(xmo_engine *engine);
 void        xmo_engine_free(xmo_engine *engine);
 
 /* Number of bytes the dataset and the cache need for this algorithm. */

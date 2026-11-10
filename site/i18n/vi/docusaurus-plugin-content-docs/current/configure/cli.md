@@ -54,6 +54,10 @@ hiện trong ngoặc vuông.
     --priority=N           1..5 (thang XMRig) hoặc giá trị nice thô, ví dụ -10
     --scratchpad-prefetch=N 0 nop, 1 prefetcht0 [mặc định], 2 prefetchnta, 3 load
     --no-optimized-init    bộ khởi tạo dataset di động
+    --dataset-cache[=MB]   giữ dataset cũ trong bộ nhớ khi đổi thuật toán, để pool
+                           đưa rig qua lại giữa các nhánh RandomX không phải
+                           dựng lại dataset khi quay về [mặc định auto: giữ được
+                           bao nhiêu thì giữ; 0 hoặc --no-dataset-cache là tắt]
     --autotune[=SECONDS]   đo các phương án số thread, không cần pool
     --max-temp=C           giữ cảm biến CPU nóng nhất ở mức ≤ C độ
     --thermal-file=PATH    đọc nhiệt độ từ FILE thay vì sysfs

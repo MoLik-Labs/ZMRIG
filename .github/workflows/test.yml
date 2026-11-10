@@ -101,6 +101,13 @@ jobs:
       - name: Watchdog against a real pool
         run: ./zmrig/tests/health.sh
 
+      # The dataset cache, both halves: that a switch back does not rebuild a
+      # 2 GiB dataset, and that the shares hashed through the reused engine
+      # still recompute to the same digest. The first version of the cache was
+      # fast and wrong, and only the second assertion can see that.
+      - name: Algorithm switch, and the hashes it produces
+        run: ./zmrig/tests/switch.sh --quick
+
       # The safe mode, end to end: the governor is driven through
       # --thermal-file, because a test that needed a genuinely hot CPU would
       # either never run or cost somebody a machine.

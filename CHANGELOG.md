@@ -3,6 +3,63 @@
 _Not a release: no tag, no image. This lands on `BETA` and becomes a version when
 the release is cut._
 
+## Every algorithm switch was 16.5 seconds of nothing
+
+A multi-algorithm pool moves a rig between RandomX forks on its own schedule.
+Each move back rebuilt the dataset from the seed: 256 MB of cache, then 2080 MB
+built with that fork's program configuration. On two vCPUs, measured, `rx/0`
+cold took **16 491 ms** — and 20 337 ms on a slower day — during which the rig
+hashed nothing at all. On a pool that rotates every few minutes that is not a
+cold start, it is most of the run.
+
+The dataset is one read-only mapping, so it is now kept:
+
+| Event | before | after |
+| --- | ---: | ---: |
+| cold `rx/0` dataset | 16 491 ms | 16 491 ms |
+| switch to `panthera`, `rx/0` still mapped | 374 ms | 374 ms |
+| switch back to `rx/0` | 16 491 ms | **0 ms** |
+| hashes over one round trip | 99 973 | 337 338 |
+
+* `--dataset-cache[=MB]` (default: `auto`, keep what fits), `--no-dataset-cache`,
+  and `DATASET_CACHE` in the container. `--dataset-cache=0` is the same as off.
+* The decision is made per switch, and it is a memory decision: the retired
+  mapping has to coexist with the live one plus 64 MB of slack under the memory
+  limit the miner actually has — the cgroup's, not the host's, which is the
+  difference between a rig that switches and a rig the OOM killer takes. At most
+  two datasets are retained; a second Monero dataset on a 3 GiB container is
+  declined, in the log.
+* The log reports the cost it avoided rather than a vague success:
+  `switched to rx/0 without re-initialising: its dataset was still mapped (9 s
+  old, built in 18259 ms, 1 initialisation(s) saved), hash engine ready
+  immediately`. That time is the retained engine's own build, remembered per
+  engine: the last build in the log on a rotating pool is the *other* coin's
+  (348 ms for Panthera), and quoting it beside a 2 GiB rebuild would be a made-up
+  number.
+
+### The cache was returning wrong hashes, and the reason was not the hashes
+
+Shares submitted after a switch came back as mismatches from `--verify-share`.
+The first suspicion — a bad blob, a nonce offset, a broken verifier — was wrong
+on all three counts, and proving that closed the door on the real cause: the
+active RandomX configuration (dataset size, JIT program, AES keys, program
+count) is **process-wide** state, and a retained engine that is switched back to
+is not the one that was created last. It hashed under the other algorithm's
+program configuration: a perfectly valid RandomX hash of the wrong program.
+
+`xmo_engine_activate()` now applies the configuration the engine was built with
+— dataset flags, JIT flags, huge-page policy, the `RandomX_CurrentConfig` fields
+— and it is called from `xmo_engine_new`, `xmo_engine_seed`, `xmo_vm_new`, and
+from `Miner.start()`, which is the one that matters, because it runs before the
+first hash of every new pool job.
+
+Verified, not assumed: three shares submitted after a full
+`rx/0 → panthera → rx/0` round trip recompute to identical digests through
+`--verify-share`. `zmrig/tests/switch.sh` re-proves it on every push, in both
+the cached and the `--no-dataset-cache` configuration, and two unit tests pin
+the retention rule (`retentionFits`) that used to double-count the retired
+dataset.
+
 ## The tool has one index, and the container has a memory floor
 
 Three changes, all of them about the same failure: a rig that looks fine and

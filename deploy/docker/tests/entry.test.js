@@ -311,3 +311,48 @@ test('an unlimited container is judged by the host, and a small host is reported
   const big = 'HugePages_Free: 1168\nHugepagesize: 2048 kB\nMemAvailable: 8388608 kB\n';
   assert.deepEqual(perfNotes({}, { meminfo: big, hugetlbBytes: null, hasMsr: true, memoryLimitMb: null }), []);
 });
+
+// --- the dataset cache ------------------------------------------------------
+//
+// A pool that moves a rig between RandomX forks is the normal case on a
+// multi-algorithm pool, and every move back used to cost a full 2 GiB rebuild:
+// 16.5-20.3 s of zero hashrate on two cores, measured. The miner keeps the old
+// dataset mapped by default and decides per switch whether the memory is there.
+// The shim only gets to say "off" or "at most N MB" - it has no business
+// deciding how much RAM the container can spare.
+test('DATASET_CACHE=off is a real off switch, not a missing value', () => {
+  const built = minerArgs({ ...BASE, DATASET_CACHE: 'off' });
+
+  assert.ok(built.args.includes('--no-dataset-cache'));
+  assert.ok(!built.args.includes('--dataset-cache'));
+});
+
+test('DATASET_CACHE=2048 caps the retained datasets', () => {
+  const built = minerArgs({ ...BASE, DATASET_CACHE: '2048' });
+
+  const at = built.args.indexOf('--dataset-cache');
+  assert.ok(at !== -1);
+  assert.equal(built.args[at + 1], '2048');
+});
+
+test('an unset DATASET_CACHE adds no flag at all, so the miner decides', () => {
+  const built = minerArgs({ ...BASE });
+
+  assert.ok(!built.args.includes('--dataset-cache'));
+  assert.ok(!built.args.includes('--no-dataset-cache'));
+});
+
+test('DATASET_CACHE=auto is the same as unset', () => {
+  const built = minerArgs({ ...BASE, DATASET_CACHE: 'auto' });
+
+  assert.ok(!built.args.includes('--dataset-cache'));
+  assert.ok(!built.args.includes('--no-dataset-cache'));
+});
+
+test('a DATASET_CACHE that is not a size is refused, with the two things that work', () => {
+  const built = minerArgs({ ...BASE, DATASET_CACHE: 'lots' });
+
+  assert.ok(built.error);
+  assert.match(built.error, /DATASET_CACHE=lots/);
+  assert.match(built.error, /DATASET_CACHE=0/);
+});

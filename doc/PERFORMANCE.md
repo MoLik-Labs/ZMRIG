@@ -283,6 +283,39 @@ unit test for the rule.
 | 1 | 42.9 s |
 | 2 | 21.1 s |
 
+### A switch costs 16.5 s, or nothing if the dataset stays mapped
+
+A pool that moves a rig between RandomX forks makes it rebuild the dataset every
+time it comes back: 256 MB cache, then 2080 MB with that fork's program
+configuration. Measured on two vCPUs, cold `rx/0`: **16 491 ms** of zero
+hashrate (20 337 ms on a slower day). The mapping is read-only and the forks only
+change the program, so keeping it is safe — the miner keeps the previous dataset
+mapped by default:
+
+| Event | `--dataset-cache` (default) | `--no-dataset-cache` |
+|---|---:|---:|
+| cold `rx/0` dataset | 16 491 ms | 16 491 ms |
+| switch to `panthera` (rx/0 stays mapped) | 374 ms | 374 ms |
+| switch back to `rx/0` | **0 ms** | 16 491 ms |
+| hashes in 125–135 s across a round trip | 337 338 | 99 973 |
+
+What it costs: the retired mapping stays resident (2336 MB for Monero). The miner
+refuses to hold it when the live dataset plus 64 MB of slack would not fit under
+the cgroup limit, keeps at most two datasets, and logs the decision either way
+(`keeping the rx/0 dataset mapped (2336 MB) so a switch back costs nothing`, and
+on the way back `switched to rx/0 without re-initialising: its dataset was still
+mapped (9 s old, built in 18259 ms, …)` — that engine's own build time, not the
+last build in the log, which is usually the other algorithm's).
+`--dataset-cache=2048` caps it, `--no-dataset-cache` (or `DATASET_CACHE=off` in
+the container) turns it off.
+
+The hashes were verified rather than assumed: shares submitted after a full
+`rx/0 → panthera → rx/0` round trip recompute bit-for-bit through
+`--verify-share`, and `zmrig/tests/switch.sh` asserts that in CI for both
+settings. The bug it was written to catch was real — RandomX's active
+configuration is process-wide, so a retained engine must re-assert it
+(`xmo_engine_activate`) before it hashes.
+
 ### Automatic reservation
 
 `zmrig` now reserves what the current mode needs when the pool is empty, so the

@@ -140,6 +140,55 @@ preset is simply applied. Original values are saved and restored on exit.
 Anything advertised as a large speed-up that is not huge pages, dataset mode or
 thread count should be measured before it is believed.
 
+## Switching between algorithms costs 16 seconds, unless the dataset stays mapped
+
+A pool that carries more than one coin — MoneroOcean, and every `MODE=auto`
+rig on a multi-algorithm pool — moves the rig between RandomX forks without
+asking. Every move used to rebuild the dataset: 256 MB of cache, then 2080 MB
+built with the fork's own program configuration. Measured on two vCPUs, `rx/0`
+cold: **16 491 ms** of zero hashrate, and 20 337 ms on an earlier, slower day.
+
+The dataset is one read-only mapping, so it does not have to be thrown away. The
+miner now keeps the previous one mapped by default and says so:
+
+```console
+info keeping the rx/0 dataset mapped (2336 MB) so a switch back costs nothing
+info dataset ready in 374 ms
+info switched to rx/0 without re-initialising: its dataset was still mapped
+     (9 s old, built in 18259 ms, 1 initialisation(s) saved), hash engine ready immediately
+```
+
+The line quotes the cost of *that* engine's dataset, not the last build in the
+log: on this rotation the previous build was Panthera's 348 ms, and printing
+348 ms beside a 2 GiB rebuild would be a wrong number in a log people trust.
+
+Same rig, same pool, a round trip `rx/0 → panthera → rx/0`: 374 ms to move to
+the 192 MB Panthera dataset, **0 ms** to come back. Over 135 s that was 132 855
+hashes against 337 338 in 125 s with the cache and 99 973 without it — the
+rebuild is not a one-off, it is the price of every switch.
+
+Nothing is retained that would not fit. The miner knows the container's memory
+limit (cgroup, not `free`), keeps at most two datasets, and needs the live
+dataset plus 64 MB of slack to still fit before it holds on to a third — on a
+3 GiB container a second Monero dataset is declined and the log says so rather
+than being killed by the OOM killer mid-share.
+
+```bash
+zmrig -o pool.example:3333 -u … --dataset-cache          # default: as much as fits
+zmrig … --dataset-cache=2048                             # at most 2 GiB retained
+zmrig … --no-dataset-cache                               # always rebuild
+DATASET_CACHE=off docker run …                           # the same, in the container
+```
+
+Keeping it on is only defensible if the hashes stay right, so they were checked
+rather than assumed: three shares submitted after a full round trip were fed back
+through `--verify-share` against their own seed, blob and nonce and recomputed
+**identically**. That test is now `zmrig/tests/switch.sh` in CI, in both the
+cached and the `--no-dataset-cache` case, because the bug it caught was real:
+RandomX's configuration is process-wide, so a retained engine has to re-assert
+it before it hashes. It is not a size or an offset that was wrong; it was which
+program the engine was compiled against.
+
 ## Measured
 
 2 vCPU Xeon at 2.60 GHz, 3.9 GiB RAM, 1234 × 2 MiB huge pages, algorithm `rx/0`,

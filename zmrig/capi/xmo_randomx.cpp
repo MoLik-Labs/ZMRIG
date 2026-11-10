@@ -212,6 +212,9 @@ struct xmo_engine {
     size_t huge_page_kb = 0;
     bool  full_mem      = true;
     bool  jit           = true;
+    /* `randomx_set_huge_pages_jit` is a process-wide switch, so an engine that
+     * is activated later has to be able to restore its own value. */
+    bool  huge_pages_jit = true;
     /* The mapping and the size the algorithm really needs. They differ per
      * coin: Monero's cache is 256 MiB, Panthera's is 128. */
     Mapping cache{};
@@ -231,6 +234,31 @@ struct xmo_vm {
 };
 
 
+/* Which RandomX configuration is active is process-wide state
+ * (`RandomX_CurrentConfig`), not per-engine: cache initialisation, the JIT
+ * program and even `randomx_calculate_hash_next` (it reads ProgramCount) all
+ * take it from there. One process used to have exactly one engine, so
+ * `xmo_engine_new` applying it once was enough. Now that a miner can keep the
+ * previous algorithm's dataset mapped and switch back to it, "the last engine
+ * that was created" and "the engine that is hashing" can be different
+ * configurations - and hashing Monero's dataset under Panthera's parameters
+ * produces wrong hashes rather than slow ones.
+ *
+ * So every transition that changes which engine is live calls this, with the
+ * workers stopped. It is a constant-size copy of a configuration, not a
+ * dataset build. */
+void xmo_engine_activate(xmo_engine *engine)
+{
+    if (!engine) {
+        return;
+    }
+
+    xmrig::RxAlgo::apply(engine->algorithm.id());
+    randomx_set_optimized_dataset_init(engine->algo_id == XMO_RX_XLA ? 0 : -1);
+    randomx_set_huge_pages_jit(engine->huge_pages_jit ? 1 : 0);
+}
+
+
 xmo_engine *xmo_engine_new(int algo, int flags, char *err, size_t errlen)
 {
     auto *engine = new xmo_engine();
@@ -242,9 +270,8 @@ xmo_engine *xmo_engine_new(int algo, int flags, char *err, size_t errlen)
     engine->jit      = (flags & 8) != 0;
 
     // Select the per-coin RandomX configuration before touching any sizes.
-    xmrig::RxAlgo::apply(engine->algorithm.id());
-    randomx_set_optimized_dataset_init(algo == XMO_RX_XLA ? 0 : -1);
-    randomx_set_huge_pages_jit((flags & 2) != 0);
+    engine->huge_pages_jit = (flags & 2) != 0;
+    xmo_engine_activate(engine);
 
     const int cache_flags = engine->jit ? RANDOMX_FLAG_JIT : RANDOMX_FLAG_DEFAULT;
 
@@ -401,6 +428,11 @@ int xmo_engine_seed(xmo_engine *engine, const uint8_t *seed, size_t seed_len,
         return -1;
     }
 
+    /* The dataset size, the cache parameters and the AES keys all come from
+     * the active configuration, so this cannot be left to whichever engine was
+     * created last. */
+    xmo_engine_activate(engine);
+
     randomx_init_cache(engine->cache_handle, seed, seed_len);
 
     if (!engine->dataset) {
@@ -448,6 +480,12 @@ xmo_vm *xmo_vm_new(xmo_engine *engine, int flags, uint32_t numa_node,
 
         return nullptr;
     }
+
+    /* `randomx_create_vm` compiles the JIT program against the active
+     * configuration, so a VM for the engine that is about to hash has to be
+     * created under that engine's parameters - not under those of whichever
+     * engine was built most recently. */
+    xmo_engine_activate(engine);
 
     auto *result = new xmo_vm();
     result->algorithm = engine->algorithm;

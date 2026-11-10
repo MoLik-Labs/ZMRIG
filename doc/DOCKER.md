@@ -91,6 +91,7 @@ with the same vocabulary.
 | `DONATE` | `3` | the developer fee, in percent of mining time. `0` turns it off; 1–10 are accepted |
 | `SAFE_TEMP` | `72` | the temperature `MODE=safe` never goes above, in °C |
 | `MSR` | `auto` | `on`, `off` or `auto`. `auto` lets the miner's probe decide; `safe` never writes a register |
+| `DATASET_CACHE` | `auto` | MB of a previous dataset to keep mapped so a pool that moves between RandomX forks does not pay a 16–20 s rebuild on the way back; `off` disables it, `auto` keeps whatever fits |
 | `API_PORT` | `0` | the miner's own monitoring API. `0` is off |
 | `API_HOST` | `0.0.0.0` | its bind address *when `API_PORT` is set* — a loopback bind inside a container is reachable only from inside it |
 | `API_TOKEN` | — | require `Authorization: Bearer T` on the API |
