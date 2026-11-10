@@ -57,6 +57,7 @@ const KNOWN_ENV = [
   'DONATE',
   'SAFE_TEMP',
   'MSR',
+  'DATASET_CACHE',
   'API_PORT',
   'API_HOST',
   'API_TOKEN',
@@ -380,6 +381,26 @@ function minerArgs(env, opts = {}) {
   if (mode === 'safe') args.push('--no-msr');
   else if (msr === 'on') args.push('--msr');
   else if (msr === 'off') args.push('--no-msr');
+
+  // The dataset cache is what makes a pool that moves between RandomX forks
+  // cheap: the previous dataset stays mapped, so switching back does not cost
+  // the 16-20 s a 2 GiB rebuild takes. It is on by default in the miner and the
+  // miner decides per switch whether the memory is there, so this only ever
+  // says "off" or "at most N MB".
+  const cache = envOf(env, 'DATASET_CACHE', '').toLowerCase();
+  if (cache === 'off' || cache === '0' || cache === 'no') {
+    args.push('--no-dataset-cache');
+  } else if (cache !== '' && cache !== 'auto') {
+    if (!/^\d+$/.test(cache)) {
+      return { error: `DATASET_CACHE=${envOf(env, 'DATASET_CACHE', '')} is not a size in MB; use DATASET_CACHE=0 to turn it off, or leave it unset` };
+    }
+    args.push('--dataset-cache', cache);
+    // The limit is the number that decides whether a second dataset fits, and
+    // inside a container `free` reports the host's - so say which one applies.
+    const capMb = opts.memoryLimitMb !== undefined ? opts.memoryLimitMb : cgroupMemoryMb(env);
+    notes.push(`keeping up to ${cache} MB of a previous dataset mapped across an algorithm switch` +
+      (capMb ? `; this container may use ${capMb} MB in total, and the miner keeps nothing that would not fit inside that` : ''));
+  }
 
   // The fee is passed explicitly, always. `zmrig` defaults to 3 % too; writing
   // it into the command line means `docker run ... args` shows the number a rig

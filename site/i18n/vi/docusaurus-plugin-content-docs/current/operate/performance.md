@@ -135,6 +135,54 @@ lại khi thoát.
 Bất cứ thứ gì được quảng cáo là tăng tốc lớn mà không phải huge pages, chế độ
 dataset hay số thread thì nên được đo trước khi tin.
 
+## Đổi thuật toán tốn 16 giây, trừ khi dataset vẫn được giữ trong bộ nhớ
+
+Một pool chở nhiều coin — MoneroOcean, và mọi rig `MODE=auto` trên pool đa thuật
+toán — đưa rig qua lại giữa các nhánh RandomX mà không hỏi. Mỗi lần đổi trước đây
+đều dựng lại dataset: 256 MB cache, rồi 2080 MB dựng theo cấu hình chương trình
+của nhánh đó. Đo trên hai vCPU, `rx/0` nguội: **16 491 ms** không có hash nào, và
+20 337 ms trong một ngày chậm hơn trước đó.
+
+Dataset là một mapping chỉ đọc, nên không nhất thiết phải bỏ đi. Miner giờ giữ
+dataset cũ trong bộ nhớ theo mặc định và nói rõ:
+
+```console
+info keeping the rx/0 dataset mapped (2336 MB) so a switch back costs nothing
+info dataset ready in 374 ms
+info switched to rx/0 without re-initialising: its dataset was still mapped
+     (9 s old, built in 18259 ms, 1 initialisation(s) saved), hash engine ready immediately
+```
+
+Dòng log báo giá của chính dataset đó, không phải lần dựng gần nhất: trong vòng
+đổi này lần dựng trước là của Panthera 348 ms, và in 348 ms cạnh một lần dựng
+2 GiB là con số sai trong một cuốn log người ta tin.
+
+Cùng máy, cùng pool, đi và về `rx/0 → panthera → rx/0`: 374 ms để sang dataset
+Panthera 192 MB, **0 ms** để quay lại. Trong 135 s được 132 855 hash, so với
+337 338 hash trong 125 s khi có cache và 99 973 khi không — dựng lại dataset không
+phải trả một lần, mà là giá của mỗi lần đổi.
+
+Không giữ thứ gì không vừa. Miner biết hạn mức bộ nhớ của container (cgroup chứ
+không phải `free`), giữ tối đa hai dataset, và cần dataset đang chạy cộng 64 MB dư
+vẫn còn vừa thì mới giữ thêm được — trên container 3 GiB, dataset Monero thứ hai
+bị từ chối và log nói rõ, thay vì bị OOM killer giết giữa lúc đang tính share.
+
+```bash
+zmrig -o pool.example:3333 -u … --dataset-cache          # mặc định: vừa bao nhiêu giữ bấy nhiêu
+zmrig … --dataset-cache=2048                             # giữ tối đa 2 GiB
+zmrig … --no-dataset-cache                               # luôn dựng lại
+DATASET_CACHE=off docker run …                           # như trên, trong container
+```
+
+Giữ cache chỉ đúng nếu hash vẫn đúng, nên nó đã được kiểm chứ không phải đoán:
+ba share gửi sau một vòng đổi đầy đủ được đưa lại qua `--verify-share` với đúng
+seed, blob và nonce của chúng và tính ra **giống hệt**. Bài test đó giờ là
+`zmrig/tests/switch.sh` trong CI, ở cả trường hợp có cache và `--no-dataset-cache`,
+vì lỗi nó bắt được là lỗi thật: cấu hình RandomX là toàn tiến trình, nên một
+engine được giữ lại phải khẳng định lại cấu hình trước khi hash. Không phải sai
+kích thước hay offset — mà là engine đang chạy theo chương trình của thuật toán
+khác.
+
 ## Số đo
 
 2 vCPU Xeon 2.60 GHz, 3.9 GiB RAM, 1234 × 2 MiB huge pages, thuật toán `rx/0`,

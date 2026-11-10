@@ -110,6 +110,11 @@ pub const EngineFlags = struct {
 
 pub extern fn xmo_engine_new(algo: c_int, flags: c_int, err: [*]u8, errlen: usize) ?*Engine;
 pub extern fn xmo_engine_free(engine: ?*Engine) void;
+/// Makes this engine's algorithm the process-wide RandomX configuration. The
+/// configuration is global (dataset sizes, JIT program parameters, AES keys),
+/// so an engine that was created earlier and is being switched back to has to
+/// re-assert it. Call with the workers stopped.
+pub extern fn xmo_engine_activate(engine: *Engine) void;
 pub extern fn xmo_engine_dataset_size(engine: *const Engine) usize;
 pub extern fn xmo_engine_cache_size(engine: *const Engine) usize;
 pub extern fn xmo_engine_seed(engine: *Engine, seed: [*]const u8, seed_len: usize, threads: c_int, err: [*]u8, errlen: usize) c_int;
@@ -163,6 +168,10 @@ pub const Wrapped = struct {
     pub fn destroy(self: *Wrapped) void {
         xmo_engine_free(self.handle);
         self.handle = undefined;
+    }
+
+    pub fn activate(self: *const Wrapped) void {
+        xmo_engine_activate(self.handle);
     }
 
     pub fn seed(self: *Wrapped, seed_bytes: []const u8, threads: usize) !void {

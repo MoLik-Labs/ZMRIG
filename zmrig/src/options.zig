@@ -131,6 +131,7 @@ pub const Seen = struct {
     keepalive_interval: bool = false,
     scratchpad_prefetch: bool = false,
     optimized_init: bool = false,
+    dataset_cache: bool = false,
     msr: bool = false,
     msr_restore: bool = false,
     colors: bool = false,
@@ -244,6 +245,11 @@ pub const Options = struct {
     autotune_seconds: u32 = 8,
     /// Use the AVX2 dataset initialiser (faster seeding, identical hashes).
     optimized_init: bool = true,
+    /// MB of dataset memory to keep mapped after an algorithm switch, so a
+    /// pool that moves between RandomX forks does not pay a 20 s rebuild every
+    /// time it moves back. `null` is the default: as much as the kernel can
+    /// hand out for the next engine, decided at the switch. 0 disables it.
+    dataset_cache_mb: ?u64 = null,
     /// Apply the RandomX MSR preset (prefetchers off). `auto`, the default,
     /// does it when the machine can take it: root, bare metal, and an MSR
     /// device the kernel answers on. Anything else is a logged no-op, because
@@ -401,6 +407,9 @@ pub const usage =
     \\  -t, --threads=N          number of mining threads (default: cache aware)
     \\      --mode=MODE          auto | fast (2 GiB dataset) | light (256 MiB cache)
     \\      --randomx-init=N     threads used to build the dataset (default: every CPU)
+    \\      --dataset-cache[=MB] keep the old dataset mapped across an algorithm
+    \\                           switch (default: auto - as much as fits; 0 = off)
+    \\      --no-dataset-cache   always rebuild a dataset after a switch
     \\      --no-huge-pages      disable huge pages
     \\      --auto-hugepages     reserve the pages this mode needs when running as root (default)
     \\      --no-auto-hugepages  never reserve huge pages, even when running as root
@@ -835,6 +844,19 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseEr
         } else if (std.mem.eql(u8, name, "--no-optimized-init")) {
             opts.optimized_init = false;
             opts.seen.optimized_init = true;
+        } else if (std.mem.eql(u8, name, "--dataset-cache")) {
+            const text = try needValue(args, &i, inline_value);
+            if (std.mem.eql(u8, text, "auto")) {
+                opts.dataset_cache_mb = null;
+            } else if (std.mem.eql(u8, text, "off") or std.mem.eql(u8, text, "no")) {
+                opts.dataset_cache_mb = 0;
+            } else {
+                opts.dataset_cache_mb = try parseNumber(u64, text);
+            }
+            opts.seen.dataset_cache = true;
+        } else if (std.mem.eql(u8, name, "--no-dataset-cache")) {
+            opts.dataset_cache_mb = 0;
+            opts.seen.dataset_cache = true;
         } else if (std.mem.eql(u8, name, "--idle-timeout")) {
             opts.idle_timeout = try parseNumber(u32, try needValue(args, &i, inline_value));
             opts.seen.idle_timeout = true;

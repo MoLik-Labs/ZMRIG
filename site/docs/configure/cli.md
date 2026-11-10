@@ -57,6 +57,10 @@ show it in brackets.
     --priority=N           1..5 (XMRig scale) or a raw nice value, e.g. -10
     --scratchpad-prefetch=N 0 nop, 1 prefetcht0 [default], 2 prefetchnta, 3 load
     --no-optimized-init    portable dataset initialiser
+    --dataset-cache[=MB]   keep the previous dataset mapped across an algorithm
+                           switch, so a pool that moves between RandomX forks
+                           does not pay a rebuild on the way back [auto: keep
+                           whatever fits; 0 or --no-dataset-cache turns it off]
     --autotune[=SECONDS]   measure candidate thread counts, no pool needed
     --max-temp=C           keep the hottest CPU sensor at or below C degrees
     --thermal-file=PATH    read the temperature from PATH instead of sysfs
