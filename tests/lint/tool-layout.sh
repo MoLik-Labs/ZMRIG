@@ -7,7 +7,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "$ROOT"
+cd "$ROOT" || exit 1
 
 PAGE="tool/README.md"
 fail=0
@@ -43,11 +43,10 @@ while IFS= read -r token; do
     [ -n "$token" ] || continue
     case "$token" in
         *' '*|/*) continue ;;                 # prose, or an absolute path
-        */*.*|*.*)                            # a name with a dot: only source files
+        *.*)                                  # a name with a dot: only source files
             case "$token" in *.sh|*.js|Dockerfile) ;; *) continue ;; esac
             ;;
-
-        */*|*.sh|*.js|Dockerfile) ;;
+        */*|Dockerfile) ;;                    # a bare path, or the one file with no dot
         *) continue ;;                        # a name, not a path
     esac
     if compgen -G "$token" >/dev/null 2>&1; then

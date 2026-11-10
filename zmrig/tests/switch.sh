@@ -76,16 +76,18 @@ run_case() { # name, extra miner flag, expected "no rebuild"
 
     timeout $((duration + 10)) "$BIN" \
         -o "127.0.0.1:${PORT}" -u "$WALLET" -p switch-test \
-        --algo=auto --donate-level=0 $flag > "$log" 2>&1
+        --algo=auto --donate-level=0 ${flag:+$flag} > "$log" 2>&1
     wait "$pool_pid" 2>/dev/null
 
     local inits
     inits=$(grep -c "dataset ready in" "$log" || true)
 
     if [ "$expect_cache" = 1 ]; then
-        contains "without re-initialising" "$(cat "$log")" &&
-            pass "$name: the switch back reused the mapped dataset" ||
+        if contains "without re-initialising" "$(cat "$log")"; then
+            pass "$name: the switch back reused the mapped dataset"
+        else
             fail "$name: the switch back rebuilt the dataset (cache did not fire)"
+        fi
         # The line has to name what the reuse was worth. It quotes the cost of
         # *that* engine's dataset, not the last one built: on this rotation the
         # last build is panthera's ~0.4 s, and printing that beside a 16.5 s
@@ -95,16 +97,22 @@ run_case() { # name, extra miner flag, expected "no rebuild"
         else
             fail "$name: the reuse line does not report the saved build time"
         fi
-        [ "$inits" = 2 ] &&
-            pass "$name: two initialisations in total (rx/0, then panthera)" ||
+        if [ "$inits" = 2 ]; then
+            pass "$name: two initialisations in total (rx/0, then panthera)"
+        else
             fail "$name: expected 2 initialisations, saw $inits"
+        fi
     else
-        contains "without re-initialising" "$(cat "$log")" &&
-            fail "$name: --no-dataset-cache still reused an engine" ||
+        if contains "without re-initialising" "$(cat "$log")"; then
+            fail "$name: --no-dataset-cache still reused an engine"
+        else
             pass "$name: --no-dataset-cache rebuilds, as it must"
-        [ "$inits" = 3 ] &&
-            pass "$name: three initialisations (rx/0, panthera, rx/0 again)" ||
+        fi
+        if [ "$inits" = 3 ]; then
+            pass "$name: three initialisations (rx/0, panthera, rx/0 again)"
+        else
             fail "$name: expected 3 initialisations, saw $inits"
+        fi
     fi
 
     # The part that would have caught a wrong-hash engine.
