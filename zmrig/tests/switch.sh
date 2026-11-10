@@ -65,8 +65,15 @@ contains() { case "$2" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 run_case() { # name, extra miner flag, expected "no rebuild"
     local name="$1" flag="$2" expect_cache="$3"
     local shares="$WORK/$name.jsonl" log="$WORK/$name.log"
-    local away=18 back=40 duration=55
-    [ "$QUICK" = 1 ] && { away=14 back=28 duration=40; }
+    local away=18 back=36
+    [ "$QUICK" = 1 ] && { away=14 back=26; }
+    # The window after the switch back has to outlast a rebuild, or the
+    # `--no-dataset-cache` case stops hashing before it can submit the share
+    # that proves it is hashing *correctly* - and a test that quietly skips its
+    # own second half is worse than one that fails. 18.3 s on two cores, 40 s
+    # of margin.
+    local duration=$((back + 45))
+    [ "$QUICK" = 1 ] && duration=$((back + 40))
     : > "$shares"
 
     python3 "$POOL" --port "$PORT" --away "$away" --back "$back" \
@@ -74,9 +81,18 @@ run_case() { # name, extra miner flag, expected "no rebuild"
     local pool_pid=$!
     sleep 1
 
-    timeout $((duration + 10)) "$BIN" \
+    # --kill-after: the miner handles SIGTERM by stopping the workers, and a
+    # worker inside a 2 GiB initialisation answers that signal late. Waiting for
+    # it politely is how a CI job sits at "in progress" for twenty minutes.
+    timeout --kill-after=10 $((duration + 10)) "$BIN" \
         -o "127.0.0.1:${PORT}" -u "$WALLET" -p switch-test \
         --algo=auto --donate-level=0 ${flag:+$flag} > "$log" 2>&1
+
+    # The pool gives up on its own, but a test must not depend on that: if the
+    # miner never connected it is still waiting for one.
+    if kill -0 "$pool_pid" 2>/dev/null; then
+        kill "$pool_pid" 2>/dev/null
+    fi
     wait "$pool_pid" 2>/dev/null
 
     local inits
@@ -115,9 +131,11 @@ run_case() { # name, extra miner flag, expected "no rebuild"
         fi
     fi
 
-    # The part that would have caught a wrong-hash engine.
+    # The part that would have caught a wrong-hash engine. Difficulty is 1, so
+    # every hash is a share and an empty file means the rig was not hashing at
+    # all after the switch - a failure, not a reason to skip.
     if [ ! -s "$shares" ]; then
-        say "$name: no share was submitted after the switch (difficulty or timing)"
+        fail "$name: nothing was submitted after the switch back ($(grep -c 'dataset ready in' "$log" || true) initialisations, $(sed -n 's/.*\(total hashes [0-9]*\).*/\1/p' "$log" | tail -1))"
         return
     fi
 
@@ -129,7 +147,7 @@ run_case() { # name, extra miner flag, expected "no rebuild"
     want=$(printf '%s' "$line" | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"])')
 
     got=$(printf '{"seed":"%s","blob":"%s","nonce":"%s"}\n' "$seed" "$blob" "$nonce" |
-        "$BIN" --verify-share 2>/dev/null |
+        timeout --kill-after=10 300 "$BIN" --verify-share 2>/dev/null |
         sed -n 's/.*"hash":"\([0-9a-f]*\)".*/\1/p' | head -1)
 
     if [ -z "$got" ]; then
@@ -140,6 +158,16 @@ run_case() { # name, extra miner flag, expected "no rebuild"
         fail "$name: share hash mismatch after the switch (submitted ${want:0:16}..., recomputed ${got:0:16}...)"
     fi
 }
+
+# A pool nothing connects to must not become a hung suite. Two seconds, no rig,
+# non-zero exit - that is the whole contract, and it is what makes the rest of
+# this file safe to put in CI.
+if timeout 20 python3 "$POOL" --port "$((PORT + 7))" --duration 1 --connect-grace 1 \
+        --shares "$WORK/none.jsonl" > "$WORK/preflight.log" 2>&1; then
+    fail "the pool exits 0 when no rig ever connects"
+else
+    pass "the pool gives up instead of waiting for a rig that is not coming"
+fi
 
 say "first: the cache on"
 run_case "cache" "" 1

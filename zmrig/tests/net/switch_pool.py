@@ -17,6 +17,12 @@ So this pool also records the shares it is sent after the switch, in the shape
 hashes are right rather than fast.
 
   python3 zmrig/tests/net/switch_pool.py --port 4712 --shares /tmp/shares.jsonl
+
+Nothing in here is allowed to block forever. A test that runs in CI and waits
+for a rig that never arrives is worse than a failing test: the job sits at
+"in progress" for as long as the runner allows, and the log that would explain
+it is the one nobody gets to read. So the listener has a deadline, a silent
+connection has a deadline, and both of them end the process.
 """
 
 import argparse
@@ -26,6 +32,9 @@ import struct
 import sys
 import threading
 import time
+
+TICK = 0.5            # how often a wait is allowed to look at the clock again
+CONNECT_GRACE = 10.0  # a rig that is not here by now is not coming
 
 SEND_LOCK = threading.Lock()
 T0 = time.time()
@@ -80,8 +89,20 @@ class Pool:
         return params
 
     def readline(self):
+        """One line, or None at the end of the stream - or at the deadline.
+
+        The socket has a timeout so a rig that is hashing and not submitting
+        (a slow runner, a difficulty that is too high) cannot hold the pool
+        past `--duration`: the check below is the only reason the test has a
+        bounded running time at all.
+        """
         while b"\n" not in self.buf:
-            chunk = self.conn.recv(65536)
+            try:
+                chunk = self.conn.recv(65536)
+            except socket.timeout:
+                if time.time() >= self.deadline:
+                    return None
+                continue
             if not chunk:
                 return None
             self.buf += chunk
@@ -91,6 +112,7 @@ class Pool:
 
     def serve(self):
         self.conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        self.conn.settimeout(TICK)
         self.buf = b""
 
         login = json.loads(self.readline())
@@ -120,9 +142,9 @@ class Pool:
         later(self.args.away, away)
         later(self.args.back, back)
 
-        deadline = time.time() + self.args.duration
+        self.deadline = time.time() + self.args.duration
         recorded = 0
-        while time.time() < deadline:
+        while time.time() < self.deadline:
             line = self.readline()
             if line is None:
                 break
@@ -167,15 +189,28 @@ def main():
     # Difficulty 1: every hash is a share, so the test does not depend on luck.
     parser.add_argument("--target", default="f753e3a5")
     parser.add_argument("--shares", default="/tmp/zmrig-switch-shares.jsonl")
+    # Only the self-test shortens this: it exists to prove the pool gives up.
+    parser.add_argument("--connect-grace", type=float, default=CONNECT_GRACE)
     args = parser.parse_args()
 
     server = socket.socket()
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind(("127.0.0.1", args.port))
     server.listen(2)
+    server.settimeout(TICK)
     log("listening %d" % args.port)
 
-    conn, _ = server.accept()
+    # A rig that never connects used to leave this process in accept() forever,
+    # and the suite waited on it. Give up out loud instead.
+    give_up = time.time() + args.duration + args.connect_grace
+    conn = None
+    while conn is None:
+        try:
+            conn, _ = server.accept()
+        except socket.timeout:
+            if time.time() >= give_up:
+                log("no rig connected in %.0f s, giving up" % (args.duration + args.connect_grace))
+                sys.exit(2)
     pool = Pool(args)
     pool.conn = conn
     try:
