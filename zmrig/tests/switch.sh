@@ -54,8 +54,18 @@ QUICK=0
 
 FAILED=0
 pass() { printf ' PASS %s\n' "$*"; }
-fail() { printf ' FAIL %s\n' "$*"; FAILED=1; }
+fail() { printf ' FAIL %s\n' "$*"; FAILED=1; action_error "$*"; }
 say()  { printf ' * %s\n' "$*"; }
+
+# GitHub renders `::error::` as an annotation, and an annotation is the only
+# part of a job's output that can be read back through the API when the log
+# blob is unreachable (it is stored behind a signed URL on a host that is not
+# always reachable). So a failure says what happened here, not only "exit 1".
+action_error() {
+    [ -n "${GITHUB_ACTIONS:-}" ] || return 0
+    printf '::error::%s\n' "${1//$'\n'/%0A}"
+}
+
 
 [ -x "$BIN" ] || { echo "missing $BIN - run ./zmrig/build.sh first" >&2; exit 2; }
 command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 2; }
@@ -95,7 +105,7 @@ run_case() { # name, extra miner flag, expected "no rebuild"
     fi
     wait "$pool_pid" 2>/dev/null
 
-    local inits
+    local inits before="$FAILED"
     inits=$(grep -c "dataset ready in" "$log" || true)
 
     if [ "$expect_cache" = 1 ]; then
@@ -156,6 +166,14 @@ run_case() { # name, extra miner flag, expected "no rebuild"
         pass "$name: a share hashed after the switch recomputes to the same digest"
     else
         fail "$name: share hash mismatch after the switch (submitted ${want:0:16}..., recomputed ${got:0:16}...)"
+    fi
+
+    if [ "$FAILED" != "$before" ]; then
+        say "the miner's own log, last 15 lines:"
+        tail -15 "$log" | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^/    /'
+        say "the pool's, last 5:"
+        tail -5 "$WORK/$name.pool" | sed 's/^/    /'
+        action_error "$name failed; miner log follows\n$(tail -15 "$log" | sed 's/\x1b\[[0-9;]*m//g')"
     fi
 }
 
