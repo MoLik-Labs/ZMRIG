@@ -75,7 +75,21 @@ jobs:
           sudo apt-get install -y --no-install-recommends build-essential python3-pip
           # zig 0.13, and only 0.13: the runner's own zig is newer and does not
           # compile this code. scripts/find-zig.sh decides, and says which.
-          python3 -m pip install --break-system-packages --quiet ziglang==0.13.0
+          #
+          # Three attempts: this step failed with exit 100 in one run and took
+          # the whole job with it, and the job below it is the only place the
+          # Zig suite ever runs. A download that fails twice is a network, not a
+          # reason to report a red build to somebody who changed a document.
+          for attempt in 1 2 3; do
+            if python3 -m pip install --break-system-packages --quiet ziglang==0.13.0; then
+              break
+            fi
+            echo "pip attempt ${attempt} failed; retrying in $((attempt * 10)) s"
+            sleep $((attempt * 10))
+          done
+          # Prove the toolchain is there now, so a failure says "the download"
+          # instead of surfacing as a compile error in a file nobody touched.
+          python3 -m ziglang version
 
       - name: Build
         run: ./zmrig/build.sh --jobs "$(nproc)"
