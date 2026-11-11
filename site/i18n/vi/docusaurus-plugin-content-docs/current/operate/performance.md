@@ -187,8 +187,8 @@ khác.
 
 Dòng speed trả lời "nhanh đến đâu", không bao giờ trả lời "bao nhiêu phần thời
 gian", và với tiền thì đó là hai con số khác nhau. Một rig hash 1 000 H/s trong
-60 % thời gian của ngày kiếm được 60 % so với chính nó chạy 100 % — mà log thì
-trông hoàn hảo suốt thời gian đó.
+60 % số giây của một ngày thì kiếm được 60 % so với chính nó chạy đủ 100 % — mà
+log thì trông hoàn hảo suốt cả ngày.
 
 Miner lấy mẫu mỗi giây một lần (thread monitor vốn đã đọc bộ đếm hash), và nói ra
 khi tiến trình dừng:
