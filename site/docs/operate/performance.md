@@ -189,6 +189,57 @@ RandomX's configuration is process-wide, so a retained engine has to re-assert
 it before it hashes. It is not a size or an offset that was wrong; it was which
 program the engine was compiled against.
 
+## How much of the hour was actual hashing
+
+The speed line answers "how fast", never "how much of the time", and those are
+different numbers on a payout. A rig that hashes at 1 000 H/s for 60 % of the
+day earns 60 % of what the same rig earns at 100 % — and its log looks perfect
+the whole time.
+
+The miner samples that once a second (the monitor thread already reads the hash
+counter), and says what it saw when the process stops:
+
+```console
+$ zmrig -o pool.example:3333 -u … 
+info hashing 29 s of 44 s (65.9 %): 16 s building a dataset
+```
+
+Four categories, and only one of them is a fault:
+
+| Category | Meaning | What it costs |
+| --- | --- | --- |
+| hashing | the counter moved during that second | nothing |
+| building a dataset | `randomx_init_dataset` was running | 14–20 s for Monero, 0.3 s for Panthera |
+| throttled | the thermal governor parked a thread (`--max-temp`) | a decision, not a fault |
+| no job | nothing was hashing and nothing explains it | everything it covers |
+
+If the last minute was mostly the fourth category, there is a warning rather
+than a percentage nobody reads:
+
+```console
+warn hashing 41 % of the last minute: 22 s with no job (the pool is gone, or a reconnect is in flight)
+```
+
+### Measured, both directions
+
+An instrument that is only ever quiet is an instrument nobody should trust, so
+it was checked against two hostile pools on the same 2 vCPU host:
+
+| Pool | Behaviour | Result |
+| --- | --- | --- |
+| drops the socket every 5 s | 6–7 reconnects in 45 s | **0 s** lost: the workers keep hashing the last job while the main thread reconnects |
+| accepts the connection, never replies | no job, ever | `hashing 0 s of 24 s`, and the exit line names the reason |
+
+That first row is the design (a pool that blinks must not cost a minute of
+hashing), and it had never been measured before. `zmrig/tests/duty.sh` asserts
+both rows on every push.
+
+The same measurement answers the question "is the Zig engine slower through a
+pool than in `--bench`": alternating runs of each on an idle host give
+**934–970 H/s** in `--bench` and **928–961 H/s** through a pool, a difference
+inside the run-to-run spread of this machine (the same binary produces
+1 008–1 103 H/s on a quiet day). No overhead to chase there.
+
 ## Measured
 
 2 vCPU Xeon at 2.60 GHz, 3.9 GiB RAM, 1234 × 2 MiB huge pages, algorithm `rx/0`,

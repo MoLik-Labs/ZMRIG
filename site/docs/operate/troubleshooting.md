@@ -21,6 +21,8 @@ image: https://molik-labs.github.io/ZMRIG/img/og-en.png
 | API returns 401 | an access token is configured | send `Authorization: Bearer TOKEN` |
 | API unreachable from another machine | it binds `127.0.0.1` by design | do not expose it; use an SSH tunnel |
 | `--tls-ca` has no effect | the file is in `/tmp` and the unit uses `PrivateTmp` | put it at `/etc/zmrig/tls-ca.pem` |
+| `hashing 41 % of the last minute: 35 s with no job` | the pool is gone, or a reconnect is in flight | check the `connecting to` lines above it; the shares keep coming from the last job only until it is answered |
+| the exit line says `55 % of 29 s: 14 s building a dataset` | normal on a short run: the first dataset is 14–20 s of the clock | nothing; on a long run that fraction is a few percent, and `--dataset-cache` removes it after an algorithm switch |
 
 ## Bugs that were fixed, so you do not have to meet them
 

@@ -108,6 +108,12 @@ jobs:
       - name: Algorithm switch, and the hashes it produces
         run: ./zmrig/tests/switch.sh --quick
 
+      # How much of the run was actually hashing, and whether the miner can
+      # tell a reconnect (which costs nothing) from a pool that has gone away
+      # (which costs everything).
+      - name: The duty cycle, measured against two hostile pools
+        run: ./zmrig/tests/duty.sh --quick
+
       # The safe mode, end to end: the governor is driven through
       # --thermal-file, because a test that needed a genuinely hot CPU would
       # either never run or cost somebody a machine.
