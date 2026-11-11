@@ -33,14 +33,23 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential \
-            cmake \
-            git \
-            libhwloc-dev \
-            libssl-dev \
-            libuv1-dev
+          # `Acquire::Retries` makes apt retry a flaky mirror itself, which is
+          # the failure this step has been dying of (exit 100, ten minutes,
+          # "Install build dependencies" - on both architectures, on BETA, with
+          # no compiler having run). Three passes after that, and then a check
+          # that names the missing package instead of leaving it to cmake.
+          sudo apt-get -o Acquire::Retries=5 update || echo "apt update failed"
+          for attempt in 1 2 3; do
+            if sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+                build-essential cmake git libhwloc-dev libssl-dev libuv1-dev; then
+              break
+            fi
+            echo "apt install attempt ${attempt} failed; retrying in $((attempt * 15)) s"
+            sleep $((attempt * 15))
+          done
+          for package in cmake g++ ; do
+            command -v "$package" >/dev/null 2>&1 || { echo "missing after apt: $package"; exit 1; }
+          done
 
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
