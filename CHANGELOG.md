@@ -202,6 +202,19 @@ the mining loop reads that instead of guessing: a hand-over now says
 `connection closed on purpose: the developer fee is due, reconnecting to pay it`
 at `info`, a shutdown says nothing, and the warning is left for the pool.
 
+### The run said "exit code 1" and nothing else
+
+The share test above went red on CI with a log that read, in full, `Process
+completed with exit code 1.` GitHub serves the log of a job from a signed URL on
+a storage host that was not answering, so there was nothing to read - not which
+case failed, not what the miner printed. Nothing was wrong with the test: it
+passes in 190 s on a machine that has a compiler warm.
+
+Annotations are served from the API instead of that blob, so the three pool tests
+(`switch.sh`, `duty.sh`, `targets.sh`) now emit one on failure, and the switch
+test puts the miner's own last fifteen lines - or the pool's - inside it. A red
+run is going to say which of the eight cases it was.
+
 ## The tool has one index, and the container has a memory floor
 
 Three changes, all of them about the same failure: a rig that looks fine and
