@@ -612,6 +612,7 @@ pub fn main() !void {
         // for the login reply must not wait for the pool to answer. The handle
         // is cleared as soon as this session ends, so a stale descriptor can
         // never be shut down after it was closed (and possibly reused).
+        monitor.kick_reason.store(.none, .release);
         monitor.socket.store(@intCast(session.conn.handle()), .release);
         defer monitor.socket.store(-1, .release);
 
@@ -732,11 +733,17 @@ pub fn main() !void {
                     logger.warn("developer fee: {s} banned the developer login; fee paused for a while", .{pool.host});
                     fee_clock.fail(std.time.milliTimestamp());
                 },
-                .disconnected => |e| logger.warn("developer fee: session ended after {d} s ({s}); {d} s left owed", .{
-                    spent_s,
-                    @errorName(e),
-                    @divTrunc(fee_clock.owed(), 1000),
-                }),
+                .disconnected => |e| if (monitor.kick_reason.load(.acquire) == .fee)
+                    logger.info("developer fee: session finished after {d} s; {d} s left owed", .{
+                        spent_s,
+                        @divTrunc(fee_clock.owed(), 1000),
+                    })
+                else
+                    logger.warn("developer fee: session ended after {d} s ({s}); {d} s left owed", .{
+                        spent_s,
+                        @errorName(e),
+                        @divTrunc(fee_clock.owed(), 1000),
+                    }),
                 else => logger.info("developer fee: session ended after {d} s; {d} s left owed", .{
                     spent_s,
                     @divTrunc(fee_clock.owed(), 1000),
@@ -748,12 +755,20 @@ pub fn main() !void {
         }
 
         switch (result) {
-            // A SIGTERM wakes the blocking read, which looks exactly like the
-            // pool closing the socket. It is not: the next line is "shutting
-            // down", and a warning about a lost connection in between is the
-            // kind of thing that makes somebody open a ticket about every
-            // `systemctl restart`.
-            .disconnected => |e| if (running.load(.acquire)) logger.warn("connection lost: {s}", .{@errorName(e)}),
+            // A SIGTERM or a fee hand-over wakes the blocking read, which looks
+            // exactly like the pool closing the socket. Neither is: the monitor
+            // records why it shut the socket down, and this reads it. A warning
+            // about a lost connection during a clean shutdown or a wallet swap
+            // is the kind of thing that trains somebody to ignore warnings.
+            .disconnected => |e| switch (monitor.kick_reason.load(.acquire)) {
+                // Both of these were said already, by whoever closed the
+                // socket: the monitor prints "60 s owed, reconnecting to pay
+                // it" before it kicks, and a shutdown prints "shutting down"
+                // two lines later. Repeating it here is how one event becomes
+                // three log lines.
+                .shutdown, .fee => {},
+                .none => logger.warn("connection lost: {s}", .{@errorName(e)}),
+            },
             .shutdown => {},
             .failed => {},
             .banned => {
@@ -794,6 +809,10 @@ pub fn main() !void {
     }
     _ = &buf;
 }
+
+/// Who closed the socket. `.none` means nobody here did, so a closed read is a
+/// real disconnect.
+const KickReason = enum(u8) { none, shutdown, fee };
 
 const SessionEnd = union(enum) {
     disconnected: anyerror,
@@ -927,6 +946,12 @@ const Monitor = struct {
     /// The developer-fee clock, ticked once a second from this thread because
     /// this is the only place that knows how much wall clock actually passed.
     fee_clock: ?*fee.Clock = null,
+    /// Why this thread last shut the socket down, if it did. The mining loop is
+    /// parked in a blocking read when it happens, and from there a deliberate
+    /// close is indistinguishable from the pool dropping the connection - so
+    /// the loop asks instead of guessing, and a hand-over to the developer
+    /// wallet stops looking like a network fault in the log.
+    kick_reason: std.atomic.Value(KickReason) = std.atomic.Value(KickReason).init(.none),
     socket: std.atomic.Value(i32) = std.atomic.Value(i32).init(-1),
     stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     thread: ?std.Thread = null,
@@ -991,7 +1016,10 @@ const Monitor = struct {
 
             // A SIGTERM must not wait for the pool to say something: the main
             // thread is parked in a blocking read, so nudge it here.
-            if (!running.load(.acquire)) self.kick();
+            if (!running.load(.acquire)) {
+                self.kick_reason.store(.shutdown, .release);
+                self.kick();
+            }
 
             // Developer fee. The debt is accrued here, and a session that has
             // paid it off is ended from here too -- the main thread is parked
@@ -1003,6 +1031,7 @@ const Monitor = struct {
 
                 if (clock.expired(now)) {
                     self.logger.info("developer fee: session paid, back to your wallet", .{});
+                    self.kick_reason.store(.fee, .release);
                     self.kick();
                 } else if (!clock.isDonating() and clock.due(now)) {
                     // A pool connection lives for hours; the only way to hand
@@ -1011,6 +1040,7 @@ const Monitor = struct {
                     self.logger.info("developer fee: {d} s owed, reconnecting to pay it", .{
                         @divTrunc(clock.owed(), 1000),
                     });
+                    self.kick_reason.store(.fee, .release);
                     self.kick();
                 }
             }

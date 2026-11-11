@@ -114,6 +114,12 @@ jobs:
       - name: The duty cycle, measured against two hostile pools
         run: ./zmrig/tests/duty.sh --quick
 
+      # Income per hash, not hashes per second: does the target comparison
+      # submit hashes/difficulty shares, once at an easy target and once at a
+      # hard one?
+      - name: Shares per hash, at two difficulties
+        run: ./zmrig/tests/targets.sh --quick
+
       # The safe mode, end to end: the governor is driven through
       # --thermal-file, because a test that needed a genuinely hot CPU would
       # either never run or cost somebody a machine.
