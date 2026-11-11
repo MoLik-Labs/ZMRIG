@@ -748,7 +748,12 @@ pub fn main() !void {
         }
 
         switch (result) {
-            .disconnected => |e| logger.warn("connection lost: {s}", .{@errorName(e)}),
+            // A SIGTERM wakes the blocking read, which looks exactly like the
+            // pool closing the socket. It is not: the next line is "shutting
+            // down", and a warning about a lost connection in between is the
+            // kind of thing that makes somebody open a ticket about every
+            // `systemctl restart`.
+            .disconnected => |e| if (running.load(.acquire)) logger.warn("connection lost: {s}", .{@errorName(e)}),
             .shutdown => {},
             .failed => {},
             .banned => {
@@ -779,6 +784,14 @@ pub fn main() !void {
         miner.submitter.rejected.load(.monotonic),
         miner.submitter.failed.load(.monotonic),
     });
+
+    // "hashing 0 s of 0 s" is a line about nothing: a run that lasted less than
+    // five seconds (a `--check`, a bad option, a crash) has no duty cycle worth
+    // reporting and the totals above already say everything.
+    if (miner.duty.total_ms >= 5000) {
+        var duty_buf: [256]u8 = undefined;
+        logger.info("{s}", .{miner.describeDuty(&duty_buf)});
+    }
     _ = &buf;
 }
 
@@ -887,6 +900,8 @@ const Monitor = struct {
     report_started_ms: i64 = 0,
     last_report_write: i64 = 0,
     report_error_logged: bool = false,
+    /// `warnIfIdle` is a warning, not a heartbeat: once a minute is enough.
+    last_idle_warn: i64 = 0,
     print_interval: i64,
     idle_timeout_ms: i64 = 300_000,
     keepalive_ms: i64 = 60_000,
@@ -934,6 +949,7 @@ const Monitor = struct {
 
             const total = self.miner.shared.totalHashes();
             self.miner.stats.add(total);
+            self.miner.tickDuty(std.time.milliTimestamp());
 
             const now = std.time.milliTimestamp();
             if (first_hash_ms == 0 and total > 0) first_hash_ms = now;
@@ -962,6 +978,7 @@ const Monitor = struct {
                 self.miner.shared.totalHashes(),
             );
 
+            self.warnIfIdle(now);
             self.checkHealth(now);
             self.checkThermal(now);
 
@@ -1137,6 +1154,40 @@ const Monitor = struct {
 
     /// Writes `ZMRIG1.<...>` to the report file. A failure is logged once and
     /// never stops the miner: a read-only /run must not kill a good session.
+    /// A rig that hashes at 1 000 H/s for 60 % of the hour earns 60 % of what
+    /// the speed line suggests, and nothing in that line says so. Once a minute
+    /// at most, when the last minute was mostly not hashing, say how much and
+    /// where it went - naming the reason only when this thread knows it.
+    fn warnIfIdle(self: *Monitor, now_ms: i64) void {
+        // Ten samples is the shortest window where a percentage means anything,
+        // and a rig that has not hashed at all yet is warming up: the first
+        // dataset build is expected, already logged, and not this warning.
+        if (self.miner.duty.next < 30) return;
+        if (self.miner.duty.hashing_ms == 0) return;
+        if (self.miner.duty.recent(60) >= 0.85) return;
+        if (now_ms - self.last_idle_warn < 60_000) return;
+
+        self.last_idle_warn = now_ms;
+
+        const percent = self.miner.duty.recent(60) * 100.0;
+        const idle_s = self.miner.duty.recentIdle(60);
+        const throttled_s = self.miner.duty.recentThrottled(60);
+
+        // A dataset build is not a fault and it is already logged, with its
+        // own duration ("dataset ready in 14564 ms"). The warning exists for
+        // time nobody chose: a pool that is gone, or a governor holding
+        // threads back.
+        if (idle_s == 0 and throttled_s == 0) return;
+
+        if (idle_s > 0) {
+            self.logger.warn("hashing {d:.0} % of the last minute: {d} s with no job (the pool is gone, or a reconnect is in flight)", .{ percent, idle_s });
+        } else if (throttled_s > 0) {
+            self.logger.info("hashing {d:.0} % of the last minute: {d} s throttled at --max-temp", .{ percent, throttled_s });
+        } else {
+            self.logger.warn("hashing {d:.0} % of the last minute", .{percent});
+        }
+    }
+
     fn writeReport(self: *Monitor, path: []const u8, now_ms: i64) void {
         if (self.report_file == null) return;
 

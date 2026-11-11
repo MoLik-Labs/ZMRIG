@@ -60,6 +60,81 @@ the cached and the `--no-dataset-cache` configuration, and two unit tests pin
 the retention rule (`retentionFits`) that used to double-count the retired
 dataset.
 
+## The rig was hashing, but only sometimes
+
+Every number this project publishes is a rate: hashes per second. Not one of them
+answers the question that decides the payout — how many of the last hour's
+seconds were spent hashing at all. A rig that manages 1 000 H/s for 60 % of the
+day earns 60 % of what it should, and `speed 10s/60s/15m 1000 …` reads exactly
+the same on both days.
+
+So the miner now measures the clock it lives on. The monitor thread was already
+reading the hash counter once a second to build those rates; it now also asks
+whether the counter moved, and when it did not, what the engine and the governor
+were doing at that moment. Four categories, sampled per second, kept for two
+minutes:
+
+* **hashing** — the counter moved.
+* **building a dataset** — `randomx_init_dataset` was running: 14–20 s for
+  Monero's 2 GiB, measured on two vCPUs, and the price of every seed change.
+* **throttled** — `--max-temp` parked a thread. A decision, not a fault, and it
+  is reported as one rather than as "idle".
+* **no job** — nothing was hashing and nothing explains it: the pool is gone, or
+  a reconnect is in flight.
+
+The session ends with the sum:
+
+```console
+info hashing 29 s of 44 s (65.9 %): 16 s building a dataset
+```
+
+and a minute that was mostly the fourth category gets a warning instead of a
+silent percentage:
+
+```console
+warn hashing 41 % of the last minute: 22 s with no job (the pool is gone, or a reconnect is in flight)
+```
+
+The warning fires at most once a minute, only after the rig has hashed at least
+once, and never for a dataset build — that is expected, already logged with its
+own duration, and a warning about it would be noise on every start.
+
+### What the instrument found
+
+Used on two hostile pools on the same 2 vCPU host:
+
+| Pool | Behaviour | Result |
+| --- | --- | --- |
+| drops the socket every 5 s | 6–7 reconnects in 45 s | **0 s** lost — the workers keep hashing the last job while the main thread reconnects |
+| accepts the connection, never replies | no job, ever | `hashing 0 s of 24 s`, and the exit line names the reason |
+
+The first row is the design and had never been measured; `zmrig/tests/duty.sh`
+now asserts both, in 70 s, on every push.
+
+Two smaller bugs fell out of running it:
+
+* Every `systemctl stop` printed `warning connection lost: ConnectionClosed`
+  before `shutting down`. A SIGTERM wakes the blocking read, which is
+  indistinguishable from the pool closing the socket — except that the process
+  knows it is stopping. A warning about a lost connection during a clean shutdown
+  is how a log teaches somebody to ignore warnings.
+* The first version of the idle warning fired during the startup dataset build
+  ("hashing 0 % of the last minute"), which is the one time it is guaranteed to
+  be useless.
+
+### And two measurements that closed a question
+
+`--no-optimized-init` (the portable AVX2 dataset initialiser) was measured again
+for both halves of the claim: build time 19.9–20.9 s portable against
+20.1–20.9 s optimised, hashrate 950–962 against 905–967 H/s. Inside noise, both
+ways, so the default stays and the existing documentation is right.
+
+The other one was whether mining through a pool is slower than `--bench`, which
+an earlier run had suggested by 7 %. Alternating runs on the same host:
+**934–970 H/s** in `--bench`, **928–961 H/s** through a pool. That is the
+run-to-run spread of this machine, not an overhead — there is nothing in the pool
+path worth optimising.
+
 ## The tool has one index, and the container has a memory floor
 
 Three changes, all of them about the same failure: a rig that looks fine and

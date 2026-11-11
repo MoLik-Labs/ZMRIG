@@ -333,6 +333,15 @@ pub const Engine = struct {
     /// the log can say what the cache was worth instead of claiming a win.
     cache_saved_ms: u64 = 0,
     last_seed_ms: u64 = 0,
+    /// Every initialisation this process has done, in ms. The monitor reads it
+    /// once a second to tell "the rig is idle" from "the rig is building a
+    /// dataset", which is the difference between a fault and the cost of a
+    /// seed change.
+    total_init_ms: u64 = 0,
+    /// True while `seedNow` is inside the engine. Written from the mining
+    /// thread and read from the monitor thread, so it is atomic; the value in
+    /// between is a whole second of attribution either way.
+    building: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     const Self = @This();
 
@@ -635,11 +644,15 @@ pub const Engine = struct {
             const started = nowMs();
 
             self.logger.info("initialising the dataset ({d} threads)", .{threads});
+            self.building.store(true, .release);
+            defer self.building.store(false, .release);
+
             try wrapped.seed(&seed_value, threads);
 
             self.seed = seed_value;
             self.has_seed = true;
             self.last_seed_ms = @intCast(@max(nowMs() - started, 0));
+            self.total_init_ms += self.last_seed_ms;
 
             self.logger.info("dataset ready in {d} ms", .{nowMs() - started});
 
@@ -764,6 +777,137 @@ pub const Stats = struct {
     }
 };
 
+/// Where the wall clock went.
+///
+/// The hashrate line answers "how fast am I hashing" and says nothing about
+/// "how much of the last hour was I hashing at all". Those are different
+/// numbers, and the second one decides the payout: a rig that hashes at
+/// 1 000 H/s for 60 % of the day earns 60 % of what the same rig earns at
+/// 100 %, and a healthy-looking speed line hides it perfectly.
+///
+/// The monitor thread already samples the hash counter once a second. This adds
+/// one question to that sample - did the number move, and if not, why not - and
+/// keeps the answer for both the exit summary and the "this rig is only hashing
+/// half the time" warning.
+pub const Duty = struct {
+    /// One sample per second, most recent last. 120 s covers the minute a
+    /// person looks at, with enough margin to survive a couple of missed ticks.
+    const window = 120;
+
+    pub const Sample = enum(u2) {
+        /// Nothing was hashing and nothing explains it: no job yet, the pool is
+        /// gone, a reconnect is in flight.
+        idle = 0,
+        hashing = 1,
+        /// The engine was building a dataset: 16.5 s for Monero, measured, and
+        /// unavoidable on a seed change.
+        building = 2,
+        /// The thermal governor had parked a thread on purpose.
+        throttled = 3,
+    };
+
+    flags: [window]Sample = [_]Sample{.idle} ** window,
+    next: usize = 0,
+
+    last_ms: i64 = 0,
+    last_hashes: u64 = 0,
+
+    /// Wall clock since the first tick, and the part of it that produced hashes.
+    total_ms: i64 = 0,
+    hashing_ms: i64 = 0,
+    /// Parked by the governor. A decision, not a fault, and reported as its own
+    /// thing rather than as time the rig was idle.
+    throttled_ms: i64 = 0,
+
+    pub fn init(now_ms: i64) Duty {
+        return .{ .last_ms = now_ms };
+    }
+
+    /// One second of evidence. `elapsed` is real time, not the nominal second:
+    /// a monitor thread starved for 3 s (a fork, a stall) must not turn into
+    /// three seconds of hashing it did not do.
+    ///
+    /// `building` and `parked` come from the sampler, which knows what the
+    /// engine and the governor were doing at that instant. They only matter
+    /// when nothing hashed.
+    pub fn tick(self: *Duty, now_ms: i64, hashes: u64, building: bool, parked: bool) void {
+        if (self.last_ms == 0) {
+            self.last_ms = now_ms;
+            self.last_hashes = hashes;
+
+            return;
+        }
+
+        const elapsed = now_ms - self.last_ms;
+        if (elapsed <= 0) return;
+
+        const sample: Sample = if (hashes > self.last_hashes)
+            .hashing
+        else if (building)
+            .building
+        else if (parked)
+            .throttled
+        else
+            .idle;
+
+        self.total_ms += elapsed;
+        switch (sample) {
+            .hashing => self.hashing_ms += elapsed,
+            .throttled => self.throttled_ms += elapsed,
+            else => {},
+        }
+
+        self.flags[self.next % window] = sample;
+        self.next += 1;
+
+        self.last_ms = now_ms;
+        self.last_hashes = hashes;
+    }
+
+    fn countRecent(self: *const Duty, seconds: usize, sample: Sample) usize {
+        const have = @min(@min(seconds, window), self.next);
+        if (have == 0) return 0;
+
+        var n: usize = 0;
+        var i: usize = 0;
+        while (i < have) : (i += 1) {
+            const index = (self.next + window - 1 - i) % window;
+            if (self.flags[index] == sample) n += 1;
+        }
+
+        return n;
+    }
+
+    /// Fraction of the last `seconds` that was hashing, 0..1. The denominator
+    /// is how many samples exist, not `seconds`: at startup there are none, and
+    /// "0 % of the last minute" for a process that is 4 s old would be a lie in
+    /// the direction that makes people worry.
+    pub fn recent(self: *const Duty, seconds: usize) f64 {
+        const have = @min(@min(seconds, window), self.next);
+        if (have == 0) return 0;
+
+        return @as(f64, @floatFromInt(self.countRecent(seconds, .hashing))) / @as(f64, @floatFromInt(have));
+    }
+
+    pub fn recentBuilding(self: *const Duty, seconds: usize) usize {
+        return self.countRecent(seconds, .building);
+    }
+
+    pub fn recentIdle(self: *const Duty, seconds: usize) usize {
+        return self.countRecent(seconds, .idle);
+    }
+
+    pub fn recentThrottled(self: *const Duty, seconds: usize) usize {
+        return self.countRecent(seconds, .throttled);
+    }
+
+    pub fn overall(self: *const Duty) f64 {
+        if (self.total_ms <= 0) return 0;
+
+        return @as(f64, @floatFromInt(self.hashing_ms)) / @as(f64, @floatFromInt(self.total_ms));
+    }
+};
+
 pub const Worker = struct {
     shared: *Shared,
     engine: *Engine,
@@ -780,6 +924,8 @@ pub const Miner = struct {
     engine: Engine,
     submitter: Submitter = .{},
     stats: Stats = .{},
+    /// Where the session's wall clock went. Sampled by the monitor thread.
+    duty: Duty = .{},
     workers: [max_threads]Worker = undefined,
     hw_threads: usize = 1,
     affinity: bool = true,
@@ -1049,8 +1195,77 @@ pub const Miner = struct {
         self.shared.publish(new_job);
     }
 
+    /// One sample of `Duty`. Called from the monitor thread once a second, next
+    /// to the hash-counter sample it already takes.
+    pub fn tickDuty(self: *Self, now_ms: i64) void {
+        if (self.duty.last_ms == 0) {
+            self.duty = Duty.init(now_ms);
+
+            return;
+        }
+
+        // `active_threads == 0` means "all of them"; anything smaller is the
+        // thermal governor holding threads back on purpose.
+        const active = self.shared.active_threads.load(.acquire);
+        const parked = active != 0 and active < self.shared.thread_count;
+
+        self.duty.tick(now_ms, self.shared.totalHashes(), self.engine.building.load(.acquire), parked);
+    }
+
     pub fn hashrate(self: *Self, window_seconds: u64) f64 {
         return self.stats.rate(window_seconds);
+    }
+
+    /// What the session's clock was spent on, in one line. Writes into `buf`
+    /// and returns the slice: the caller owns the storage, this owns the words.
+    ///
+    /// "hashing 282 s of 300 s (94.0 %): 16 s building a dataset, 2 s without a
+    /// job" - the breakdown is only as long as it has something to say, so a
+    /// perfect run reads "100.0 %: nothing was lost".
+    pub fn describeDuty(self: *const Self, buf: []u8) []const u8 {
+        var tail: [192]u8 = undefined;
+        var tail_stream = std.io.fixedBufferStream(&tail);
+        const tw = tail_stream.writer();
+
+        const total_ms = self.duty.total_ms;
+        const hashing_s = @divTrunc(self.duty.hashing_ms, 1000);
+        const building_s = @divTrunc(@as(i64, @intCast(self.engine.total_init_ms)), 1000);
+        const throttled_s = @divTrunc(self.duty.throttled_ms, 1000);
+        // Everything that was neither hashing, nor a dataset build, nor the
+        // governor: no job, a lost pool, a reconnect in flight. Floored, because
+        // the two sources are sampled at different moments.
+        const quiet_s = @max(@divTrunc(total_ms, 1000) - hashing_s - building_s - throttled_s, 0);
+
+        var any = false;
+        if (building_s > 0) {
+            tw.print("{d} s building a dataset", .{building_s}) catch {};
+            any = true;
+        }
+        if (throttled_s > 0) {
+            if (any) tw.writeAll(", ") catch {};
+            tw.print("{d} s throttled (--max-temp)", .{throttled_s}) catch {};
+            any = true;
+        }
+        if (quiet_s > 0) {
+            if (any) tw.writeAll(", ") catch {};
+            tw.print("{d} s without a job or reconnecting", .{quiet_s}) catch {};
+            any = true;
+        }
+
+        var stream = std.io.fixedBufferStream(buf);
+        const w = stream.writer();
+
+        if (!any) {
+            w.print("hashing {d} s of {d} s ({d:.1} %): nothing was lost", .{
+                hashing_s, @divTrunc(total_ms, 1000), self.duty.overall() * 100.0,
+            }) catch {};
+        } else {
+            w.print("hashing {d} s of {d} s ({d:.1} %): {s}", .{
+                hashing_s, @divTrunc(total_ms, 1000), self.duty.overall() * 100.0, tail_stream.getWritten(),
+            }) catch {};
+        }
+
+        return stream.getWritten();
     }
 
     /// Prints the periodic hashrate line and, when verbose, per-thread rates.
@@ -1489,4 +1704,81 @@ pub fn retentionFits(bytes: u64, extra_live: u64, room: u64, slack: u64, enabled
     if (limit != 0 and already + bytes > limit) return false;
 
     return room >= extra_live + slack;
+}
+
+test "the duty cycle separates a dataset build from a rig with nothing to do" {
+    const testing = std.testing;
+
+    var duty = Duty.init(1000);
+
+    // Six seconds of the dataset being built at startup: the counter has not
+    // moved once, and this is not a fault - it is the price of the first job.
+    var t: i64 = 1000;
+    for (0..6) |_| {
+        t += 1000;
+        duty.tick(t, 0, true, false);
+    }
+    try testing.expectEqual(@as(f64, 0), duty.recent(60));
+    try testing.expectEqual(@as(usize, 6), duty.recentBuilding(60));
+    try testing.expectEqual(@as(usize, 0), duty.recentIdle(60));
+
+    // Then forty seconds of hashing.
+    var hashes: u64 = 0;
+    for (0..40) |_| {
+        t += 1000;
+        hashes += 900;
+        duty.tick(t, hashes, false, false);
+    }
+    try testing.expectEqual(@as(f64, 1), duty.recent(40));
+    try testing.expectEqual(@as(usize, 0), duty.recentBuilding(40));
+    // Over the whole session including the build: 40 of 46 seconds.
+    try testing.expect(duty.overall() > 0.86 and duty.overall() < 0.88);
+
+    // The pool goes away: four seconds where nothing moved and nothing
+    // explains it. That is the number the warning is about.
+    for (0..4) |_| {
+        t += 1000;
+        duty.tick(t, hashes, false, false);
+    }
+    try testing.expectEqual(@as(usize, 4), duty.recentIdle(60));
+    try testing.expectEqual(@as(f64, 0.8), duty.recent(50));
+}
+
+test "a parked worker is throttling, not idling" {
+    const testing = std.testing;
+
+    var duty = Duty.init(0);
+    var t: i64 = 0;
+    var hashes: u64 = 0;
+
+    for (0..10) |_| {
+        t += 1000;
+        hashes += 900;
+        duty.tick(t, hashes, false, false);
+    }
+    for (0..5) |_| {
+        t += 1000;
+        duty.tick(t, hashes, false, true);
+    }
+
+    try testing.expectEqual(@as(usize, 5), duty.recentThrottled(60));
+    try testing.expectEqual(@as(usize, 0), duty.recentIdle(60));
+    // The governor did what it was told, so this is not time "without a job".
+    try testing.expectEqual(@as(i64, 5000), duty.throttled_ms);
+}
+
+test "the duty clock measures the second it was given, not a nominal one" {
+    const testing = std.testing;
+
+    var duty = Duty.init(0);
+
+    // A monitor thread that was starved for 3.5 s must not be credited with
+    // 3.5 s of hashing from a single sample.
+    duty.tick(3500, 0, false, false);
+    try testing.expectEqual(@as(i64, 0), duty.total_ms);
+
+    duty.tick(7000, 4000, false, false);
+    try testing.expectEqual(@as(i64, 3500), duty.total_ms);
+    try testing.expectEqual(@as(i64, 3500), duty.hashing_ms);
+    try testing.expectEqual(@as(f64, 1), duty.overall());
 }

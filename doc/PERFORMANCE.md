@@ -832,6 +832,34 @@ Rules:
 
 ---
 
+## 8c. Was it hashing, or only fast?
+
+A rate is not an income. The miner samples once a second whether the hash counter
+moved, and when it did not, why: the dataset being built (measured by the engine),
+the thermal governor holding a thread back, or nothing at all - no job, a lost
+pool, a reconnect in flight. The session ends with the sum:
+
+```
+info hashing 29 s of 44 s (65.9 %): 16 s building a dataset
+```
+
+and a minute that was mostly the last category is worth a warning rather than a
+percentage nobody reads.
+
+Measured on two vCPUs, same host, against two hostile pools:
+
+| Pool | Behaviour | Result |
+|---|---|---|
+| drops the socket every 5 s | 6–7 reconnects in 45 s | **0 s** lost (the workers hash the last job while the main thread reconnects) |
+| accepts, never replies | no job at all | `hashing 0 s of 24 s`, reason named |
+
+`zmrig/tests/duty.sh` asserts both on every push, in about 70 s. The same
+instrument re-measured two claims that were previously assumptions:
+`--no-optimized-init` changes nothing measurable (build 19.9–20.9 s portable
+against 20.1–20.9 s optimised), and mining through a pool is not slower than
+`--bench` (928–961 H/s against 934–970 H/s, which is this machine's run-to-run
+spread).
+
 ## 8b. Memory does not drift
 
 A rig runs for weeks, so a leak of a few megabytes a minute is a rig that dies

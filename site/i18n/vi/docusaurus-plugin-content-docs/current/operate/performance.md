@@ -183,6 +183,57 @@ engine được giữ lại phải khẳng định lại cấu hình trước kh
 kích thước hay offset — mà là engine đang chạy theo chương trình của thuật toán
 khác.
 
+## Bao nhiêu phần trăm của giờ đồng hồ mới thật sự là đào
+
+Dòng speed trả lời "nhanh đến đâu", không bao giờ trả lời "bao nhiêu phần thời
+gian", và với tiền thì đó là hai con số khác nhau. Một rig hash 1 000 H/s trong
+60 % thời gian của ngày kiếm được 60 % so với chính nó chạy 100 % — mà log thì
+trông hoàn hảo suốt thời gian đó.
+
+Miner lấy mẫu mỗi giây một lần (thread monitor vốn đã đọc bộ đếm hash), và nói ra
+khi tiến trình dừng:
+
+```console
+$ zmrig -o pool.example:3333 -u …
+info hashing 29 s of 44 s (65.9 %): 16 s building a dataset
+```
+
+Bốn loại, và chỉ một loại là lỗi:
+
+| Loại | Nghĩa | Tốn gì |
+| --- | --- | --- |
+| hashing | bộ đếm có nhích trong giây đó | không gì cả |
+| building a dataset | `randomx_init_dataset` đang chạy | 14–20 s với Monero, 0.3 s với Panthera |
+| throttled | governor nhiệt đã cho một thread nghỉ (`--max-temp`) | một quyết định, không phải lỗi |
+| no job | không hash và không có gì giải thích | tất cả thời gian nó phủ |
+
+Nếu phút vừa rồi phần lớn là loại thứ tư thì có cảnh báo, thay vì một con số phần
+trăm không ai đọc:
+
+```console
+warn hashing 41 % of the last minute: 22 s with no job (the pool is gone, or a reconnect is in flight)
+```
+
+### Đo cả hai chiều
+
+Một dụng cụ chỉ biết im lặng thì không đáng tin, nên nó được kiểm với hai pool
+"xấu tính" trên cùng máy 2 vCPU:
+
+| Pool | Hành vi | Kết quả |
+| --- | --- | --- |
+| cắt socket mỗi 5 s | 6–7 lần nối lại trong 45 s | mất **0 s**: worker vẫn hash job cuối trong lúc thread chính nối lại |
+| nhận kết nối rồi không trả lời | không có job nào | `hashing 0 s of 24 s`, và dòng kết thúc nói rõ lý do |
+
+Dòng đầu là thiết kế (pool chớp một cái không được làm mất một phút đào), và
+trước đây nó chưa từng được đo. `zmrig/tests/duty.sh` khẳng định cả hai dòng ở
+mỗi lần push.
+
+Cùng phép đo đó trả lời câu "engine Zig có chậm hơn khi qua pool so với
+`--bench` không": chạy xen kẽ trên máy rảnh cho **934–970 H/s** với `--bench` và
+**928–961 H/s** qua pool — chênh lệch nằm trong độ tản giữa các lần chạy của máy
+này (cùng binary cho 1 008–1 103 H/s vào một ngày yên tĩnh). Không có overhead
+nào để đuổi theo ở đây.
+
 ## Số đo
 
 2 vCPU Xeon 2.60 GHz, 3.9 GiB RAM, 1234 × 2 MiB huge pages, thuật toán `rx/0`,
