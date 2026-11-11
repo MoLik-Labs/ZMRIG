@@ -72,9 +72,21 @@ command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 2; }
 
 contains() { case "$2" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 
+# What a red run needs and the log blob may not give: the miner's own words.
+case_logs() { # name
+    say "the miner's own log, last 15 lines:"
+    tail -15 "$WORK/$1.log" | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^/    /'
+    say "the pool's, last 5:"
+    tail -5 "$WORK/$1.pool" | sed 's/^/    /'
+    local lines
+    lines=$(tail -15 "$WORK/$1.log" | sed 's/\x1b\[[0-9;]*m//g')
+    action_error "$1 failed; the miner's log follows"$'\n'"$lines"
+}
+
 run_case() { # name, extra miner flag, expected "no rebuild"
     local name="$1" flag="$2" expect_cache="$3"
     local shares="$WORK/$name.jsonl" log="$WORK/$name.log"
+    local before="$FAILED"
     local away=18 back=36
     [ "$QUICK" = 1 ] && { away=14 back=26; }
     # The window after the switch back has to outlast a rebuild, or the
@@ -105,7 +117,7 @@ run_case() { # name, extra miner flag, expected "no rebuild"
     fi
     wait "$pool_pid" 2>/dev/null
 
-    local inits before="$FAILED"
+    local inits
     inits=$(grep -c "dataset ready in" "$log" || true)
 
     if [ "$expect_cache" = 1 ]; then
@@ -146,6 +158,7 @@ run_case() { # name, extra miner flag, expected "no rebuild"
     # all after the switch - a failure, not a reason to skip.
     if [ ! -s "$shares" ]; then
         fail "$name: nothing was submitted after the switch back ($(grep -c 'dataset ready in' "$log" || true) initialisations, $(sed -n 's/.*\(total hashes [0-9]*\).*/\1/p' "$log" | tail -1))"
+        [ "$FAILED" = "$before" ] || case_logs "$name"
         return
     fi
 
@@ -168,13 +181,7 @@ run_case() { # name, extra miner flag, expected "no rebuild"
         fail "$name: share hash mismatch after the switch (submitted ${want:0:16}..., recomputed ${got:0:16}...)"
     fi
 
-    if [ "$FAILED" != "$before" ]; then
-        say "the miner's own log, last 15 lines:"
-        tail -15 "$log" | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^/    /'
-        say "the pool's, last 5:"
-        tail -5 "$WORK/$name.pool" | sed 's/^/    /'
-        action_error "$name failed; miner log follows\n$(tail -15 "$log" | sed 's/\x1b\[[0-9;]*m//g')"
-    fi
+    [ "$FAILED" = "$before" ] || case_logs "$name"
 }
 
 # A pool nothing connects to must not become a hung suite. Two seconds, no rig,
