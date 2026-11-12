@@ -1900,7 +1900,10 @@ fn runAutotune(
         try out.print("the default heuristic picks {d} thread(s): this machine was leaving hashrate on the table\n", .{candidate_threads});
     }
 
-    try out.print("\nkeep it:\n  \"threads\": {d}\n  or on the command line: -t {d}\n", .{ best.threads, best.threads });
+    // The config file reads `cpu.threads` (XMRig's schema) and nothing else, so
+    // that is the spelling to print: `"threads": 2` at the top of a config is
+    // not read, and a recommendation that does nothing is worse than none.
+    try out.print("\nkeep it:\n  \"cpu\": {{\"threads\": {d}}}\n  or on the command line: -t {d}\n", .{ best.threads, best.threads });
     logger.debug("autotune finished", .{});
 }
 

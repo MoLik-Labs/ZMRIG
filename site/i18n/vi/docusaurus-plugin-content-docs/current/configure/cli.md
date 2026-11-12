@@ -200,9 +200,17 @@ zmrig --autotune=8        # không cần pool, 8 s mỗi phương án
          2   999.750 H/s  best so far
 best: 2 thread(s) at 999.750 H/s
 autotune-best-threads=2
+
+keep it:
+  "cpu": {"threads": 2}
+  or on the command line: -t 2
 ```
 
 Chênh dưới 2 % tính là nhiễu, nên một lần chạy may mắn không làm đổi số thread.
+
+Lời khuyên đó viết đúng cách mà file cấu hình thật sự đọc — `cpu.threads`, chứ
+không phải `threads` ở đầu file: khoá đó bị bỏ qua (và miner nói ra ở stderr nếu
+tìm thấy nó).
 
 ## Kiểm tra trước khi chạy
 

@@ -43,6 +43,14 @@ anywhere that says why. Those values are still ignored - an XMRig file written
 for another version has to keep starting - but each one now says so once, on
 stderr, and the run continues with the default.
 
+That includes the mistake `zmrig --autotune` was itself making. It printed
+`"threads": 2` as the line to keep, and a `"threads"` key at the top of a config
+file is read by neither this miner nor XMRig - it lives under `cpu`. A
+recommendation that does nothing is worse than no recommendation, and the rig it
+was pasted into runs at the default thread count with nothing to show for it. The
+advice is now `"cpu": {"threads": 2}`, and a top-level `"threads"` in an existing
+file is reported rather than dropped.
+
 ### The one hash path that could crash, and the alignment it assumed
 
 RandomX's per-hash scratchpad pass exists twice: 128-bit AES, which every x86

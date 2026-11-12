@@ -207,10 +207,18 @@ zmrig --autotune=8        # no pool required, 8 s per candidate
          2   999.750 H/s  best so far
 best: 2 thread(s) at 999.750 H/s
 autotune-best-threads=2
+
+keep it:
+  "cpu": {"threads": 2}
+  or on the command line: -t 2
 ```
 
 A difference under 2 % counts as noise, so it does not change the thread count
 because of one lucky run.
+
+The advice is written in the spelling the config file actually reads —
+`cpu.threads`, not a `threads` at the top of the file, which is ignored (the
+miner says so on stderr if it finds one).
 
 ## Validate before you run
 

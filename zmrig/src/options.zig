@@ -1352,6 +1352,16 @@ pub fn parseConfigFile(allocator: std.mem.Allocator, opts: *Options, path: []con
         }
     }
 
+    // XMRig's schema puts the thread count under `cpu`, and the docs here say
+    // so, but `"threads": 8` at the top of the file is the mistake people make
+    // - it is silently ignored, which is a rig at half its configured hashrate
+    // with nothing anywhere to say why.
+    if (root.get("threads")) |top| {
+        if (top != .null and root.get("cpu") == null) {
+            warnIgnored("config: \"threads\" at the top of the file is not read - it lives under \"cpu\", as {{\"cpu\": {{\"threads\": N}}}}", .{});
+        }
+    }
+
     if (root.get("cpu")) |cpu_value| {
         if (cpu_value == .object) {
             const cpu = cpu_value.object;
@@ -2090,6 +2100,48 @@ test "the values that used to be refused late are refused by --check" {
 
     opts.pools.items[0].tls_ca = "/nonexistent/ca.pem";
     try testing.expectError(error.UnreadableTlsCa, validateValues(&opts));
+}
+
+test "a thread count in the wrong place is reported" {
+    const testing = std.testing;
+    // `"threads": 8` at the top of the file, which is not where this miner (or
+    // XMRig) reads it: the rig then ran at the default count in silence.
+    const path = "zig-cache-test-top-level-threads.json";
+    const text =
+        \\{"pools":[{"url":"pool.example:3333","user":"x"}],"threads":8}
+    ;
+    {
+        const file = std.fs.cwd().createFile(path, .{}) catch unreachable;
+        defer file.close();
+        file.writeAll(text) catch unreachable;
+    }
+    defer std.fs.cwd().deleteFile(path) catch {};
+
+    var opts = Options{};
+    defer opts.deinit(testing.allocator);
+
+    try parseConfigFile(testing.allocator, &opts, path);
+
+    try testing.expectEqual(@as(?usize, null), opts.threads);
+
+    // The spelling that works is the one the docs and XMRig use.
+    const good_path = "zig-cache-test-cpu-threads.json";
+    const good_text =
+        \\{"pools":[{"url":"pool.example:3333","user":"x"}],"cpu":{"threads":8}}
+    ;
+    {
+        const file = std.fs.cwd().createFile(good_path, .{}) catch unreachable;
+        defer file.close();
+        file.writeAll(good_text) catch unreachable;
+    }
+    defer std.fs.cwd().deleteFile(good_path) catch {};
+
+    var pinned = Options{};
+    defer pinned.deinit(testing.allocator);
+
+    try parseConfigFile(testing.allocator, &pinned, good_path);
+
+    try testing.expectEqual(@as(?usize, 8), pinned.threads);
 }
 
 test "a config value this binary cannot use is reported, not silently dropped" {
