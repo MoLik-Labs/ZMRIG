@@ -17,7 +17,9 @@ const memory_mod = @import("memory.zig");
 const hugepages_mod = @import("hugepages.zig");
 const stratum = @import("stratum.zig");
 
-pub const max_threads = 128;
+/// One number, in the module that has to police it (`-t`) and the one that has
+/// to allocate for it (this one).
+pub const max_threads = options.max_threads;
 
 /// XMRig reserves nonce windows of 32768 per thread, we do the same.
 const nonce_chunk: u32 = 32768;

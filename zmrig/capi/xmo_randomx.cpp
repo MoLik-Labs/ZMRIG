@@ -11,12 +11,14 @@
 #include "backend/cpu/Cpu.h"
 #include "base/crypto/Algorithm.h"
 #include "crypto/common/Assembly.h"
+#include "crypto/randomx/aes_hash.hpp"
 #include "crypto/randomx/configuration.h"
 #include "crypto/randomx/randomx.h"
 #include "crypto/rx/RxAlgo.h"
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <thread>
 #include <vector>
@@ -602,6 +604,87 @@ void xmo_hash_next(xmo_vm *vm, uint64_t *temp, const uint8_t *blob, size_t len, 
 void xmo_commitment(const uint8_t *blob, size_t len, const uint8_t *hash_in, uint8_t *out)
 {
     randomx_calculate_commitment(blob, len, hash_in, out);
+}
+
+
+/*
+ * The wide (AVX-512 + VAES) implementation of the per-hash scratchpad pass is
+ * built into this library and selected on Zen 5 only. It is an ordinary AES
+ * schedule done four lanes at a time, so it must produce byte-identical state
+ * to the 128-bit one - and it did not exist as far as the test suite was
+ * concerned, because the dispatch is a CPU check nobody could reach from a
+ * machine that is not Zen 5.
+ *
+ * These two calls make it reachable on any CPU that has the instructions, with
+ * the buffers deliberately 8 bytes past a 64-byte boundary: a vmovdqa64 against
+ * a `uint64_t[8]` on the stack is a general-protection fault, i.e. a crash on
+ * exactly the CPUs this path exists for.
+ */
+#ifdef XMRIG_VAES
+void hashAndFillAes1Rx4_VAES512(void *scratchpad, size_t scratchpadSize, void *hash, void *fill_state);
+#endif
+
+int xmo_wide_scratchpad_available(void)
+{
+#ifdef XMRIG_VAES
+    return (xmrig::Cpu::info()->hasVAES() && xmrig::Cpu::info()->has(xmrig::ICpuInfo::FLAG_AVX512F)) ? 1 : 0;
+#else
+    return 0;
+#endif
+}
+
+
+int xmo_wide_scratchpad_agrees(char *report, size_t report_len)
+{
+    if (report && report_len) report[0] = '\0';
+
+#ifdef XMRIG_VAES
+    if (!xmo_wide_scratchpad_available()) return 0;
+
+    constexpr size_t kPad = 2u * 1024u * 1024u;   // RANDOMX_SCRATCHPAD_L3_SIZE
+    uint8_t *pad_a = static_cast<uint8_t *>(aligned_alloc(64, kPad));
+    uint8_t *pad_b = static_cast<uint8_t *>(aligned_alloc(64, kPad));
+    /* One 128-byte block, both halves used 8 bytes in: `fill` overlaps `hash`'s
+     * neighbour, which is what a stack frame looks like. */
+    uint8_t *state_a = static_cast<uint8_t *>(aligned_alloc(64, 160));
+    uint8_t *state_b = static_cast<uint8_t *>(aligned_alloc(64, 160));
+    if (!pad_a || !pad_b || !state_a || !state_b) {
+        free(pad_a); free(pad_b); free(state_a); free(state_b);
+        if (report && report_len) snprintf(report, report_len, "out of memory");
+        return -1;
+    }
+
+    std::memset(pad_a, 0x5a, kPad);
+    std::memset(pad_b, 0x5a, kPad);
+    for (int i = 0; i < 8; ++i) {
+        reinterpret_cast<uint64_t *>(state_a + 8)[i] = static_cast<uint64_t>(i + 1);
+        reinterpret_cast<uint64_t *>(state_b + 8)[i] = static_cast<uint64_t>(i + 1);
+    }
+    std::memset(state_a + 72, 0, 32);
+    std::memset(state_b + 72, 0, 32);
+
+    hashAndFillAes1Rx4_x86(pad_a, kPad, state_a + 72, state_a + 8);
+    hashAndFillAes1Rx4_VAES512(pad_b, kPad, state_b + 72, state_b + 8);
+
+    const bool pad_same = std::memcmp(pad_a, pad_b, kPad) == 0;
+    const bool state_same = std::memcmp(state_a + 8, state_b + 8, 96) == 0;
+
+    free(pad_a); free(pad_b); free(state_a); free(state_b);
+
+    if (!pad_same || !state_same) {
+        if (report && report_len) {
+            snprintf(report, report_len, "scratchpad %s, state %s",
+                     pad_same ? "identical" : "DIFFERS", state_same ? "identical" : "DIFFERS");
+        }
+        return -1;
+    }
+
+    if (report && report_len) snprintf(report, report_len, "both ran on unaligned buffers, output identical");
+    return 1;
+#else
+    (void)report; (void)report_len;
+    return 0;
+#endif
 }
 
 

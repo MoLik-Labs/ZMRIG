@@ -118,6 +118,45 @@ pub fn main() !void {
         return;
     }
 
+    // Before anything reads a value, and before `--check` can bless it: these
+    // are the settings that used to be accepted here and then refused - or
+    // ignored - by the code that used them. `--version` describes the binary,
+    // not this configuration, so it is the one action that skips the check.
+    if (!opts.version) options.validateValues(&opts) catch |e| {
+        var stderr = std.io.getStdErr().writer();
+
+        switch (e) {
+            error.InvalidThreads => stderr.print(
+                "zmrig: {d} is not a thread count this miner can run: -t takes 1..{d}\n",
+                .{ opts.threads orelse 0, options.max_threads },
+            ) catch {},
+            error.InvalidPrefetch => stderr.print(
+                "zmrig: --scratchpad-prefetch={d} is not a mode: 0 = no prefetch, 1 = prefetcht0 (default), 2 = prefetchnta, 3 = a plain load\n",
+                .{opts.scratchpad_prefetch},
+            ) catch {},
+            error.InvalidPriority => stderr.print(
+                "zmrig: --priority={d} is not a priority: 1..5 on XMRig's scale, -20..19 as a raw nice value, or -1 to leave the scheduler alone\n",
+                .{opts.priority},
+            ) catch {},
+            error.InvalidPoolPort => stderr.print(
+                "zmrig: a pool port of 0 is not a port: write host:3333\n",
+                .{},
+            ) catch {},
+            error.UnreadableTlsCa => stderr.print(
+                "zmrig: --tls-ca {s} cannot be read, so the pool's certificate cannot be verified\n",
+                .{opts.tls_ca orelse (blk: {
+                    for (opts.pools.items) |pool| {
+                        if (pool.tls_ca) |path| break :blk path;
+                    }
+                    break :blk "";
+                })},
+            ) catch {},
+            else => stderr.print("zmrig: {s}\n", .{@errorName(e)}) catch {},
+        }
+
+        std.process.exit(1);
+    };
+
     log.global = log.Logger.init(opts.colors, opts.verbose);
     // `--verify-share` writes a protocol on stdout: one JSON line per share,
     // nothing else. The sink has to be set here rather than just before

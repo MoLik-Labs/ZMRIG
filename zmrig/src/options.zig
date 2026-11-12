@@ -103,6 +103,14 @@ const Pending = struct {
     }
 };
 
+/// The workers the miner can hold. It is the width of the arrays the mining
+/// core allocates per thread, and `-t` has to be policed against it *here*:
+/// the check used to live only in the mining core, so `--check` blessed
+/// `-t 0` and the run then refused to start - and `-t 99999` was turned into a
+/// "202398 MB dataset does not fit" message about a thread count that could
+/// never have existed.
+pub const max_threads: usize = 128;
+
 pub const Mode = enum { auto, fast, light };
 
 /// Which options the command line actually set. The config file is read first
@@ -359,6 +367,19 @@ pub const ParseError = error{
     NoWallet,
     OutOfMemory,
     InvalidConfig,
+    /// `-t 0`, `-t 99999`: a count no run can use.
+    InvalidThreads,
+    /// `--scratchpad-prefetch` is 0..3. Anything else used to be accepted and
+    /// silently hashed with mode 1, which is a tuning flag that does nothing.
+    InvalidPrefetch,
+    /// `--priority` outside -20..19 (the range `setpriority` accepts) and
+    /// outside the XMRig 1..5 scale, where the kernel ignored it silently.
+    InvalidPriority,
+    /// A pool written as `host:0`.
+    InvalidPoolPort,
+    /// `--tls-ca` pointed at a file that cannot be read: the handshake cannot
+    /// succeed, so the run is refused here rather than at the first connect.
+    UnreadableTlsCa,
     /// The config file exists but cannot be read (usually permissions).
     ConfigUnreadable,
     /// The config file was read but is not a JSON object.
@@ -964,6 +985,54 @@ pub fn validate(opts: *const Options) ParseError!void {
     }
 }
 
+/// A known key whose value this binary cannot use. It is still ignored - an
+/// XMRig config or a file written by an older version has to keep starting -
+/// but not silently: `"cpu": {"threads": "8"}` used to mine with the default
+/// thread count and the log never mentioned it.
+fn warnIgnored(comptime fmt: []const u8, args: anytype) void {
+    const stderr = std.io.getStdErr().writer();
+    stderr.print("zmrig: warning: " ++ fmt ++ "\n", args) catch {};
+}
+
+/// The values that used to be checked only by the code that used them, if at
+/// all: an invalid `-t` was reported by the mining core *after* the memory
+/// check had already turned it into a dataset size, `--scratchpad-prefetch=7`
+/// was accepted and quietly hashed with mode 1, `--priority=99` reached a
+/// `setpriority` call the kernel answers with EINVAL and nobody read, and a
+/// `--tls-ca` path that did not exist was only noticed when the first TLS
+/// handshake failed to build a trust store.
+///
+/// `--check` is what scripts and `zmrig-os doctor` use to ask "is this
+/// configuration usable", so all of it is answered here, once, for both the
+/// command line and the config file.
+pub fn validateValues(opts: *const Options) ParseError!void {
+    if (opts.threads) |threads| {
+        if (threads == 0 or threads > max_threads) return error.InvalidThreads;
+    }
+
+    if (opts.scratchpad_prefetch < 0 or opts.scratchpad_prefetch > 3) return error.InvalidPrefetch;
+
+    // -1 means "do not touch the scheduler". 1..5 is XMRig's scale, which the
+    // mining core maps to a nice value; anything else is a raw nice value and
+    // has to be one the kernel will accept.
+    if (opts.priority != -1 and !(opts.priority >= 1 and opts.priority <= 5) and
+        !(opts.priority >= -20 and opts.priority <= 19)) return error.InvalidPriority;
+
+    for (opts.pools.items) |pool| {
+        if (pool.user_port and pool.port == 0) return error.InvalidPoolPort;
+    }
+
+    for (opts.pools.items) |pool| {
+        if (pool.tls_ca) |path| try checkReadable(path);
+    }
+    if (opts.tls_ca) |path| try checkReadable(path);
+}
+
+fn checkReadable(path: []const u8) ParseError!void {
+    const file = std.fs.cwd().openFile(path, .{}) catch return error.UnreadableTlsCa;
+    file.close();
+}
+
 /// Applies the transport flags to every pool that did not set them itself.
 /// Called once after the command line (and the config file) have been read, so
 /// `--transport`, `--proxy`, `--cloudflare` and friends work no matter where
@@ -1204,8 +1273,16 @@ pub fn parseConfigFile(allocator: std.mem.Allocator, opts: *Options, path: []con
             if (std.ascii.eqlIgnoreCase(value.string, "auto")) {
                 opts.algo = null;
                 opts.algo_all = true;
+            } else if (api.Algo.fromName(value.string)) |algo| {
+                opts.algo = algo;
+                opts.algo_all = false;
             } else {
-                opts.algo = api.Algo.fromName(value.string) orelse opts.algo;
+                // A typo here is expensive and invisible: `"algo": "rx/01"`
+                // mined rx/0 on a pool that asked for something else.
+                warnIgnored("config: algo \"{s}\" is not one this miner knows; using {s}", .{
+                    value.string,
+                    if (opts.algo) |a| a.label() else "auto",
+                });
                 opts.algo_all = false;
             }
         }
@@ -1219,7 +1296,11 @@ pub fn parseConfigFile(allocator: std.mem.Allocator, opts: *Options, path: []con
     // Written by `oneclick.sh --profile=...`. No `seen` flag: the config is
     // read before the command line, so an explicit `--profile` still wins.
     if (jsonString(root, "profile")) |v| {
-        opts.profile = ProfileSetting.fromName(v) orelse opts.profile;
+        if (ProfileSetting.fromName(v)) |profile| {
+            opts.profile = profile;
+        } else {
+            warnIgnored("config: profile \"{s}\" is not a profile: auto, free or watt; using {s}", .{ v, opts.profile.label() });
+        }
     }
     // The thermal policy, as written by `oneclick.sh --max-temp=...` and by the
     // appliance's safe mode. A value outside 45..95 is ignored rather than
@@ -1274,7 +1355,11 @@ pub fn parseConfigFile(allocator: std.mem.Allocator, opts: *Options, path: []con
     if (root.get("cpu")) |cpu_value| {
         if (cpu_value == .object) {
             const cpu = cpu_value.object;
-            if (jsonInt(i32, cpu, "priority")) |v| opts.priority = v;
+            if (jsonInt(i32, cpu, "priority")) |v| {
+                opts.priority = v;
+            } else if (cpu.get("priority") != null and cpu.get("priority").? != .null) {
+                warnIgnored("config: cpu.priority must be a number between -20 and 19; leaving the scheduler alone", .{});
+            }
             if (jsonBool(cpu, "yield")) |_| {}
 
             // XMRig writes the mask as an integer, or null for "all cores".
@@ -1294,7 +1379,13 @@ pub fn parseConfigFile(allocator: std.mem.Allocator, opts: *Options, path: []con
 
             if (cpu.get("threads")) |threads| {
                 switch (threads) {
-                    .integer => |v| opts.threads = std.math.cast(usize, v),
+                    .integer => |v| {
+                        if (std.math.cast(usize, v)) |count| {
+                            opts.threads = count;
+                        } else {
+                            warnIgnored("config: cpu.threads {d} is not a thread count; using the default", .{v});
+                        }
+                    },
                     .bool => |enabled| {
                         if (!enabled) opts.threads = 0;
                     },
@@ -1316,7 +1407,7 @@ pub fn parseConfigFile(allocator: std.mem.Allocator, opts: *Options, path: []con
                         }
                         if (pinned) opts.affinity_mask = mask;
                     },
-                    else => {},
+                    else => warnIgnored("config: cpu.threads must be a number or an array of CPU indexes; using the default (XMRig's own files put the thread count there)", .{}),
                 }
             }
         }
@@ -1326,9 +1417,15 @@ pub fn parseConfigFile(allocator: std.mem.Allocator, opts: *Options, path: []con
         if (rx_value == .object) {
             const rx = rx_value.object;
             if (jsonString(rx, "mode")) |mode| {
-                if (std.mem.eql(u8, mode, "light")) opts.mode = .light;
-                if (std.mem.eql(u8, mode, "fast")) opts.mode = .fast;
-                if (std.mem.eql(u8, mode, "auto")) opts.mode = .auto;
+                if (std.mem.eql(u8, mode, "light")) {
+                    opts.mode = .light;
+                } else if (std.mem.eql(u8, mode, "fast")) {
+                    opts.mode = .fast;
+                } else if (std.mem.eql(u8, mode, "auto")) {
+                    opts.mode = .auto;
+                } else {
+                    warnIgnored("config: randomx.mode \"{s}\" is not a mode: auto, fast or light; using auto", .{mode});
+                }
             }
             if (jsonInt(usize, rx, "init")) |v| opts.init_threads = v;
             // `true`/`false` is XMRig's spelling and means on/off. The string
@@ -1354,7 +1451,11 @@ pub fn parseConfigFile(allocator: std.mem.Allocator, opts: *Options, path: []con
                 .array => opts.msr = .on,
                 else => {},
             }
-            if (jsonInt(i32, rx, "scratchpad_prefetch_mode")) |v| opts.scratchpad_prefetch = v;
+            if (jsonInt(i32, rx, "scratchpad_prefetch_mode")) |v| {
+                opts.scratchpad_prefetch = v;
+            } else if (rx.get("scratchpad_prefetch_mode") != null and rx.get("scratchpad_prefetch_mode").? != .null) {
+                warnIgnored("config: randomx.scratchpad_prefetch_mode must be 0..3; using 1 (prefetcht0)", .{});
+            }
             if (jsonInt(i32, rx, "init-avx2")) |v| opts.optimized_init = v != 0;
         }
     }
@@ -1943,4 +2044,81 @@ test "the thermal policy is read from the config file, and a silly one is ignore
     try parseConfigFile(testing.allocator, &silly, silly_path);
 
     try testing.expect(silly.max_temp == null);
+}
+
+test "the values that used to be refused late are refused by --check" {
+    const testing = std.testing;
+    // `--check` is what a provisioning script and `zmrig-os doctor` ask.
+    // Every one of these exited 0 from `--check` and then failed (or was
+    // ignored) at run time, which is the worst of both: the check said the
+    // configuration was fine.
+    var opts = Options{};
+    // The pool below points at string literals, so only the array is ours.
+    defer opts.pools.deinit(testing.allocator);
+
+    opts.pools.append(testing.allocator, .{ .host = "pool.example", .port = 3333, .user = "x" }) catch unreachable;
+
+    opts.threads = 0;
+    try testing.expectError(error.InvalidThreads, validateValues(&opts));
+    opts.threads = max_threads + 1;
+    try testing.expectError(error.InvalidThreads, validateValues(&opts));
+    opts.threads = max_threads;
+    try validateValues(&opts);
+
+    opts.scratchpad_prefetch = 7;
+    try testing.expectError(error.InvalidPrefetch, validateValues(&opts));
+    opts.scratchpad_prefetch = -1;
+    try testing.expectError(error.InvalidPrefetch, validateValues(&opts));
+    opts.scratchpad_prefetch = 3;
+    try validateValues(&opts);
+
+    // 1..5 is XMRig's scale, a raw nice value is -20..19, -1 is "leave it".
+    opts.priority = 99;
+    try testing.expectError(error.InvalidPriority, validateValues(&opts));
+    opts.priority = -21;
+    try testing.expectError(error.InvalidPriority, validateValues(&opts));
+    for ([_]i32{ -1, 0, 5, -20, 19 }) |p| {
+        opts.priority = p;
+        try validateValues(&opts);
+    }
+
+    opts.pools.items[0].user_port = true;
+    opts.pools.items[0].port = 0;
+    try testing.expectError(error.InvalidPoolPort, validateValues(&opts));
+    opts.pools.items[0].port = 3333;
+    try validateValues(&opts);
+
+    opts.pools.items[0].tls_ca = "/nonexistent/ca.pem";
+    try testing.expectError(error.UnreadableTlsCa, validateValues(&opts));
+}
+
+test "a config value this binary cannot use is reported, not silently dropped" {
+    const testing = std.testing;
+    // `"threads": "8"` used to mine with the default count and say nothing.
+    const path = "zig-cache-test-warn-config.json";
+    const text =
+        \\{"pools":[{"url":"pool.example:3333","user":"x"}],
+        \\ "cpu":{"threads":"8","priority":"high"},
+        \\ "algo":"rx/01","profile":"turbo",
+        \\ "randomx":{"mode":"quick","scratchpad_prefetch_mode":"two"}}
+    ;
+    {
+        const file = std.fs.cwd().createFile(path, .{}) catch unreachable;
+        defer file.close();
+        file.writeAll(text) catch unreachable;
+    }
+    defer std.fs.cwd().deleteFile(path) catch {};
+
+    var opts = Options{};
+    defer opts.deinit(testing.allocator);
+
+    try parseConfigFile(testing.allocator, &opts, path);
+
+    // Nothing was applied, and nothing was invented either: the defaults stand.
+    try testing.expectEqual(@as(?usize, null), opts.threads);
+    try testing.expectEqual(@as(?api.Algo, null), opts.algo);
+    try testing.expectEqual(ProfileSetting.auto, opts.profile);
+    try testing.expectEqual(Mode.auto, opts.mode);
+    try testing.expectEqual(@as(i32, 1), opts.scratchpad_prefetch);
+    try testing.expectEqual(@as(i32, -1), opts.priority);
 }

@@ -244,6 +244,30 @@ không, và miner sẽ chậm khoảng 18 % cho tới khi bạn đặt trang.
 file chỉ root đọc được thì chạy bằng `sudo`, không thì bạn nhận
 `cannot read …: check the path or run as root`.
 
+Với những giá trị mà một lần chạy không dùng được, nó từ chối chứ không "xem
+trước" — đúng những giá trị trước đây được nó gật đầu rồi bị bỏ lúc khởi động:
+
+```console
+$ zmrig -o gulf.moneroocean.stream:10001 -u 4... -t 0 --check
+zmrig: 0 is not a thread count this miner can run: -t takes 1..128
+$ zmrig -o gulf.moneroocean.stream:10001 -u 4... --scratchpad-prefetch=7 --check
+zmrig: --scratchpad-prefetch=7 is not a mode: 0 = no prefetch, 1 = prefetcht0 (default), 2 = prefetchnta, 3 = a plain load
+$ zmrig -o gulf.moneroocean.stream:10001 -u 4... --priority=99 --check
+zmrig: --priority=99 is not a priority: 1..5 on XMRig's scale, -20..19 as a raw nice value, or -1 to leave the scheduler alone
+```
+
+`--tls-ca FILE` cũng được đọc ở đây: một trust store không mở được là một lần
+bắt tay không thể thành công, và biết điều đó từ script cài đặt thì rẻ hơn biết
+từ một con rig không bao giờ kết nối.
+
+File cấu hình ghi một giá trị mà binary này không dùng được thì nói một lần, ra
+stderr, rồi chạy tiếp bằng giá trị mặc định — file XMRig của phiên bản khác vẫn
+khởi động được:
+
+```console
+zmrig: warning: config: cpu.threads must be a number or an array of CPU indexes; using the default
+```
+
 ## Chế độ pool: `--verify-share`
 
 Pool nào trả tiền cho share thì phải kiểm tra được share đó. `zmrig` trả lời
