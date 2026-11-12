@@ -207,10 +207,18 @@ zmrig --autotune=8        # no pool required, 8 s per candidate
          2   999.750 H/s  best so far
 best: 2 thread(s) at 999.750 H/s
 autotune-best-threads=2
+
+keep it:
+  "cpu": {"threads": 2}
+  or on the command line: -t 2
 ```
 
 A difference under 2 % counts as noise, so it does not change the thread count
 because of one lucky run.
+
+The advice is written in the spelling the config file actually reads —
+`cpu.threads`, not a `threads` at the top of the file, which is ignored (the
+miner says so on stderr if it finds one).
 
 ## Validate before you run
 
@@ -251,6 +259,29 @@ means it does not and the miner will be ~18 % slower until pages are reserved.
 `--check` reads the file and prints; it opens no socket and allocates no
 dataset. If the file is root-only, run it with `sudo` or you get
 `cannot read …: check the path or run as root`.
+
+It is a refusal, not a preview, for the values a run cannot use — the ones that
+used to be blessed here and then dropped at start-up:
+
+```console
+$ zmrig -o gulf.moneroocean.stream:10001 -u 4... -t 0 --check
+zmrig: 0 is not a thread count this miner can run: -t takes 1..128
+$ zmrig -o gulf.moneroocean.stream:10001 -u 4... --scratchpad-prefetch=7 --check
+zmrig: --scratchpad-prefetch=7 is not a mode: 0 = no prefetch, 1 = prefetcht0 (default), 2 = prefetchnta, 3 = a plain load
+$ zmrig -o gulf.moneroocean.stream:10001 -u 4... --priority=99 --check
+zmrig: --priority=99 is not a priority: 1..5 on XMRig's scale, -20..19 as a raw nice value, or -1 to leave the scheduler alone
+```
+
+`--tls-ca FILE` is read here too: a trust store that cannot be opened is a
+handshake that cannot succeed, and finding that out from a provisioning script
+is cheaper than finding it out from a rig that never connects. A config file
+that names a value this binary cannot use says so once, on stderr, and then
+carries on with the default — an XMRig file written for another version still
+starts:
+
+```console
+zmrig: warning: config: cpu.threads must be a number or an array of CPU indexes; using the default
+```
 
 ## Pool mode: `--verify-share`
 

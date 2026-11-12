@@ -52,3 +52,10 @@ void fillAes4Rx4(void *state, size_t outputSize, void *buffer);
 
 template<int softAes, int unroll>
 void hashAndFillAes1Rx4(void *scratchpad, size_t scratchpadSize, void *hash, void* fill_state);
+
+/*
+ * The same pass, non-template, so a conformance test can put the ordinary
+ * implementation and the 512-bit one through identical inputs. Not used by the
+ * VM (which instantiates the template directly).
+ */
+void hashAndFillAes1Rx4_x86(void *scratchpad, size_t scratchpadSize, void *hash, void* fill_state);

@@ -3,6 +3,80 @@
 _Not a release: no tag, no image. This lands on `BETA` and becomes a version when
 the release is cut._
 
+## `--check` said the configuration was fine and the run disagreed
+
+`--check` is what the installer, `zmrig-os doctor` and every provisioning script
+asks before a rig is left alone, so a "config ok" from it has to mean the run
+will start. It did not. `-t 0` passed the check and the miner then refused it;
+`--scratchpad-prefetch=7` passed and hashed with mode 1, silently, forever;
+`--priority=99` passed and reached a `setpriority` the kernel answers with
+EINVAL, which nobody read; `-o host:0` passed and connected to port zero; and
+`--tls-ca` pointing at a file that does not exist passed and turned into a
+handshake failure later, on the pool's account.
+
+The worst of them was arithmetic. `-t 99999` was turned into a dataset size
+before the thread count was looked at:
+
+```console
+$ zmrig -t 99999 --bench
+zmrig: not enough memory for the 202398 MB dataset: 0 MB free in huge pages plus 3587 MB available
+```
+
+202398 MB is 2 MB of scratchpad per thread, for a thread count that could never
+have existed, offered as an explanation for a machine with 4 GB. Every one of
+these is now refused before anything is allocated, by name, with the range that
+is valid:
+
+```console
+zmrig: 99999 is not a thread count this miner can run: -t takes 1..128
+zmrig: --scratchpad-prefetch=7 is not a mode: 0 = no prefetch, 1 = prefetcht0 (default), 2 = prefetchnta, 3 = a plain load
+```
+
+### The config file was dropping values without saying so
+
+`"cpu": {"threads": "8"}` - a JSON string where a number belonged - mined with
+the default thread count and said nothing about it. So did `"algo": "rx/01"`,
+`"profile": "turbo"`, `"randomx": {"mode": "quick"}` and a `priority` that was
+not a number. A config file is written once by a script and then read for years,
+and a rig that hashes at half the thread count it was configured for has nothing
+anywhere that says why. Those values are still ignored - an XMRig file written
+for another version has to keep starting - but each one now says so once, on
+stderr, and the run continues with the default.
+
+That includes the mistake `zmrig --autotune` was itself making. It printed
+`"threads": 2` as the line to keep, and a `"threads"` key at the top of a config
+file is read by neither this miner nor XMRig - it lives under `cpu`. A
+recommendation that does nothing is worse than no recommendation, and the rig it
+was pasted into runs at the default thread count with nothing to show for it. The
+advice is now `"cpu": {"threads": 2}`, and a top-level `"threads"` in an existing
+file is reported rather than dropped.
+
+### The one hash path that could crash, and the alignment it assumed
+
+RandomX's per-hash scratchpad pass exists twice: 128-bit AES, which every x86
+runs, and a 512-bit VAES version selected on Zen 5. The wide one began with
+`vmovdqa64` on the caller's `fill_state` - a `uint64_t[8]` that the VM keeps on
+a stack frame - which is a general-protection fault, not a wrong answer, on any
+frame that is not 64-byte aligned. `zmrig`'s own C API happens to bounce that
+buffer through an aligned local, which is why nobody has crashed; the library's
+contract was the part that was wrong.
+
+Both implementations now use unaligned loads and stores for the two buffers the
+caller owns - twelve instructions per hash, all of them outside the loops, which
+is below the noise floor of the measurement below. The conformance test in
+`zmrig/tests/api_test.cpp` runs *both* over identical inputs with the buffers
+deliberately eight bytes past a 64-byte boundary and requires the output to be
+bit-identical:
+
+```
+PASS wide scratchpad pass: both ran on unaligned buffers, output identical
+```
+
+Measuring it also settled a question worth writing down. On an Intel Xeon with
+AVX-512F, AVX-512VL and VAES - every instruction the wide path needs - it is
+**slower**: 55.3 µs against 50.8 µs for one 2 MiB pass, 0.92x. The Zen-5-only
+gate in `aes_hash.cpp` is not conservative, it is correct, and it stays.
+
 ## Every algorithm switch was 16.5 seconds of nothing
 
 A multi-algorithm pool moves a rig between RandomX forks on its own schedule.

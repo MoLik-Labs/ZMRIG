@@ -158,6 +158,17 @@ FORCE_INLINE int rx_vec_i128_w(rx_vec_i128 a) {
 #define rx_xor_vec_i128 _mm_xor_si128
 #define rx_load_vec_i128 _mm_load_si128
 #define rx_store_vec_i128 _mm_store_si128
+/*
+ * The same access without the alignment promise. The scratchpad is 64-byte
+ * aligned by construction and stays on the aligned form; `hash` and
+ * `fill_state` come from the caller, and a `uint64_t[8]` in a stack frame is
+ * 16-byte aligned only when the compiler decides it is. A movdqa against one of
+ * those is a general-protection fault - the crash the wide (AVX-512) path had
+ * waiting for it - and an unaligned load costs the same one cycle when the
+ * address happens to be aligned.
+ */
+#define rx_loadu_vec_i128 _mm_loadu_si128
+#define rx_storeu_vec_i128 _mm_storeu_si128
 
 FORCE_INLINE rx_vec_f128 rx_cvt_packed_int_vec_f128(const void* addr) {
 	__m128i ix = _mm_loadl_epi64((const __m128i*)addr);
@@ -792,3 +803,9 @@ uint64_t mulh(uint64_t, uint64_t);
 int64_t smulh(int64_t, int64_t);
 uint64_t rotl64(uint64_t, unsigned int);
 uint64_t rotr64(uint64_t, unsigned int);
+
+#ifndef rx_loadu_vec_i128
+/* Architectures whose rx_load_vec_i128 is an ordinary unaligned access. */
+#define rx_loadu_vec_i128 rx_load_vec_i128
+#define rx_storeu_vec_i128 rx_store_vec_i128
+#endif

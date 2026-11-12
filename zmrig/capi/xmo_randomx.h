@@ -109,6 +109,23 @@ void xmo_hash_next(xmo_vm *vm, uint64_t *temp, const uint8_t *blob,
 void xmo_commitment(const uint8_t *blob, size_t len, const uint8_t *hash_in,
                     uint8_t *out);
 
+/*
+ * The 512-bit (AVX-512 + VAES) implementation of the per-hash scratchpad pass,
+ * for the conformance test. The miner selects it on Zen 5 and nowhere else; the
+ * point of these two calls is that the test suite can put it through the same
+ * inputs as the ordinary path on *any* CPU that can execute it, with buffers
+ * that are deliberately not 64-byte aligned (a stack `uint64_t[8]` is not).
+ *
+ *   xmo_wide_scratchpad_available()  1 when this CPU can run it, 0 when not.
+ *   xmo_wide_scratchpad_agrees()     0 = not tested (no such CPU),
+ *                                    1 = both implementations ran and agree,
+ *                                   -1 = they disagree, i.e. a wrong hash for
+ *                                        whoever uses the wide path.
+ * `report` receives one line either way.
+ */
+int xmo_wide_scratchpad_available(void);
+int xmo_wide_scratchpad_agrees(char *report, size_t report_len);
+
 /* JIT / dataset tuning knobs (see crypto/randomx/randomx.h). */
 void xmo_set_scratchpad_prefetch(int mode);
 void xmo_set_huge_pages_jit(int enabled);
