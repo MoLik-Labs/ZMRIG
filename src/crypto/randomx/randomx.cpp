@@ -56,6 +56,29 @@ extern "C" {
 }
 // End MoneroOcean
 
+// Optional cycle accounting for one hash, compiled out unless the build passes
+// -DXMO_PROFILE (see zmrig/tests/profile.sh). `XMO_PROF_T(i, ...)` adds nothing
+// to a release build: it expands to the statement alone. The counters are
+// exported with C linkage so a test binary can read them without a new API
+// call, and they are meant for one worker at a time - that is how the breakdown
+// in doc/PERFORMANCE.md is measured.
+//
+// Slot 0 = blake2b of the input, 1 = scratchpad fill / rounding-mode reset,
+// 2 = the eight VM programs, 3 = blake2b of the register file, 4 = the final
+// AES pass (fused with the next fill in the pipelined path).
+#ifdef XMO_PROFILE
+#include <x86intrin.h>
+extern "C" {
+	unsigned long long xmo_prof_tsc[8];
+	unsigned long long xmo_prof_hashes;
+}
+#define XMO_PROF_T(i, stmt) do { unsigned long long _xmo_t0 = __rdtsc(); stmt; xmo_prof_tsc[i] += __rdtsc() - _xmo_t0; } while (0)
+#define XMO_PROF_MARK(stmt) do { unsigned long long _xmo_t0 = __rdtsc(); stmt; xmo_prof_tsc[0] += __rdtsc() - _xmo_t0; } while (0)
+#else
+#define XMO_PROF_T(i, stmt) do { stmt; } while (0)
+#define XMO_PROF_MARK(stmt) do { stmt; } while (0)
+#endif
+
 #include "crypto/rx/Profiler.h"
 #include "base/net/stratum/Job.h"
 
@@ -685,46 +708,58 @@ extern "C" {
 		assert(inputSize == 0 || input != nullptr);
 		assert(output != nullptr);
 		alignas(16) uint64_t tempHash[8];
+#ifdef XMO_PROFILE
+		xmo_prof_hashes++;
+#endif
+		XMO_PROF_MARK(
                 switch (algo) {
                     case xmrig::Algorithm::RX_XLA:   rx_yespower_k12(tempHash, sizeof(tempHash), input, inputSize); break;
-		    default: rx_blake2b_wrapper::run(tempHash, sizeof(tempHash), input, inputSize);
+		    default: rx_blake2b_wrapper::run(tempHash, sizeof(tempHash), input, inputSize); break;
 		}
-		machine->initScratchpad(&tempHash);
-		machine->resetRoundingMode();
+		);
+		XMO_PROF_T(1, machine->initScratchpad(&tempHash));
+		XMO_PROF_T(1, machine->resetRoundingMode());
 		for (uint32_t chain = 0; chain < RandomX_CurrentConfig.ProgramCount - 1; ++chain) {
-			machine->run(&tempHash);
-			rx_blake2b_wrapper::run(tempHash, sizeof(tempHash), machine->getRegisterFile(), sizeof(randomx::RegisterFile));
+			XMO_PROF_T(2, machine->run(&tempHash));
+			XMO_PROF_T(3, rx_blake2b_wrapper::run(tempHash, sizeof(tempHash), machine->getRegisterFile(), sizeof(randomx::RegisterFile)));
 		}
-		machine->run(&tempHash);
-		machine->getFinalResult(output);
+		XMO_PROF_T(2, machine->run(&tempHash));
+		XMO_PROF_T(4, machine->getFinalResult(output));
 	}
 	// End MoneroOcean
 
 	// MoneroOcean: first/next hashing also receives the active algorithm for switch-sensitive variants.
 	void randomx_calculate_hash_first(randomx_vm* machine, uint64_t (&tempHash)[8], const void* input, size_t inputSize, const xmrig::Algorithm algo) {
+		XMO_PROF_MARK(
                 switch (algo) {
                     case xmrig::Algorithm::RX_XLA:   rx_yespower_k12(tempHash, sizeof(tempHash), input, inputSize); break;
-		    default: rx_blake2b_wrapper::run(tempHash, sizeof(tempHash), input, inputSize);
+		    default: rx_blake2b_wrapper::run(tempHash, sizeof(tempHash), input, inputSize); break;
 		}
-		machine->initScratchpad(tempHash);
+		);
+		XMO_PROF_T(1, machine->initScratchpad(tempHash));
 	}
 
 	void randomx_calculate_hash_next(randomx_vm* machine, uint64_t (&tempHash)[8], const void* nextInput, size_t nextInputSize, void* output, const xmrig::Algorithm algo) {
 		PROFILE_SCOPE(RandomX_hash);
+#ifdef XMO_PROFILE
+		xmo_prof_hashes++;
+#endif
 
-		machine->resetRoundingMode();
+		XMO_PROF_T(1, machine->resetRoundingMode());
 		for (uint32_t chain = 0; chain < RandomX_CurrentConfig.ProgramCount - 1; ++chain) {
-			machine->run(&tempHash);
-			rx_blake2b_wrapper::run(tempHash, sizeof(tempHash), machine->getRegisterFile(), sizeof(randomx::RegisterFile));
+			XMO_PROF_T(2, machine->run(&tempHash));
+			XMO_PROF_T(3, rx_blake2b_wrapper::run(tempHash, sizeof(tempHash), machine->getRegisterFile(), sizeof(randomx::RegisterFile)));
 		}
-		machine->run(&tempHash);
+		XMO_PROF_T(2, machine->run(&tempHash));
 
 		// Finish current hash and fill the scratchpad for the next hash at the same time
+		XMO_PROF_MARK(
                 switch (algo) {
                     case xmrig::Algorithm::RX_XLA:   rx_yespower_k12(tempHash, sizeof(tempHash), nextInput, nextInputSize); break;
-		    default: rx_blake2b_wrapper::run(tempHash, sizeof(tempHash), nextInput, nextInputSize);
+		    default: rx_blake2b_wrapper::run(tempHash, sizeof(tempHash), nextInput, nextInputSize); break;
 		}
-		machine->hashAndFill(output, tempHash);
+		);
+		XMO_PROF_T(4, machine->hashAndFill(output, tempHash));
 	}
 	// End MoneroOcean
 

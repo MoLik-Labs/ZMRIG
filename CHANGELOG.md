@@ -3,6 +3,29 @@
 _Not a release: no tag, no image. This lands on `BETA` and becomes a version when
 the release is cut._
 
+## A hash is 16 384 dependent reads, and now that is written down
+
+`zmrig/tests/profile.sh` builds a copy of the hash engine with cycle counters in
+it (`-DXMO_PROFILE`, compiled out of every other build) and prints what each
+phase of one hash costs. On the 2 vCPU Xeon VM used for this fork's measurements,
+on the path the worker loop actually runs: **97.1 %** of the cycles are the eight
+VM programs — 16 384 random 64-byte reads from the 2080 MiB dataset, each
+dependent on the one before it — 2.7 % is the final AES pass over the scratchpad,
+0.2 % is blake2b, and the scratchpad fill is *free* because the pipelined API
+fuses it with that AES pass. The same binary through the one-shot API does the
+same work at 374–405 H/s against 392–433 H/s pipelined, which is the +5–7 % the
+mining loop already takes.
+
+The script also measures what one of those reads costs on the machine it runs on
+(218.8 ns here, against 70–90 ns on bare metal), which is the number that
+explains the 400 H/s of a contested VM and the 800–1 100 H/s in the older
+rounds of the performance guide. Both halves are now in
+`doc/PERFORMANCE.md` and the site's performance page, in both languages,
+together with the two things they rule out: compiler flags (five interleaved
+rounds of `-O3 -march=native`, `-Ofast`, `-funroll-loops`, `-O2` — medians
+401.7, 392.0, 394.6, 397.2 H/s, inside the ±6 % the host drifts) and the miner's
+own loop (`--bench -t 1` at 398.1 H/s against 395.7 H/s for the bare C API).
+
 ## `--check` said the configuration was fine and the run disagreed
 
 `--check` is what the installer, `zmrig-os doctor` and every provisioning script

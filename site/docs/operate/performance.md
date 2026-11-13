@@ -140,6 +140,52 @@ preset is simply applied. Original values are saved and restored on exit.
 Anything advertised as a large speed-up that is not huge pages, dataset mode or
 thread count should be measured before it is believed.
 
+## Where the cycles go
+
+`./zmrig/tests/profile.sh` builds a second copy of the hash engine with cycle
+counters in it and prints what each phase of one hash costs, through the same C
+API the miner calls. On the 2 vCPU Xeon VM this documentation is written on, a
+hash on the path the worker loop actually runs is:
+
+| Phase | Cycles | Share |
+|---|---:|---:|
+| 8 VM programs — 16 384 random 64-byte dataset reads | 5 152 683 | **97.1 %** |
+| final AES pass over the 2 MiB scratchpad | 140 650 | 2.7 % |
+| blake2b of the register file ×7 | 7 968 | 0.2 % |
+| everything else (blake2b of the blob, fill, rounding mode) | 3 104 | 0.1 % |
+
+A hash is `ProgramCount × ProgramIterations` = 8 × 2 048 = **16 384 random reads
+from the 2080 MiB dataset, each dependent on the previous one**. That is the
+whole cost, and it is why the levers above are the levers: huge pages shorten
+the walk, the dataset mode decides whether the walk is in memory at all, and
+thread count adds independent chains.
+
+The same script measures what one of those reads costs on your machine:
+
+```console
+$ ./zmrig/tests/profile.sh 200
+memory: 2048 MiB, 33554432 dependent random reads
+  218.8 ns per read  (a hash makes 16384 of them)
+  ceiling for one thread if nothing overlaps: 279 H/s
+```
+
+Bare metal answers 70–90 ns here; a shared vCPU answers several times that, and
+that is the difference between the 800–1 100 H/s in the tables above and the
+~400 H/s a contended VM gives for the same binary. It also means a rewrite of the
+hash is not an optimisation: the work is the latency of those 16 384 reads in
+that order, and any implementation that produces valid shares does the same
+reads.
+
+Two things this has already ruled out, measured rather than argued:
+
+- **Compiler flags.** Five interleaved rounds of `-O3 -march=native`, `-Ofast`,
+  `-funroll-loops` and `-O2` gave medians of 401.7, 392.0, 394.6 and 397.2 H/s —
+  inside the ±6 % a shared vCPU drifts between adjacent runs. The hot loop is
+  JIT-generated at runtime; there is nothing for the C++ compiler to optimise.
+- **The miner's own loop.** `--bench -t 1` measures 398.1 H/s through the miner
+  and the bare C API measures 395.7 H/s with no Zig code in the loop at all: the
+  nonce handling, the target check and the atomics are below the noise.
+
 ## Switching between algorithms costs 16 seconds, unless the dataset stays mapped
 
 A pool that carries more than one coin — MoneroOcean, and every `MODE=auto`
