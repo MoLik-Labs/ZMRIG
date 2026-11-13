@@ -26,7 +26,6 @@
 #include <cstdint>
 #include <ctime>
 #include <sys/mman.h>
-#include <x86intrin.h>
 
 #include "xmo_randomx.h"
 
