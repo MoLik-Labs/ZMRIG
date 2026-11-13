@@ -69,6 +69,8 @@ real archive paths with `c++ -print-file-name=`.
 ./zmrig/out/zmrig --self-test    # full: vectors + pipelining + 2 GiB dataset match
 ./zmrig/out/zmrig --self-test=light   # vectors + pipelining only (runs beside a miner)
 ./zmrig/out/zmrig --bench=100000 -t 2 # offline hashrate, no pool
+./zmrig/tests/profile.sh         # where the cycles in a hash go, and what a
+                                 # random dataset read costs on this machine
 ```
 
 `--self-test` prints `PASS`/`FAIL` per check and exits 0 on success; it is what

@@ -135,6 +135,52 @@ lại khi thoát.
 Bất cứ thứ gì được quảng cáo là tăng tốc lớn mà không phải huge pages, chế độ
 dataset hay số thread thì nên được đo trước khi tin.
 
+## Chu kỳ CPU đi đâu
+
+`./zmrig/tests/profile.sh` build một bản sao của engine có bộ đếm chu kỳ và in ra
+từng pha của một hash tốn bao nhiêu, qua đúng C API mà miner gọi. Trên VM Xeon 2
+vCPU dùng để viết tài liệu này, một hash trên đường mà vòng lặp worker thật sự
+chạy:
+
+| Pha | Chu kỳ | Tỷ lệ |
+|---|---:|---:|
+| 8 chương trình VM — 16 384 lần đọc 64 byte ngẫu nhiên từ dataset | 5 152 683 | **97,1 %** |
+| lượt AES cuối trên scratchpad 2 MiB | 140 650 | 2,7 % |
+| blake2b của register file ×7 | 7 968 | 0,2 % |
+| phần còn lại (blake2b của blob, fill, rounding mode) | 3 104 | 0,1 % |
+
+Một hash là `ProgramCount × ProgramIterations` = 8 × 2 048 = **16 384 lần đọc
+ngẫu nhiên từ dataset 2080 MiB, mỗi lần phụ thuộc vào lần trước**. Đó là toàn bộ
+chi phí, và đó là lý do những đòn bẩy ở trên là đòn bẩy: huge pages rút ngắn
+đường đi, chế độ dataset quyết định đường đi có nằm trong bộ nhớ hay không, và số
+thread thêm những chuỗi độc lập.
+
+Cùng script đó đo một lần đọc như vậy tốn bao nhiêu trên máy của bạn:
+
+```console
+$ ./zmrig/tests/profile.sh 200
+memory: 2048 MiB, 33554432 dependent random reads
+  218.8 ns per read  (a hash makes 16384 of them)
+  ceiling for one thread if nothing overlaps: 279 H/s
+```
+
+Máy thật (bare metal) trả lời 70–90 ns; một vCPU dùng chung trả lời gấp vài lần,
+và đó là khác biệt giữa 800–1 100 H/s trong các bảng ở trên với ~400 H/s mà cùng
+một binary đạt được trên VM bị tranh chấp. Nó cũng có nghĩa là viết lại hash
+không phải là tối ưu: việc phải làm là độ trễ của 16 384 lần đọc đó theo đúng thứ
+tự đó, và bất kỳ cài đặt nào tạo ra share hợp lệ đều phải đọc y như vậy.
+
+Hai thứ đã bị loại bằng đo, không phải bằng lập luận:
+
+- **Cờ biên dịch.** Năm vòng xen kẽ của `-O3 -march=native`, `-Ofast`,
+  `-funroll-loops` và `-O2` cho trung vị 401,7 / 392,0 / 394,6 / 397,2 H/s — nằm
+  trong biên độ ±6 % mà một vCPU dùng chung trôi giữa hai lần chạy liền nhau.
+  Vòng lặp nóng được JIT sinh ra lúc chạy; không có gì cho trình biên dịch C++ tối
+  ưu.
+- **Vòng lặp của chính miner.** `--bench -t 1` đo được 398,1 H/s qua miner và C
+  API trần đo được 395,7 H/s khi không có một dòng Zig nào trong vòng lặp: phần
+  xử lý nonce, kiểm tra target và atomic đều dưới mức nhiễu.
+
 ## Đổi thuật toán tốn 16 giây, trừ khi dataset vẫn được giữ trong bộ nhớ
 
 Một pool chở nhiều coin — MoneroOcean, và mọi rig `MODE=auto` trên pool đa thuật

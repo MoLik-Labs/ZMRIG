@@ -100,6 +100,65 @@ RandomX sources, so `-march` has nothing to optimise there. Flags still help the
 dataset initialiser and the CryptoNight/Argon2 C paths, so `build-optimized.sh`
 keeps them, but do not expect a RandomX speedup from them.
 
+### Where the cycles go: one hash, measured (2026-11 round)
+
+`./zmrig/tests/profile.sh` builds a second copy of the engine with
+`-DXMO_PROFILE` and reports the cycles each phase of a hash costs, through the
+same C API the mining loop calls. On the 2 vCPU Xeon VM (rx/0, one worker), the
+miner's own path — `hash_first`/`hash_next`, which is what the worker loop runs —
+measures:
+
+| Phase | Cycles per hash | Share |
+|---|---:|---:|
+| 8 VM programs (16384 dataset reads) | 5 152 683 | **97.1 %** |
+| final AES pass over the 2 MiB scratchpad | 140 650 | 2.7 % |
+| blake2b of the register file, x7 | 7 968 | 0.2 % |
+| blake2b of the blob | 1 132 | 0.0 % |
+| scratchpad fill | 1 972 | 0.0 % |
+
+The fill line is *empty on purpose*: in the pipelined API the fill of the next
+hash and the final AES pass of the current one are the same loop over the
+scratchpad (`hashAndFillAes1Rx4`). The one-shot API pays for both, which is why
+the same binary through `randomx_calculate_hash` runs the same work at
+**374–405 H/s against 392–433 H/s** pipelined, +5–7 % — and why the miner keeps
+using the pipelined calls.
+
+The VM number is the whole story, and it is arithmetic: a hash is
+`ProgramCount × ProgramIterations` = 8 × 2048 = **16384 random 64-byte reads**
+from the 2080 MiB dataset, each one dependent on the registers the previous read
+returned. Nothing else in the loop is worth 3 %.
+
+The same script measures the other half — what one random read costs here:
+
+```console
+$ ./zmrig/tests/profile.sh 200
+memory: 2048 MiB, 33554432 dependent random reads
+  218.8 ns per read  (a hash makes 16384 of them)
+  ceiling for one thread if nothing overlaps: 279 H/s
+```
+
+At 395–433 H/s the implementation is *above* that naive ceiling, because the VM
+issues a prefetch of the next dataset line one iteration ahead; what is left is
+the chain itself. The measured 2.5 ms per hash over 16384 reads is ~152 ns each,
+i.e. the lookahead hides roughly a third of a 219 ns miss. Bare metal is 70–90 ns
+per miss, which is why the same binary does 800–1 100 H/s in the older rounds on
+this page.
+
+What that rules out, with numbers rather than opinion:
+
+* **Compiler flags.** An interleaved A/B (five rounds each, same minute, same
+  order — host drift on a shared vCPU is ±6 %, larger than any flag effect):
+  medians `-O3 -march=native` **401.7**, `-Ofast` **392.0**,
+  `-funroll-loops` **394.6**, `-O2` **397.2 H/s**. No flag change is worth
+  making, and none was.
+* **The Zig mining loop.** `--bench -t 1` measures **398.1 H/s** through the
+  miner, against **395.7 H/s** through the bare C API with no Zig code in the
+  loop at all: the nonce handling, target check and atomics cost less than the
+  resolution of the measurement.
+* **Rewriting the hash.** It would have to produce the same 16384 dependent
+  random reads in the same order, at which point it is the same program. RandomX
+  was designed for exactly this: the work is the memory latency, not the code.
+
 The real gains are environmental (sections 2–4) and structural (section 6: no
 donation switch).
 
