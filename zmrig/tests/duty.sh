@@ -34,8 +34,18 @@ QUICK=0
 
 FAILED=0
 pass() { printf ' PASS %s\n' "$*"; }
-fail() { printf ' FAIL %s\n' "$*"; FAILED=1; }
+fail() { printf ' FAIL %s\n' "$*"; FAILED=1; action_error "$*"; }
 say()  { printf ' * %s\n' "$*"; }
+
+# GitHub renders `::error::` as an annotation, and an annotation is the only
+# part of a job's output that can be read back through the API when the log
+# blob is unreachable (it is stored behind a signed URL on a host that is not
+# always reachable). So a failure says what happened here, not only "exit 1".
+action_error() {
+    [ -n "${GITHUB_ACTIONS:-}" ] || return 0
+    printf '::error::%s\n' "${1//$'\n'/%0A}"
+}
+
 
 [ -x "$BIN" ] || { echo "missing $BIN - run ./zmrig/build.sh first" >&2; exit 2; }
 command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 2; }

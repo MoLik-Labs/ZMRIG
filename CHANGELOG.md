@@ -209,6 +209,86 @@ an earlier run had suggested by 7 %. Alternating runs on the same host:
 run-to-run spread of this machine, not an overhead — there is nothing in the pool
 path worth optimising.
 
+## Does the miner submit the shares it earned?
+
+Hashrate is the number everybody looks at and it is not the number that gets
+paid. A comparison that reads the wrong eight bytes of the digest, or uses `>`
+instead of `>=`, produces a rig that reports 1 000 H/s, logs nothing unusual and
+submits a fraction of the shares it should have found - or floods the pool until
+it bans the IP.
+
+RandomX output is uniform, so a correct target comparison submits exactly
+`hashes / difficulty` shares. That is a prediction with a number in it, and
+`zmrig/tests/targets.sh` checks it against a pool that counts, in two runs of
+one difficulty each so the expected count is exact rather than estimated:
+
+| Run | Difficulty | Hashes | Shares | Expected |
+| --- | ---: | ---: | ---: | --- |
+| a | 1 000 | 26 884 | **26** | 26 |
+| b | 1 000 000 | 25 424 | **0** | 0.03 |
+
+It also counts duplicate `(job, nonce)` pairs, because a rig that resubmits has
+an off-by-one in the pipelined `hash_next` bookkeeping and a real pool would
+call those stale, and it requires zero rejected and zero failed shares.
+
+The important half is neither count. The test takes the shares the pool was
+actually handed, recomputes them with `--verify-share`, and applies the rule a
+pool applies - the whole hash as a 256-bit little-endian number, below
+`2^256 / difficulty`. The miner's own check reads the top 64-bit word (bytes
+24..32) against `2^64 / difficulty`, which is the *same test* only if the
+rounding is right, and a comparison against the wrong eight bytes has exactly
+the same statistics as a correct one: every window of a uniform hash is uniform.
+That failure mode would pass every rate check in this file and be rejected by
+every real pool. Eight recomputed shares met the rule, which is the first
+end-to-end proof of the offset in this repository.
+
+### And the hand-over to the developer wallet costs nothing
+
+The fee documentation has always said a fee session must never cost the user a
+minute of hashing. Measured for the first time, with the duty meter, in an
+18-minute run at `--donate-level=10` (a session every 10 minutes instead of 33):
+
+| | |
+| --- | --- |
+| wall clock | 1 099 s |
+| hashing | 1 084 s (**98.6 %**) |
+| not hashing | 16 s - the dataset build at startup |
+| shares | 984 772 hashes, 17 accepted, 0 rejected |
+| fee session | 60 s owed, 59 s on the developer wallet, then back: **0 s lost** |
+
+Two reconnects, and neither costs a measurable second, for the same reason a
+pool that blinks does not: the workers keep hashing the job they have.
+
+### Three log lines that were lying about why a socket closed
+
+A closed socket has three causes and the log called all of them "connection
+lost":
+
+* **SIGTERM.** Every `systemctl stop` printed `warning connection lost:
+  ConnectionClosed` immediately before `shutting down`, which is how a log
+  teaches somebody to ignore warnings.
+* **The developer fee.** Every fee hand-over printed the same warning, so a
+  deliberate wallet swap read like a network fault - every 33 minutes, forever.
+* **A real disconnect.** The one case the warning is for.
+
+The monitor thread records why it shut the socket down (`.shutdown`, `.fee`) and
+the mining loop reads that instead of guessing: a hand-over now says
+`connection closed on purpose: the developer fee is due, reconnecting to pay it`
+at `info`, a shutdown says nothing, and the warning is left for the pool.
+
+### The run said "exit code 1" and nothing else
+
+The share test above went red on CI with a log that read, in full, `Process
+completed with exit code 1.` GitHub serves the log of a job from a signed URL on
+a storage host that was not answering, so there was nothing to read - not which
+case failed, not what the miner printed. Nothing was wrong with the test: it
+passes in 190 s on a machine that has a compiler warm.
+
+Annotations are served from the API instead of that blob, so the three pool tests
+(`switch.sh`, `duty.sh`, `targets.sh`) now emit one on failure, and the switch
+test puts the miner's own last fifteen lines - or the pool's - inside it. A red
+run is going to say which of the eight cases it was.
+
 ## The tool has one index, and the container has a memory floor
 
 Three changes, all of them about the same failure: a rig that looks fine and

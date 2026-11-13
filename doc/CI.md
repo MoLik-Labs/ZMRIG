@@ -32,6 +32,7 @@ What they cover:
 | `verify-fee-free.sh` | the C++ engine still has no donation strategy, no developer wallet, and prints `DONATE 0%` even with `--donate-level=9` |
 | `miner-integration` | the built binary talks stratum, accepts a job and submits a share for all 34 CPU algorithms (`tests/common/miner_harness.js` runs a fake pool) |
 | `zmrig/tests/switch.sh` | an algorithm switch back reuses the mapped dataset *and* a share submitted after it recomputes to the same digest; the same test with `--no-dataset-cache` proves the off switch is real |
+| `zmrig/tests/targets.sh` | the target comparison submits exactly `hashes / difficulty` shares at difficulty 1 000 (26 of 26 884 hashes, measured) and nothing at 1 000 000, with no duplicate nonces, no unknown jobs and no rejections — and the shares themselves are recomputed and checked against the 256-bit rule a pool applies, which is what proves the miner is comparing the right eight bytes |
 | `zmrig/tests/duty.sh` | a pool that drops the socket every 5 s costs no hashing time (6–7 reconnects, 0 s lost) and a pool that never answers is reported as time without a job — the two directions of the ability to say how much of the run was hashing |
 
 The documentation site and the donation guard run as their own job — small

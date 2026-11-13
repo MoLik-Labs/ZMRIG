@@ -220,6 +220,25 @@ than a percentage nobody reads:
 warn hashing 41 % of the last minute: 22 s with no job (the pool is gone, or a reconnect is in flight)
 ```
 
+### The developer fee, measured
+
+The same instrument was pointed at the one thing the fee documentation asserts
+and had never measured: that handing the wallet over and taking it back costs
+the user nothing. An 18-minute run at `--donate-level=10` (so a session opens
+after 10 minutes instead of 33), one full session, same 2 vCPU host:
+
+| | |
+| --- | --- |
+| wall clock | 1 099 s |
+| hashing | 1 084 s (**98.6 %**) |
+| not hashing | 16 s, the dataset build at startup |
+| shares | 984 772 hashes, 17 accepted, 0 rejected |
+| fee session | 60 s owed → 59 s on the developer wallet → back, **0 s lost** |
+
+The two reconnects it needs (one into the fee login, one back to the user's
+wallet) cost nothing measurable, for the same reason a dropped pool costs
+nothing: the workers keep hashing the job they have until a new one arrives.
+
 ### Measured, both directions
 
 An instrument that is only ever quiet is an instrument nobody should trust, so

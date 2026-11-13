@@ -14,6 +14,7 @@
     "test:thermal": "bash zmrig/tests/thermal.sh",
     "test:switch": "bash zmrig/tests/switch.sh",
     "test:duty": "bash zmrig/tests/duty.sh",
+    "test:targets": "bash zmrig/tests/targets.sh",
     "test:oneclick": "bash tests/oneclick/plan.sh && bash tests/oneclick/config.sh && bash tests/oneclick/governor.sh && bash tests/oneclick/tune-targets.sh && bash tests/oneclick/light-fallback.sh && bash tests/oneclick/purge.sh",
     "test:releases": "bash tests/releases/latest-iso.test.sh && bash tests/releases/version-consistency.test.sh",
     "test:serve": "cd serve && npm test",

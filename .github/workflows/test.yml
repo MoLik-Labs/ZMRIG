@@ -33,14 +33,25 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential \
-            cmake \
-            git \
-            libhwloc-dev \
-            libssl-dev \
-            libuv1-dev
+          # This step has been failing with exit 100 (apt's code) after ten
+          # minutes on both architectures, on BETA, with no compiler having run:
+          # a mirror, not a change. `Acquire::Retries` makes apt retry by
+          # itself, two passes cover a longer wobble, and both are bounded -
+          # retrying a dead mirror for twenty minutes turns a fast failure into
+          # a job that dies on its timeout.
+          sudo -E apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=15 update || echo "apt update failed"
+          for attempt in 1 2; do
+            if sudo -E apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=15 \
+                install -y --no-install-recommends \
+                build-essential cmake git libhwloc-dev libssl-dev libuv1-dev; then
+              break
+            fi
+            echo "::warning::apt install attempt ${attempt} failed"
+            sleep $((attempt * 10))
+          done
+          for package in cmake g++ ; do
+            command -v "$package" >/dev/null 2>&1 || { echo "missing after apt: $package"; exit 1; }
+          done
 
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -71,11 +82,30 @@ jobs:
 
       - name: Install the toolchain
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential python3-pip
+          # The runner image already has a C++ compiler and python3-pip; apt is
+          # only here so an older image still works. It is allowed to fail: this
+          # step failed twice on a runner with a bad apt mirror (exit 100, after
+          # four minutes of retries) and took every Zig test in the job with it,
+          # which is a red build for a change that touched no C++ at all.
+          if ! command -v g++ >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
+            sudo apt-get update || echo "apt update failed"
+            sudo apt-get install -y --no-install-recommends build-essential python3-pip || echo "apt install failed"
+          fi
+          command -v g++ >/dev/null 2>&1 || { echo "no C++ compiler on this runner"; exit 1; }
+
           # zig 0.13, and only 0.13: the runner's own zig is newer and does not
           # compile this code. scripts/find-zig.sh decides, and says which.
-          python3 -m pip install --break-system-packages --quiet ziglang==0.13.0
+          for attempt in 1 2 3; do
+            if python3 -m pip install --break-system-packages --quiet ziglang==0.13.0; then
+              break
+            fi
+            echo "pip attempt ${attempt} failed; retrying in $((attempt * 10)) s"
+            sleep $((attempt * 10))
+          done
+
+          # Prove the toolchain is there, so a failure names the download instead
+          # of surfacing later as a compile error in a file nobody touched.
+          python3 -m ziglang version
 
       - name: Build
         run: ./zmrig/build.sh --jobs "$(nproc)"
@@ -113,6 +143,12 @@ jobs:
       # (which costs everything).
       - name: The duty cycle, measured against two hostile pools
         run: ./zmrig/tests/duty.sh --quick
+
+      # Income per hash, not hashes per second: does the target comparison
+      # submit hashes/difficulty shares, once at an easy target and once at a
+      # hard one?
+      - name: Shares per hash, at two difficulties
+        run: ./zmrig/tests/targets.sh --quick
 
       # The safe mode, end to end: the governor is driven through
       # --thermal-file, because a test that needed a genuinely hot CPU would

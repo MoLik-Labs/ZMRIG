@@ -214,6 +214,25 @@ trăm không ai đọc:
 warn hashing 41 % of the last minute: 22 s with no job (the pool is gone, or a reconnect is in flight)
 ```
 
+### Phí phát triển, đo được
+
+Cùng dụng cụ đó được chĩa vào đúng điều mà tài liệu về phí vẫn khẳng định mà chưa
+từng đo: việc giao ví rồi lấy lại không tốn gì của người dùng. Một lần chạy 18
+phút với `--donate-level=10` (để một phiên mở sau 10 phút thay vì 33 phút), trọn
+một phiên, cùng máy 2 vCPU:
+
+| | |
+| --- | --- |
+| đồng hồ | 1 099 s |
+| đang hash | 1 084 s (**98.6 %**) |
+| không hash | 16 s, lần dựng dataset lúc khởi động |
+| share | 984 772 hash, 17 được nhận, 0 bị từ chối |
+| phiên phí | nợ 60 s → 59 s đào cho ví nhà phát triển → quay lại, mất **0 s** |
+
+Hai lần nối lại mà nó cần (một vào phiên phí, một về ví người dùng) không tốn gì
+đo được, cùng lý do một pool rớt không tốn gì: worker vẫn hash job đang có cho tới
+khi có job mới.
+
 ### Đo cả hai chiều
 
 Một dụng cụ chỉ biết im lặng thì không đáng tin, nên nó được kiểm với hai pool

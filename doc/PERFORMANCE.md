@@ -853,7 +853,14 @@ Measured on two vCPUs, same host, against two hostile pools:
 | drops the socket every 5 s | 6–7 reconnects in 45 s | **0 s** lost (the workers hash the last job while the main thread reconnects) |
 | accepts, never replies | no job at all | `hashing 0 s of 24 s`, reason named |
 
-`zmrig/tests/duty.sh` asserts both on every push, in about 70 s. The same
+`zmrig/tests/duty.sh` asserts both on every push, in about 70 s.
+
+The same instrument was pointed at a claim the fee documentation makes and had
+never measured - that a fee hand-over costs the user nothing. An 18-minute run
+at `--donate-level=10`, one full session: **1 084 s of 1 099 s hashing (98.6 %)**,
+the 16 s being the startup dataset; the fee session itself (60 s owed, 59 s on
+the developer wallet, then back) lost **0 s**, because the two reconnects it
+needs keep the workers on the job they already have. The same
 instrument re-measured two claims that were previously assumptions:
 `--no-optimized-init` changes nothing measurable (build 19.9–20.9 s portable
 against 20.1–20.9 s optimised), and mining through a pool is not slower than
