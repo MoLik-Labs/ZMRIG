@@ -118,6 +118,7 @@ pub const Mode = enum { auto, fast, light };
 /// not overwrite the config with its default value (that is how a `mode` of
 /// "light" in config.json was silently replaced by "auto").
 pub const Seen = struct {
+    algo: bool = false,
     mode: bool = false,
     huge_pages: bool = false,
     huge_pages_jit: bool = false,
@@ -157,6 +158,8 @@ pub const Seen = struct {
     autotune: bool = false,
     health_warmup: bool = false,
     health_restart_seconds: bool = false,
+    http_host: bool = false,
+    api_port: bool = false,
 };
 
 pub const ProfileSetting = enum {
@@ -278,6 +281,9 @@ pub const Options = struct {
     api_port: u16 = 0,
     api_token: ?[]const u8 = null,
     http_host: []const u8 = "127.0.0.1",
+    /// `http_host` may point into the argv buffer (no ownership) or into this
+    /// allocation (config JSON strings are freed when the parser returns).
+    http_host_owned: ?[]const u8 = null,
     background: bool = false,
     config_path: ?[]const u8 = null,
     self_test: bool = false,
@@ -323,6 +329,7 @@ pub const Options = struct {
         if (self.report_file) |v| allocator.free(v);
         if (self.report_id) |v| allocator.free(v);
         if (self.api_token) |v| allocator.free(v);
+        if (self.http_host_owned) |v| allocator.free(v);
         if (self.config_path) |v| allocator.free(v);
         if (self.ws_path) |v| allocator.free(v);
         if (self.ws_origin) |v| allocator.free(v);
@@ -333,9 +340,17 @@ pub const Options = struct {
         if (self.thermal_file) |v| allocator.free(v);
     }
 
-    /// Resolves the algorithm for a pool: explicit flag > pool flag > job value.
+    /// Resolves a pinned algorithm: explicit global flag > per-pool pin > job.
+    ///
+    /// A global `--algo=auto` is also an explicit override: it clears a
+    /// per-pool pin and makes `loginAlgos` announce the full supported family.
+    /// `null` here therefore means either auto or "pool decides"; `loginAlgos`
+    /// distinguishes them from `algo_all` / `pool.algo_all`.
     pub fn poolAlgo(self: *const Options, pool: *const Pool) ?api.Algo {
-        return pool.algo orelse self.algo;
+        if (self.algo) |algo| return algo;
+        if (self.algo_all) return null;
+
+        return pool.algo;
     }
 
     /// What to announce in the login request, in priority order.
@@ -654,6 +669,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseEr
             }
         } else if (std.mem.eql(u8, name, "-a") or std.mem.eql(u8, name, "--algo")) {
             const value = try needValue(args, &i, inline_value);
+            opts.seen.algo = true;
             // `auto` is the one value that is not an algorithm name: it is the
             // instruction to advertise all of them.
             if (std.ascii.eqlIgnoreCase(value, "auto")) {
@@ -909,8 +925,10 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseEr
             opts.log_file = allocator.dupe(u8, try needValue(args, &i, inline_value)) catch return error.OutOfMemory;
         } else if (std.mem.eql(u8, name, "--http-host")) {
             opts.http_host = try needValue(args, &i, inline_value);
+            opts.seen.http_host = true;
         } else if (std.mem.eql(u8, name, "--http-port")) {
             opts.api_port = try parseNumber(u16, try needValue(args, &i, inline_value));
+            opts.seen.api_port = true;
         } else if (std.mem.eql(u8, name, "--http-access-token")) {
             opts.api_token = allocator.dupe(u8, try needValue(args, &i, inline_value)) catch return error.OutOfMemory;
         } else if (std.mem.eql(u8, name, "-c") or std.mem.eql(u8, name, "--config")) {
@@ -1522,7 +1540,11 @@ pub fn parseConfigFile(allocator: std.mem.Allocator, opts: *Options, path: []con
                     if (jsonInt(u16, http, "port")) |port| opts.api_port = port;
                 }
             }
-            if (jsonString(http, "host")) |host| opts.http_host = host;
+            if (jsonString(http, "host")) |host| {
+                if (opts.http_host_owned) |old| allocator.free(old);
+                opts.http_host_owned = allocator.dupe(u8, host) catch return error.OutOfMemory;
+                opts.http_host = opts.http_host_owned.?;
+            }
             if (jsonString(http, "access-token")) |token| opts.api_token = allocator.dupe(u8, token) catch return error.OutOfMemory;
         }
     }
@@ -1547,6 +1569,16 @@ pub fn parseConfigFile(allocator: std.mem.Allocator, opts: *Options, path: []con
     }
 }
 
+/// Move an owned optional string from the CLI parse into the merged options.
+/// The caller can then deinit the CLI options without leaking or double-freeing.
+fn moveString(allocator: std.mem.Allocator, dst: *?[]const u8, src: *?[]const u8) void {
+    if (src.*) |value| {
+        if (dst.*) |old| allocator.free(old);
+        dst.* = value;
+        src.* = null;
+    }
+}
+
 /// Applies the command line on top of the config file.
 ///
 /// The two are parsed into separate `Options` and this is what joins them, so
@@ -1556,23 +1588,26 @@ pub fn parseConfigFile(allocator: std.mem.Allocator, opts: *Options, path: []con
 /// the thermal governor off. The test at the end of this file walks every field
 /// of `Options` and fails if one is not accounted for.
 ///
-/// Strings are *moved*, not copied: `extra` is discarded by the caller, and a
-/// copy would leak on every start.
+/// Strings are moved, not copied: `extra` is deinitialized by the caller, and
+/// any string this function transfers is nulled out of `extra` first.
 pub fn mergeInto(allocator: std.mem.Allocator, base: *Options, extra: *Options) void {
-    if (extra.algo) |v| base.algo = v;
+    if (extra.seen.algo) {
+        base.algo = extra.algo;
+        base.algo_all = extra.algo_all;
+    }
     if (extra.threads) |v| base.threads = v;
     if (extra.pools.items.len > 0) {
         // Command line pools replace config file pools, like xmrig does. Take
         // ownership of the CLI buffers instead of copying: `extra` is discarded
         // right after the merge and a copy would leak on every start.
-        for (base.pools.items) |pool| freePool(allocator, pool);
-
-        base.pools.clearRetainingCapacity();
-        base.pools.appendSlice(allocator, extra.pools.items) catch {
-            // Out of memory here means we cannot mine anyway; keep the config
-            // pools rather than dying inside a void function.
+        base.pools.ensureUnusedCapacity(allocator, extra.pools.items.len) catch {
+            // Out of memory here means we cannot apply the CLI pools, but it
+            // must not first destroy the config pools we already have.
             return;
         };
+        for (base.pools.items) |pool| freePool(allocator, pool);
+        base.pools.clearRetainingCapacity();
+        base.pools.appendSliceAssumeCapacity(extra.pools.items);
         extra.pools.clearRetainingCapacity();
     }
     // Only what the command line set: a plain `-c config.json --verbose` must
@@ -1594,18 +1629,11 @@ pub fn mergeInto(allocator: std.mem.Allocator, base: *Options, extra: *Options) 
         base.autotune = true;
         base.autotune_seconds = extra.autotune_seconds;
     }
-    if (extra.seen.thermal_file) {
-        if (base.thermal_file) |old| allocator.free(old);
-        base.thermal_file = extra.thermal_file;
-    }
-    if (extra.api_token) |v| {
-        if (base.api_token) |old| allocator.free(old);
-        base.api_token = v;
-    }
+    if (extra.seen.thermal_file) moveString(allocator, &base.thermal_file, &extra.thermal_file);
+    moveString(allocator, &base.api_token, &extra.api_token);
     if (extra.allow_bad_wallet) base.allow_bad_wallet = true;
-    if (extra.check_wallet) |v| base.check_wallet = v;
+    moveString(allocator, &base.check_wallet, &extra.check_wallet);
     if (extra.verify_share) base.verify_share = true;
-    if (extra.algo_all) base.algo_all = true;
     if (extra.seen.mode) base.mode = extra.mode;
     if (extra.seen.huge_pages) base.huge_pages = extra.huge_pages;
     if (extra.seen.auto_hugepages) base.auto_hugepages = extra.auto_hugepages;
@@ -1628,8 +1656,8 @@ pub fn mergeInto(allocator: std.mem.Allocator, base: *Options, extra: *Options) 
     if (extra.seen.keepalive_interval) base.keepalive_interval = extra.keepalive_interval;
     if (extra.seen.scratchpad_prefetch) base.scratchpad_prefetch = extra.scratchpad_prefetch;
     if (extra.seen.optimized_init) base.optimized_init = extra.optimized_init;
-    if (extra.log_file) |v| base.log_file = v;
-    if (extra.api_port != 0) base.api_port = extra.api_port;
+    moveString(allocator, &base.log_file, &extra.log_file);
+    if (extra.seen.api_port) base.api_port = extra.api_port;
     if (extra.benchmark) {
         base.benchmark = true;
         base.bench_hashes = extra.bench_hashes;
@@ -1649,25 +1677,23 @@ pub fn mergeInto(allocator: std.mem.Allocator, base: *Options, extra: *Options) 
     // that does not mention them must leave those values alone.
     if (extra.seen.report) base.report = true;
     if (extra.seen.report_time) base.report_seconds = extra.report_seconds;
-    if (extra.seen.report_file) {
-        if (base.report_file) |old| allocator.free(old);
-        base.report_file = extra.report_file;
-    }
+    if (extra.seen.report_file) moveString(allocator, &base.report_file, &extra.report_file);
     if (extra.seen.report_interval) base.report_interval = extra.report_interval;
-    if (extra.seen.report_id) {
-        if (base.report_id) |old| allocator.free(old);
-        base.report_id = extra.report_id;
-    }
+    if (extra.seen.report_id) moveString(allocator, &base.report_id, &extra.report_id);
     if (extra.seen.power) base.power_watts = extra.power_watts;
-    if (extra.http_host.len > 0) base.http_host = extra.http_host;
+    if (extra.seen.http_host) {
+        if (base.http_host_owned) |old| allocator.free(old);
+        base.http_host_owned = null;
+        base.http_host = extra.http_host; // argv-owned for the life of main
+    }
 
     if (extra.transport_override) |v| base.transport_override = v;
-    if (extra.ws_path) |v| base.ws_path = v;
-    if (extra.ws_origin) |v| base.ws_origin = v;
-    if (extra.host_header) |v| base.host_header = v;
-    if (extra.connect_to) |v| base.connect_to = v;
-    if (extra.tls_ca) |v| base.tls_ca = v;
-    if (extra.proxy_url) |v| base.proxy_url = v;
+    moveString(allocator, &base.ws_path, &extra.ws_path);
+    moveString(allocator, &base.ws_origin, &extra.ws_origin);
+    moveString(allocator, &base.host_header, &extra.host_header);
+    moveString(allocator, &base.connect_to, &extra.connect_to);
+    moveString(allocator, &base.tls_ca, &extra.tls_ca);
+    moveString(allocator, &base.proxy_url, &extra.proxy_url);
     if (extra.cloudflare) base.cloudflare = true;
 }
 
@@ -2503,6 +2529,7 @@ fn mergePolicy(comptime name: []const u8) MergePolicy {
 
     const policies = .{
         // copied from a `seen` flag
+        .{ "algo", MergePolicy.seen },
         .{ "mode", MergePolicy.seen },
         .{ "huge_pages", MergePolicy.seen },
         .{ "auto_hugepages", MergePolicy.seen },
@@ -2536,12 +2563,15 @@ fn mergePolicy(comptime name: []const u8) MergePolicy {
         .{ "health_restart_seconds", MergePolicy.seen },
         .{ "health_warmup_seconds", MergePolicy.seen },
         .{ "dataset_cache_mb", MergePolicy.seen },
+        .{ "http_host", MergePolicy.seen },
+        // coupled values: `--algo` copies both `algo` and `algo_all`.
+        .{ "algo_all", MergePolicy.together },
         // copied when the command line supplied a value
-        .{ "algo", MergePolicy.given },
         .{ "threads", MergePolicy.given },
         .{ "log_file", MergePolicy.given },
-        .{ "api_port", MergePolicy.given },
-        .{ "http_host", MergePolicy.given },
+        // api_port is copied only when seen; zero is the explicit "off" value.
+        .{ "api_port", MergePolicy.seen },
+        .{ "http_host_owned", MergePolicy.elsewhere },
         .{ "transport_override", MergePolicy.given },
         .{ "ws_path", MergePolicy.given },
         .{ "ws_origin", MergePolicy.given },
@@ -2566,7 +2596,6 @@ fn mergePolicy(comptime name: []const u8) MergePolicy {
         .{ "autotune_seconds", MergePolicy.together },
         .{ "cloudflare", MergePolicy.action },
         .{ "allow_bad_wallet", MergePolicy.action },
-        .{ "algo_all", MergePolicy.action },
         .{ "check_wallet", MergePolicy.action },
         // not merged, on purpose
         .{ "pools", MergePolicy.elsewhere },
@@ -2714,4 +2743,125 @@ test "mergeInto copies every field that has a seen flag" {
     // A guard on the guard: if a refactor stops the loop from finding fields,
     // this test would pass while checking nothing.
     try testing.expect(checked >= 25);
+}
+
+test "http.host from JSON lives after parse and is not replaced by the CLI default" {
+    const testing = std.testing;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "http.json", .data =
+        \\{"http":{"enabled":true,"host":"0.0.0.0"},"pools":[{"url":"pool.example:3333","user":"x"}]}
+    });
+    const path = try tmp.dir.realpathAlloc(testing.allocator, "http.json");
+    defer testing.allocator.free(path);
+
+    var from_file = Options{};
+    defer from_file.deinit(testing.allocator);
+    try parseConfigFile(testing.allocator, &from_file, path);
+    // parseConfigFile has returned and freed its JSON parse tree. A slice into
+    // that tree used to dangle here; the config value is now owned by Options.
+    try testing.expectEqualStrings("0.0.0.0", from_file.http_host);
+
+    // No --http-host on the CLI means exactly that: do not replace the file's
+    // binding address with the command-line parser's default.
+    var quiet = Options{};
+    defer quiet.deinit(testing.allocator);
+    mergeInto(testing.allocator, &from_file, &quiet);
+    try testing.expectEqualStrings("0.0.0.0", from_file.http_host);
+
+    // An explicit CLI value wins and releases the config-owned copy once.
+    var cli = Options{ .http_host = "127.0.0.1", .seen = .{ .http_host = true } };
+    defer cli.deinit(testing.allocator);
+    mergeInto(testing.allocator, &from_file, &cli);
+    try testing.expectEqualStrings("127.0.0.1", from_file.http_host);
+}
+
+test "mergeInto transfers CLI allocations exactly once" {
+    const testing = std.testing;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "base.json", .data =
+        \\{"log-file":"config.log","pools":[{"url":"config.pool:3333","user":"config-wallet"}]}
+    });
+    const path = try tmp.dir.realpathAlloc(testing.allocator, "base.json");
+    defer testing.allocator.free(path);
+
+    var base = Options{};
+    defer base.deinit(testing.allocator);
+    try parseConfigFile(testing.allocator, &base, path);
+
+    var cli = try parseArgs(testing.allocator, &[_][]const u8{
+        "-o", "cli.pool:3333", "-u", "cli-wallet", "--log-file", "cli.log",
+    });
+    defer cli.deinit(testing.allocator);
+
+    mergeInto(testing.allocator, &base, &cli);
+    try testing.expectEqualStrings("cli.log", base.log_file.?);
+    try testing.expectEqualStrings("cli.pool", base.pools.items[0].host);
+    try testing.expectEqual(@as(usize, 1), base.pools.items.len);
+
+    // Both deinit calls run via defer. The GPA-backed testing allocator will
+    // fail this test on a leak; a double free fails immediately.
+}
+
+test "an explicit HTTP port of zero turns off the configured API" {
+    const testing = std.testing;
+    var cli = try parseArgs(testing.allocator, &[_][]const u8{"--http-port=0"});
+    defer cli.deinit(testing.allocator);
+
+    var config = Options{ .api_port = 3811 };
+    defer config.deinit(testing.allocator);
+    mergeInto(testing.allocator, &config, &cli);
+    try testing.expectEqual(@as(u16, 0), config.api_port);
+}
+
+test "explicit algo auto and pinning both override the config" {
+    const testing = std.testing;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(.{ .sub_path = "algo.json", .data =
+        \\{"algo":"rx/0","pools":[{"url":"pool.example:3333","user":"x"}]}
+    });
+    const path = try tmp.dir.realpathAlloc(testing.allocator, "algo.json");
+    defer testing.allocator.free(path);
+
+    var from_file = Options{};
+    defer from_file.deinit(testing.allocator);
+    try parseConfigFile(testing.allocator, &from_file, path);
+    try testing.expectEqual(api.Algo.rx_0, from_file.algo.?);
+
+    var to_auto = try parseArgs(testing.allocator, &[_][]const u8{"--algo=auto"});
+    defer to_auto.deinit(testing.allocator);
+    mergeInto(testing.allocator, &from_file, &to_auto);
+    try testing.expect(from_file.algo == null);
+    try testing.expect(from_file.algo_all);
+
+    var to_pin = try parseArgs(testing.allocator, &[_][]const u8{"--algo=rx/wow"});
+    defer to_pin.deinit(testing.allocator);
+    mergeInto(testing.allocator, &from_file, &to_pin);
+    try testing.expectEqual(api.Algo.rx_wow, from_file.algo.?);
+    try testing.expect(!from_file.algo_all);
+}
+
+test "a global algorithm choice overrides a pool's algorithm" {
+    const testing = std.testing;
+    var buf: [api.auto_algos.len]api.Algo = undefined;
+
+    var per_pool = Pool{ .algo = .rx_0 };
+    var global_pin = Options{ .algo = .rx_wow };
+    try testing.expectEqual(api.Algo.rx_wow, global_pin.poolAlgo(&per_pool).?);
+    const pinned = global_pin.loginAlgos(&per_pool, &buf);
+    try testing.expectEqual(@as(usize, 1), pinned.len);
+    try testing.expectEqual(api.Algo.rx_wow, pinned[0]);
+
+    var global_auto = Options{ .algo_all = true };
+    try testing.expect(global_auto.poolAlgo(&per_pool) == null);
+    const all = global_auto.loginAlgos(&per_pool, &buf);
+    try testing.expectEqual(api.auto_algos.len, all.len);
+
+    // With no global choice, the pool's own pin remains in force.
+    var no_override = Options{};
+    try testing.expectEqual(api.Algo.rx_0, no_override.poolAlgo(&per_pool).?);
 }

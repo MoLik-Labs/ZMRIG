@@ -51,6 +51,7 @@ pass=0
 fail=0
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/zmrig-safety.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
+WALLET="46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ"
 
 # A crash means the shell saw a signal, or Zig printed its panic banner.
 record() { # name ok detail
@@ -73,7 +74,7 @@ cat > "$WORK/nul-path.json" <<'JSON'
 JSON
 
 cat > "$WORK/nul-ca.json" <<'JSON'
-{"pools":[{"url":"pool.example:3333","user":"x"}],"tls-ca":"/etc/ssl/\u0000ca.pem"}
+{"pools":[{"url":"pool.example:3333","user":"x","tls-ca":"/etc/ssl/\u0000ca.pem"}]}
 JSON
 
 cat > "$WORK/shapes.json" <<'JSON'
@@ -91,6 +92,8 @@ for cfg in nul-path nul-ca shapes; do
 
     if crashed "$WORK/${cfg}.log"; then
         record "config: ${cfg}" 0 "crashed (rc=$rc)"
+    elif grep -q "error(gpa):" "$WORK/${cfg}.log"; then
+        record "config: ${cfg}" 0 "leaked an allocation (rc=$rc)"
     elif [ "$rc" -gt 1 ]; then
         record "config: ${cfg}" 0 "exit $rc"
     else
@@ -108,8 +111,22 @@ for cfg in nul-path nul-ca; do
     fi
 done
 
+# A real installer invocation reparses the CLI after loading the file. The
+# merge moves owned strings and pools out of the second parse; its deinit must
+# release the rest, and a flag set on argv must override the file.
+cat > "$WORK/merge.json" <<JSON
+{"pools":[{"url":"pool.example:3333","user":"$WALLET"}],"log-file":"$WORK/config.log"}
+JSON
+"$BIN" -c "$WORK/merge.json" --donate-level=0 --max-temp=70 --check >"$WORK/merge.log" 2>&1
+rc=$?
+if [ "$rc" -eq 0 ] && ! grep -q "error(gpa):" "$WORK/merge.log" && \
+   grep -q "donate  off" "$WORK/merge.log" && grep -q "thermal target 70" "$WORK/merge.log"; then
+    record "config + CLI merge" 1 "overrides apply, no allocations leaked"
+else
+    record "config + CLI merge" 0 "rc=$rc (see $WORK/merge.log)"
+fi
+
 # --- command lines ---------------------------------------------------------
-WALLET="46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ"
 n=0
 bad=0
 while IFS= read -r args; do

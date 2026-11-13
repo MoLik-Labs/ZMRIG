@@ -7,7 +7,8 @@
 # shares over each one. Then runs the harder cases: a seed change, an algorithm
 # switch, an abrupt disconnect, a hostile pool that floods malformed JSON, an
 # idle pool that triggers the watchdog, a pool that closes the socket in the
-# middle of a share, a rejected login, and a fallback to the second pool.
+# middle of a share, a rejected login, a fallback to the second pool, and a
+# WebSocket peer that sends an RFC 6455-invalid 512-byte control frame.
 #
 # The fake pool also has a "deaf" mode (answers the login, never reads again)
 # for reproducing a send that blocks instead of failing:

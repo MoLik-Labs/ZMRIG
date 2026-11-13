@@ -626,6 +626,7 @@ checks while two of the rows are wrong.
 | `proxy` `npm test` | 60 | extranonce allocation, vardiff, real sockets, WebSocket rig, banned pool left alone |
 | `pool` `npm test` | 52 | PPLNS in BigInt, share verification, payouts, audit log, end-to-end with a real miner |
 | `zmrig/tests/unit.sh` | 20 modules | options, hashing, health, report codes, stratum parsing, proxy handshakes, the per-algorithm memory rule, the cgroup CPU quota read from v2, v1 and a systemd slice, and the thermal governor's every edge |
+| `zmrig/tests/safety.sh` | 7 | a separate `ReleaseSafe` build for inputs that would be undefined in shipped `ReleaseFast`: malformed paths/configs and 36 hostile command lines |
 | `zmrig/tests/cli.sh` | 69 | flags, exit codes, `--help` covers the parser, `--check` reports the memory of the coin it was asked about and which huge-page mechanism backs it — and a flag given on the command line beats the config file (`--donate-level=0`, `--max-temp`) instead of being dropped by the merge |
 | `zmrig/tests/net.sh` | 30 | TCP/TLS/WS/WSS against a fake pool, ban and refusal handling, failover, seed change, and a WebSocket peer that breaks RFC 6455 — which the miner names and reconnects instead of hanging on a desynchronised stream |
 | `zmrig/tests/health.sh` | 7 | the watchdog, both directions: an honest pool is not a fault, an all-reject pool is |

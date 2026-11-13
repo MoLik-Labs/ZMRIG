@@ -137,11 +137,14 @@ zmrig -c /etc/zmrig/config.json --donate-level=0 --max-temp=70
 ```
 
 `--donate-level`, `--max-temp`, `--profile`, `--ban-cooldown`, `--dataset-cache`,
-`--health-warmup`, `--health-restart`, `--thermal-file`, `--api-token`,
-`--autotune`, `--verify-share`, `--allow-bad-wallet` và `--report` được parse rồi
-bị bước merge bỏ đi, nên trên một rig đã cài — nơi lần chạy nào cũng có `-c` —
-chúng không có tác dụng gì. Cờ mà file cấu hình không nhắc tới thì giữ nguyên
-giá trị trong file; cờ mà file có nhắc tới thì được ghi đè.
+`--health-warmup`, `--health-restart` (kể cả giá trị số giây) và `--autotune`
+từng được parse rồi bị merge bỏ đi, nên trên rig đã cài — nơi lần chạy nào cũng
+có `-c` — chúng không có tác dụng. Cờ mà file cấu hình không nhắc tới thì giữ
+giá trị trong file; cờ mà file có nhắc tới thì được ghi đè. Các cờ như
+`--thermal-file`, `--http-access-token`, `--verify-share`, `--allow-bad-wallet`
+và `--report` vốn đã được merge đúng, không nằm trong lỗi này.
+
+Lựa chọn thuật toán trên dòng lệnh cũng theo quy tắc đó: `--algo=auto` xóa pin toàn cục hoặc pin riêng của pool, còn `--algo=rx/0` ghim một thuật toán dù file ghi `auto`. Parser phải thay cả hai phần của trạng thái (`algo` và `algo_all`); lựa chọn toàn cục phải thắng pin cấp pool.
 
 ## Profile: `free` và `watt`
 

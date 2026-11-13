@@ -34,7 +34,11 @@ Cộng bảy unit test cho máy trạng thái (`health.zig`): tạm dừng khôn
 một hai share stale là bình thường, và một cú tụt phải kéo dài mới tính là
 `degraded`.
 
-## Bộ test mạng — 29 case
+## Build kiểm tra an toàn
+
+`./zmrig/tests/safety.sh` build một binary `ReleaseSafe` riêng rồi đưa cấu hình lỗi và dòng lệnh hostile vào thử. Binary cài đặt vẫn là `ReleaseFast`; bản safety làm lỗi undefined hiện ra trong test. `safety.sh` qua bảy kiểm tra trên bản build `ReleaseSafe` riêng: cấu hình sai dạng, đường dẫn NUL, merge config với CLI không rò rỉ cấp phát và dòng lệnh hostile.
+
+## Bộ test mạng — 30 case
 
 Nó dựng pool giả, TLS shim, proxy HTTP và SOCKS5 và server WebSocket ngay trên
 máy, rồi bắt miner nói chuyện với tất cả:

@@ -140,11 +140,15 @@ zmrig -c /etc/zmrig/config.json --donate-level=0 --max-temp=70
 ```
 
 `--donate-level`, `--max-temp`, `--profile`, `--ban-cooldown`, `--dataset-cache`,
-`--health-warmup`, `--health-restart`, `--thermal-file`, `--api-token`,
-`--autotune`, `--verify-share`, `--allow-bad-wallet` and `--report` were parsed
-and then dropped by the merge, so on an installed rig — where every run has `-c`
-— they did nothing at all. A flag the config file does not mention keeps
-whatever the file says; a flag the file does mention is overridden.
+`--health-warmup`, `--health-restart` (including its seconds value) and
+`--autotune` used to be parsed and then dropped by the merge, so on an installed
+rig — where every run has `-c` — they did nothing at all. A flag the config file
+does not mention keeps whatever the file says; a flag the file does mention is
+overridden. Other flags such as `--thermal-file`, `--http-access-token`,
+`--verify-share`, `--allow-bad-wallet` and `--report` were already merged and are
+not part of that bug.
+
+The command-line algorithm selection follows the same rule: `--algo=auto` clears a global or per-pool pin, and `--algo=rx/0` pins one even if the file says `auto`. The CLI parser must replace both parts of the setting (`algo` and `algo_all`); the global choice must then take precedence over a pool-level pin.
 
 ## Profile: `free` and `watt`
 

@@ -3,7 +3,41 @@
 _Not a release: no tag, no image. This lands on `BETA` and becomes a version when
 the release is cut._
 
-## Four flags that did nothing whenever a config file was given
+## Inputs that are legal JSON but fatal to the process
+
+The first bug was a `log-file` path with a NUL in it (`"log-file": "a\u0000b"`).
+JSON permits that byte; POSIX paths do not, and Zig's `createFile` marks the call
+`unreachable`. The installed `ReleaseFast` build had no safety check there, so a
+config file could kill the miner before the first log line. `--check` now refuses
+both `log-file` and pool `tls-ca` paths with a clear error. A separate
+`ReleaseSafe` build in `zmrig/tests/safety.sh` keeps those checks on for hostile
+JSON/CLI inputs without changing the binary that ships.
+
+The same pass found two more config-path bugs that were independent of the
+hashing code:
+
+- `http.host` was kept as a slice into the JSON parser's temporary arena. As
+  soon as `parseConfigFile` returned, the configured bind address was dangling;
+  additionally, the default `127.0.0.1` from the CLI parse overwrote the file
+  even when `--http-host` had never been given. The config value now has an
+  owned copy and only an explicit command-line host replaces it.
+- `-c FILE` reparses the command line to merge it with the config. The second
+  parse used to discard its options without freeing their strings, and changing
+  to a normal `deinit` would have double-freed strings the merge had borrowed.
+  The merge now moves ownership and clears the source; it is deinitialized after
+  the merge. A safety test runs `-c ... --donate-level=0 --max-temp=70` against
+  the checked binary and fails on any allocator leak.
+
+The WebSocket reader had its own malformed-peer case: it copied at most 125 bytes
+out of an oversized ping and cleared the frame length, leaving the rest to be
+parsed as a new frame. That desynchronised the stream and was logged as the
+ordinary `ConnectionClosed`, so the owner saw the pool close the connection.
+RFC 6455 forbids fragmented control frames and control payloads over 125 bytes;
+we now refuse them as `WsProtocol`, print what that means, and reconnect. The
+network suite sends a 512-byte ping and proves the refusal and reconnect both
+happen. The suite is now 30 cases.
+
+## The command line dropped controls whenever a config file was given
 
 The miner reads `-c FILE` first and then applies the command line on top, in
 `mergeInto`. That function listed most of the options and not all of them, so
@@ -17,12 +51,15 @@ $ zmrig --check -c /etc/zmrig/config.json --donate-level=0 --max-temp=70
 ```
 
 `--donate-level=0` charged the fee anyway, `--max-temp` left the thermal
-governor off, `--profile` was dropped, and so were `--ban-cooldown`,
-`--dataset-cache`, `--health-warmup`, `--health-restart=SECONDS`,
-`--thermal-file`, `--api-token`, `--autotune`, `--verify-share`,
-`--allow-bad-wallet` and `--report`. Each is a switch a user sets on the command
-line because the file it came with does not say what they mean, and each was
-silently ignored.
+governor off, and `--profile`, `--ban-cooldown`, `--dataset-cache`,
+`--health-warmup`, `--health-restart` (including its seconds value) and
+`--autotune` were dropped. `--algo=auto` and a named `--algo` also failed to
+replace the config's algorithm state correctly: one could not clear a global or
+per-pool pin, and the other could not clear `auto`; even when the command-line
+value was present, the per-pool pin took precedence over the documented global
+flag. These were actual omissions from the merge;
+`--thermal-file`, `--http-access-token`, `--verify-share`, `--allow-bad-wallet`
+and `--report` were already merged, and are not counted as bugs here.
 
 `mergeInto` now lives in `options.zig`, next to the struct it merges, and the
 test at the end of that file walks `@typeInfo(Options)`: every field must be

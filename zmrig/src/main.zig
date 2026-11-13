@@ -96,7 +96,7 @@ pub fn main() !void {
 
         var cli = try options.parseArgs(allocator, args[1..]);
         options.mergeInto(allocator, &file_opts, &cli);
-        allocator.free(cli.pools.items); // strings were moved, the array goes away
+        cli.deinit(allocator); // moved strings/pools were cleared; free what was not merged
         opts.deinit(allocator);
         opts = file_opts;
     }

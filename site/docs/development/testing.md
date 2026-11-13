@@ -34,7 +34,11 @@ Plus seven unit tests for the state machine (`health.zig`): a pause is not an
 error, one or two stale shares are normal, and a dip has to last before it counts
 as `degraded`.
 
-## Network suite — 29 cases
+## Safety build
+
+`./zmrig/tests/safety.sh` builds a separate `ReleaseSafe` binary, then feeds it malformed config files and hostile command lines. The installed binary stays `ReleaseFast`; the safety build exists to make undefined inputs fail loudly in tests. `safety.sh` passes seven checks against a separate `ReleaseSafe` build: malformed config shapes, NUL paths, a config-plus-CLI merge with no allocation leaks, and hostile command lines.
+
+## Network suite — 30 cases
 
 It starts a fake pool, a TLS shim, HTTP and SOCKS5 proxies and a WebSocket
 server on the local machine, then makes the miner talk to all of them:
