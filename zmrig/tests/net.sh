@@ -573,6 +573,27 @@ if selected invalid; then
     fi
 fi
 
+if selected wsbad; then
+    port_bws=$((port++))
+    python3 "$NET/bad_ws.py" --port "$port_bws" --mode long-ping \
+        >"${LOGDIR}/badws.log" 2>&1 &
+    PIDS+=($!)
+    wait_port "$port_bws" 10
+    log="${LOGDIR}/wsbad.log"
+    run_miner wsbad 8 "$log" -o "ws://127.0.0.1:${port_bws}/pool" -t 1 --mode light \
+        --retry-pause 1
+    # A 512-byte ping is a protocol violation. The miner has to name it and
+    # reconnect; the old behaviour was to take 125 bytes, answer with a pong and
+    # leave 387 bytes to be parsed as the next frame header, which is a stream
+    # that never recovers and a log that only said "ConnectionClosed".
+    if grep -q 'not speaking WebSocket correctly' "$log" && \
+       ! grep -q 'Segmentation fault\|panic' "$log"; then
+        record PASS "a broken WebSocket is named" "reconnects=$(grep -c 'connecting to' "$log")"
+    else
+        record FAIL "a broken WebSocket is named" "(see $log)"
+    fi
+fi
+
 if [ "$SOAK" -eq 1 ]; then
     port_so=$((port++))
     python3 "$NET/pool.py" --port "$port_so" --mode soak --diff 300 --lifetime 400 \

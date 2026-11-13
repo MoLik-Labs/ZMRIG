@@ -119,6 +119,17 @@ jobs:
       - name: Unit tests (every module)
         run: ./zmrig/tests/unit.sh
 
+      # The binary ships ReleaseFast, where an out-of-range cast or a path the
+      # kernel cannot open is undefined behaviour instead of a message. Building
+      # the same sources with the checks back on and running the CLI and the
+      # hostile inputs against *that* is how a crash gets a stack trace - the
+      # NUL byte in a `log-file` path was found this way, and it took the
+      # process down before the first line of the run.
+      - name: The same code with safety checks on
+        run: |
+          OUT_DIR="$RUNNER_TEMP/safe" ZIG_OPT=ReleaseSafe ./zmrig/build.sh --jobs "$(nproc)"
+          ZMRIG_BIN="$RUNNER_TEMP/safe/zmrig" ./zmrig/tests/safety.sh
+
       - name: Hash engine (C API, reference vectors)
         run: ./zmrig/tests/run.sh --quick
 

@@ -128,6 +128,24 @@ $ zmrig -o gulf.moneroocean.stream:10001 -u 4AdUndXH...684Rgf -a rx/wow --check
 -V, --version
 ```
 
+## A flag beats the config file
+
+`-c FILE` is read first and the command line is applied on top, field by field.
+Anything given on the command line wins — including a value that equals the
+default, which is the case that used to be lost:
+
+```bash
+# fee off and a temperature limit, on a rig whose config file says otherwise
+zmrig -c /etc/zmrig/config.json --donate-level=0 --max-temp=70
+```
+
+`--donate-level`, `--max-temp`, `--profile`, `--ban-cooldown`, `--dataset-cache`,
+`--health-warmup`, `--health-restart`, `--thermal-file`, `--api-token`,
+`--autotune`, `--verify-share`, `--allow-bad-wallet` and `--report` were parsed
+and then dropped by the merge, so on an installed rig — where every run has `-c`
+— they did nothing at all. A flag the config file does not mention keeps
+whatever the file says; a flag the file does mention is overridden.
+
 ## Profile: `free` and `watt`
 
 ```bash

@@ -3,7 +3,37 @@
 _Not a release: no tag, no image. This lands on `BETA` and becomes a version when
 the release is cut._
 
+## Four flags that did nothing whenever a config file was given
+
+The miner reads `-c FILE` first and then applies the command line on top, in
+`mergeInto`. That function listed most of the options and not all of them, so
+every option it forgot worked only when no config file was given - which is
+never, on an installed rig:
+
+```console
+$ zmrig --check -c /etc/zmrig/config.json --donate-level=0 --max-temp=70
+  donate  3% of Monero (rx/0) mining time to 46SQLW7D…    <- the fee was charged
+  thermal off (no --max-temp: nothing throttles…)         <- the limit was ignored
+```
+
+`--donate-level=0` charged the fee anyway, `--max-temp` left the thermal
+governor off, `--profile` was dropped, and so were `--ban-cooldown`,
+`--dataset-cache`, `--health-warmup`, `--health-restart=SECONDS`,
+`--thermal-file`, `--api-token`, `--autotune`, `--verify-share`,
+`--allow-bad-wallet` and `--report`. Each is a switch a user sets on the command
+line because the file it came with does not say what they mean, and each was
+silently ignored.
+
+`mergeInto` now lives in `options.zig`, next to the struct it merges, and the
+test at the end of that file walks `@typeInfo(Options)`: every field must be
+classified as copied-from-a-`seen`-flag, copied-when-given, an action, carried
+by another flag, or deliberately not merged - and adding an option without
+deciding breaks the compile. A second test generates a value for every field
+with a `seen` flag and asserts it lands, both directions. `cli.sh` checks the two
+that cost the user something: the fee and the temperature limit.
+
 ## A hash is 16 384 dependent reads, and now that is written down
+
 
 `zmrig/tests/profile.sh` builds a copy of the hash engine with cycle counters in
 it (`-DXMO_PROFILE`, compiled out of every other build) and prints what each

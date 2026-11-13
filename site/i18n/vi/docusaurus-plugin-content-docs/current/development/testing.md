@@ -56,6 +56,7 @@ máy, rồi bắt miner nói chuyện với tất cả:
 | API | `http api`, `http api token`, `http api 404` | summary, ép token, đường dẫn lạ |
 | Lỗi | `login rejected`, `idle watchdog`, `pool failover` | lỗi hiện ra; reconnect và failover chạy |
 | | `hostile pool` | rác không ngăn được việc submit share |
+| | `wsbad` | peer WebSocket gửi ping 512 byte (RFC 6455 chỉ cho 125) thì được nêu tên ra stderr và kết nối lại; nếu cắt bớt thì phần còn lại của frame bị đọc như header kế tiếp |
 | Seed | `seed change` | bốn lần dựng lại dataset, vẫn đào tiếp |
 | Soak | `soak` | 4 phút đổi seed, đổi thuật toán và rớt mạng |
 

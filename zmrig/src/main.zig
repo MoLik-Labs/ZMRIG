@@ -95,7 +95,7 @@ pub fn main() !void {
         };
 
         var cli = try options.parseArgs(allocator, args[1..]);
-        mergeOptions(allocator, &file_opts, &cli);
+        options.mergeInto(allocator, &file_opts, &cli);
         allocator.free(cli.pools.items); // strings were moved, the array goes away
         opts.deinit(allocator);
         opts = file_opts;
@@ -140,6 +140,10 @@ pub fn main() !void {
             ) catch {},
             error.InvalidPoolPort => stderr.print(
                 "zmrig: a pool port of 0 is not a port: write host:3333\n",
+                .{},
+            ) catch {},
+            error.InvalidPath => stderr.print(
+                "zmrig: a path in the configuration contains a NUL byte, which no file system can open; fix log-file / tls-ca\n",
                 .{},
             ) catch {},
             error.UnreadableTlsCa => stderr.print(
@@ -670,7 +674,7 @@ pub fn main() !void {
                 continue;
             }
 
-            logger.err("login failed: {s}", .{@errorName(e)});
+            logger.err("login failed: {s}", .{describeLoginError(e)});
 
             const base_ms: i64 = @as(i64, opts.ban_cooldown) * 1000;
             switch (session.last_failure) {
@@ -861,6 +865,21 @@ const SessionEnd = union(enum) {
     /// is how a 10-minute ban becomes an hour.
     banned,
 };
+
+/// What a failed login says in the log.
+///
+/// `@errorName` is a name for a programmer; a rig owner reads the log at 2 a.m.
+/// from a phone. The four that have a cause worth naming are spelled out; the
+/// rest keep their name so a bug report still carries it.
+fn describeLoginError(e: anyerror) []const u8 {
+    return switch (e) {
+        error.ConnectionClosed => "the pool closed the connection (check the port and the scheme: TLS pools need tls:// or wss://)",
+        error.WsProtocol => "the endpoint is not speaking WebSocket correctly (check the path and any proxy in front of it)",
+        error.BadResponse => "the endpoint answered the WebSocket upgrade with something that is not HTTP",
+        error.TlsHandshake, error.HandshakeFailed => "the TLS handshake failed (wrong port, a self-signed certificate, or a proxy rewriting the stream)",
+        else => @errorName(e),
+    };
+}
 
 fn runSession(
     allocator: std.mem.Allocator,
@@ -1353,91 +1372,6 @@ const Monitor = struct {
     }
 };
 
-fn mergeOptions(allocator: std.mem.Allocator, base: *options.Options, extra: *options.Options) void {
-    if (extra.algo) |v| base.algo = v;
-    if (extra.threads) |v| base.threads = v;
-    if (extra.pools.items.len > 0) {
-        // Command line pools replace config file pools, like xmrig does. Take
-        // ownership of the CLI buffers instead of copying: `extra` is discarded
-        // right after the merge and a copy would leak on every start.
-        for (base.pools.items) |pool| options.freePool(allocator, pool);
-
-        base.pools.clearRetainingCapacity();
-        base.pools.appendSlice(allocator, extra.pools.items) catch {
-            // Out of memory here means we cannot mine anyway; keep the config
-            // pools rather than dying inside a void function.
-            return;
-        };
-        extra.pools.clearRetainingCapacity();
-    }
-    // Only what the command line set: a plain `-c config.json --verbose` must
-    // not reset mode, threads, retries or huge pages to their defaults.
-    if (extra.seen.mode) base.mode = extra.mode;
-    if (extra.seen.huge_pages) base.huge_pages = extra.huge_pages;
-    if (extra.seen.auto_hugepages) base.auto_hugepages = extra.auto_hugepages;
-    if (extra.seen.huge_pages_jit) base.huge_pages_jit = extra.huge_pages_jit;
-    if (extra.seen.jit) base.jit = extra.jit;
-    if (extra.seen.print_time) base.print_time = extra.print_time;
-    if (extra.seen.retries) base.retries = extra.retries;
-    if (extra.seen.retry_pause) base.retry_pause = extra.retry_pause;
-    if (extra.seen.colors) base.colors = extra.colors;
-    if (extra.seen.verbose) base.verbose = extra.verbose;
-    if (extra.seen.affinity) base.affinity = extra.affinity;
-    if (extra.seen.affinity_mask) base.affinity_mask = extra.affinity_mask;
-    if (extra.seen.user_agent) base.user_agent = extra.user_agent;
-    if (extra.seen.init_threads) base.init_threads = extra.init_threads;
-    // MSR is opt-in, and "opt-in on the command line" has to work too.
-    if (extra.seen.msr) base.msr = extra.msr;
-    if (extra.seen.msr_restore) base.msr_restore = extra.msr_restore;
-    if (extra.seen.priority) base.priority = extra.priority;
-    if (extra.seen.idle_timeout) base.idle_timeout = extra.idle_timeout;
-    if (extra.seen.keepalive_interval) base.keepalive_interval = extra.keepalive_interval;
-    if (extra.seen.scratchpad_prefetch) base.scratchpad_prefetch = extra.scratchpad_prefetch;
-    if (extra.seen.optimized_init) base.optimized_init = extra.optimized_init;
-    if (extra.log_file) |v| base.log_file = v;
-    if (extra.api_port != 0) base.api_port = extra.api_port;
-    if (extra.check) base.check = true;
-    if (extra.self_test) base.self_test = true;
-    if (extra.benchmark) {
-        base.benchmark = true;
-        base.bench_hashes = extra.bench_hashes;
-    }
-
-    // These short-circuit the run, so they must survive the merge: dropping
-    // them turned `zmrig -c config.json --check` into a live miner.
-    if (extra.check) base.check = true;
-    if (extra.self_test) base.self_test = true;
-    if (extra.self_test_light) base.self_test_light = true;
-    if (extra.help) base.help = true;
-    if (extra.version) base.version = true;
-    if (extra.verbose) base.verbose = true;
-    if (extra.seen.background) base.background = extra.background;
-    // The report flags follow the same rule: a config file may already carry a
-    // report file, an interval, an id and a power figure, and a command line
-    // that does not mention them must leave those values alone.
-    if (extra.seen.report) base.report = true;
-    if (extra.seen.report_time) base.report_seconds = extra.report_seconds;
-    if (extra.seen.report_file) {
-        if (base.report_file) |old| allocator.free(old);
-        base.report_file = extra.report_file;
-    }
-    if (extra.seen.report_interval) base.report_interval = extra.report_interval;
-    if (extra.seen.report_id) {
-        if (base.report_id) |old| allocator.free(old);
-        base.report_id = extra.report_id;
-    }
-    if (extra.seen.power) base.power_watts = extra.power_watts;
-    if (extra.http_host.len > 0) base.http_host = extra.http_host;
-
-    if (extra.transport_override) |v| base.transport_override = v;
-    if (extra.ws_path) |v| base.ws_path = v;
-    if (extra.ws_origin) |v| base.ws_origin = v;
-    if (extra.host_header) |v| base.host_header = v;
-    if (extra.connect_to) |v| base.connect_to = v;
-    if (extra.tls_ca) |v| base.tls_ca = v;
-    if (extra.proxy_url) |v| base.proxy_url = v;
-    if (extra.cloudflare) base.cloudflare = true;
-}
 
 /// --check: print what the miner would do, without touching the network.
 /// Applies the RandomX MSR preset when the user asked for it. Returns true when

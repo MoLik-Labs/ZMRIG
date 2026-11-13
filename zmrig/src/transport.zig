@@ -441,6 +441,18 @@ pub const Conn = struct {
         return error.HandshakeFailed;
     }
 
+    /// RFC 6455 5.5 says a control frame is never fragmented and never carries
+    /// more than 125 bytes. A peer that says otherwise is not speaking the
+    /// protocol, and best-effort handling is what turns one bad frame into a
+    /// dead rig: the ping branch answers with at most 125 bytes and then clears
+    /// `ws_remaining`, so the rest of a long ping stays in the socket and is
+    /// read as the header of the next frame. That is a desynchronised stream,
+    /// a bogus length, and a connection that hangs instead of reconnecting.
+    fn checkFrame(fin: bool, opcode: u8, length: u64) Error!void {
+        if (opcode & 0x08 == 0) return; // data frame: any length, any fragmentation
+        if (!fin or length > 125) return error.WsProtocol;
+    }
+
     fn readFrameHeader(self: *Self) Error!void {
         var header: [2]u8 = undefined;
         try self.readExact(&header);
@@ -459,6 +471,8 @@ pub const Conn = struct {
             try self.readExact(&ext);
             length = std.mem.readInt(u64, &ext, .big);
         }
+
+        try checkFrame(fin, opcode, length);
 
         if (masked) {
             try self.readExact(&self.ws_mask);
@@ -913,4 +927,30 @@ test "a proxy URL keeps kind, host and credentials apart" {
     try testing.expectEqual(@as(u16, 1080), p.port);
     const empty = Proxy{};
     try testing.expect(!empty.isSet());
+}
+
+test "a control frame that breaks RFC 6455 is refused, not half-read" {
+    const testing = std.testing;
+    const check = Conn.checkFrame;
+
+    // Ping and pong, unfragmented, carrying the most they may: fine.
+    try check(true, 0x9, 0);
+    try check(true, 0x9, 125);
+    try check(true, 0xA, 125);
+    try check(true, 0x8, 125);
+
+    // More than 125 bytes of payload: the reader would take 125, clear
+    // `ws_remaining`, and leave the tail to be parsed as the next frame header.
+    try testing.expectError(error.WsProtocol, check(true, 0x9, 126));
+    try testing.expectError(error.WsProtocol, check(true, 0x9, 0xFFFF));
+    try testing.expectError(error.WsProtocol, check(true, 0xA, 1 << 40));
+
+    // A fragmented control frame is not a thing either.
+    try testing.expectError(error.WsProtocol, check(false, 0x9, 10));
+
+    // Data frames are allowed to be long and fragmented; the streamed reader
+    // handles them a buffer at a time.
+    try check(true, 0x1, 1 << 40);
+    try check(false, 0x2, 100_000);
+    try check(true, 0x0, 0);
 }

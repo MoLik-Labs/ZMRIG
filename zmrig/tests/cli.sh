@@ -286,6 +286,38 @@ else
 fi
 rm -f "$auto_cfg"
 
+# A flag has to win over a config file. These four were parsed and then dropped
+# by the merge, so an installed rig - which always runs with `-c` - ignored them:
+# the fee was charged after `--donate-level=0`, and the thermal governor stayed
+# off after `--max-temp`.
+merge_cfg=$(mktemp)
+cat >"$merge_cfg" <<JSON
+{"pools":[{"url":"pool.example.com:3333","user":"$WALLET"}]}
+JSON
+
+merged_donate=$("$BIN" -c "$merge_cfg" --donate-level=0 --check 2>/dev/null | sed -n 's/^ *donate  //p' | head -1)
+case "$merged_donate" in
+    off*) record PASS "--donate-level=0 beats the config file" "$merged_donate" ;;
+    *)    record FAIL "--donate-level=0 beats the config file" "got: ${merged_donate:-nothing}" ;;
+esac
+
+merged_thermal=$("$BIN" -c "$merge_cfg" --max-temp=70 --check 2>/dev/null | sed -n 's/^ *thermal //p' | head -1)
+case "$merged_thermal" in
+    target*70*) record PASS "--max-temp beats the config file" "$merged_thermal" ;;
+    *)          record FAIL "--max-temp beats the config file" "got: ${merged_thermal:-nothing}" ;;
+esac
+
+# ... and the config file still wins where the command line says nothing.
+cat >"$merge_cfg" <<JSON
+{"pools":[{"url":"pool.example.com:3333","user":"$WALLET"}],"max-temp":60}
+JSON
+kept_thermal=$("$BIN" -c "$merge_cfg" --check 2>/dev/null | sed -n 's/^ *thermal //p' | head -1)
+case "$kept_thermal" in
+    target*60*) record PASS "the config file keeps what the CLI did not set" "$kept_thermal" ;;
+    *)          record FAIL "the config file keeps what the CLI did not set" "got: ${kept_thermal:-nothing}" ;;
+esac
+rm -f "$merge_cfg"
+
 # -- the developer fee ----------------------------------------------------
 # It is 3 % of Monero mining time by default, it is stated in --check, it can be
 # set, and it can be turned off. A fee nobody can see is the thing users are

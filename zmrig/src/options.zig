@@ -151,6 +151,12 @@ pub const Seen = struct {
     report_interval: bool = false,
     report_id: bool = false,
     power: bool = false,
+    max_temp: bool = false,
+    thermal_file: bool = false,
+    donate_percent: bool = false,
+    autotune: bool = false,
+    health_warmup: bool = false,
+    health_restart_seconds: bool = false,
 };
 
 pub const ProfileSetting = enum {
@@ -380,6 +386,10 @@ pub const ParseError = error{
     /// `--tls-ca` pointed at a file that cannot be read: the handshake cannot
     /// succeed, so the run is refused here rather than at the first connect.
     UnreadableTlsCa,
+    /// A path with a NUL in it. JSON can carry one (`"\u0000"`), and a POSIX
+    /// path cannot: `createFile` on one is `unreachable` in Zig's std, which in
+    /// a ReleaseFast build is undefined behaviour, not a message.
+    InvalidPath,
     /// The config file exists but cannot be read (usually permissions).
     ConfigUnreadable,
     /// The config file was read but is not a JSON object.
@@ -765,11 +775,13 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseEr
             opts.seen.health_restart = true;
         } else if (std.mem.eql(u8, name, "--health-warmup")) {
             opts.health_warmup_seconds = try parseNumber(u32, try needValue(args, &i, inline_value));
+            opts.seen.health_warmup = true;
         } else if (std.mem.eql(u8, name, "--health-restart")) {
             // Optional value: "--health-restart" alone re-enables it, with a
             // value it also sets the delay.
             if (inline_value) |value| {
                 opts.health_restart_seconds = try parseNumber(u32, value);
+                opts.seen.health_restart_seconds = true;
             } else {
                 opts.health_restart = true;
             }
@@ -781,14 +793,18 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseEr
         } else if (std.mem.eql(u8, name, "--max-temp")) {
             const value = try needValue(args, &i, inline_value);
             opts.max_temp = try parseTemperature(value);
+            opts.seen.max_temp = true;
         } else if (std.mem.eql(u8, name, "--thermal-file")) {
             const value = try needValue(args, &i, inline_value);
             if (opts.thermal_file) |old| allocator.free(old);
             opts.thermal_file = allocator.dupe(u8, value) catch return error.OutOfMemory;
+            opts.seen.thermal_file = true;
         } else if (std.mem.eql(u8, name, "--no-thermal")) {
             opts.max_temp = null;
+            opts.seen.max_temp = true;
         } else if (std.mem.eql(u8, name, "--autotune")) {
             opts.autotune = true;
+            opts.seen.autotune = true;
             if (inline_value) |v| {
                 opts.autotune_seconds = parseNumber(u32, v) catch return error.InvalidNumber;
                 if (opts.autotune_seconds == 0) return error.InvalidNumber;
@@ -836,8 +852,10 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseEr
             const level = parseNumber(u32, value) catch return error.InvalidNumber;
             if (level > @import("fee.zig").max_percent) return error.InvalidNumber;
             opts.donate_percent = level;
+            opts.seen.donate_percent = true;
         } else if (std.mem.eql(u8, name, "--no-donate")) {
             opts.donate_percent = 0;
+            opts.seen.donate_percent = true;
         } else if (std.mem.eql(u8, name, "--no-affinity")) {
             opts.affinity = false;
             opts.seen.affinity = true;
@@ -1022,10 +1040,22 @@ pub fn validateValues(opts: *const Options) ParseError!void {
         if (pool.user_port and pool.port == 0) return error.InvalidPoolPort;
     }
 
-    for (opts.pools.items) |pool| {
-        if (pool.tls_ca) |path| try checkReadable(path);
+    // A path from a config file is a string like any other, and JSON can carry
+    // a NUL in it. Nothing that reaches the filesystem can: the next call would
+    // be `createFile("a\x00b")`, which is `unreachable` inside Zig's std.
+    if (opts.log_file) |path| {
+        if (std.mem.indexOfScalar(u8, path, 0) != null) return error.InvalidPath;
     }
-    if (opts.tls_ca) |path| try checkReadable(path);
+    for (opts.pools.items) |pool| {
+        if (pool.tls_ca) |path| {
+            if (std.mem.indexOfScalar(u8, path, 0) != null) return error.InvalidPath;
+            try checkReadable(path);
+        }
+    }
+    if (opts.tls_ca) |path| {
+        if (std.mem.indexOfScalar(u8, path, 0) != null) return error.InvalidPath;
+        try checkReadable(path);
+    }
 }
 
 fn checkReadable(path: []const u8) ParseError!void {
@@ -1515,6 +1545,130 @@ pub fn parseConfigFile(allocator: std.mem.Allocator, opts: *Options, path: []con
             warnIgnored("config: pools must be a list of pool objects; ignoring it", .{});
         }
     }
+}
+
+/// Applies the command line on top of the config file.
+///
+/// The two are parsed into separate `Options` and this is what joins them, so
+/// every field has to be listed here or the flag does nothing whenever a config
+/// file is also given - which is how `zmrig -c /etc/zmrig/config.json
+/// --donate-level=0` came to charge the fee and `--max-temp=70` came to leave
+/// the thermal governor off. The test at the end of this file walks every field
+/// of `Options` and fails if one is not accounted for.
+///
+/// Strings are *moved*, not copied: `extra` is discarded by the caller, and a
+/// copy would leak on every start.
+pub fn mergeInto(allocator: std.mem.Allocator, base: *Options, extra: *Options) void {
+    if (extra.algo) |v| base.algo = v;
+    if (extra.threads) |v| base.threads = v;
+    if (extra.pools.items.len > 0) {
+        // Command line pools replace config file pools, like xmrig does. Take
+        // ownership of the CLI buffers instead of copying: `extra` is discarded
+        // right after the merge and a copy would leak on every start.
+        for (base.pools.items) |pool| freePool(allocator, pool);
+
+        base.pools.clearRetainingCapacity();
+        base.pools.appendSlice(allocator, extra.pools.items) catch {
+            // Out of memory here means we cannot mine anyway; keep the config
+            // pools rather than dying inside a void function.
+            return;
+        };
+        extra.pools.clearRetainingCapacity();
+    }
+    // Only what the command line set: a plain `-c config.json --verbose` must
+    // not reset mode, threads, retries or huge pages to their defaults.
+    // Every one of these was missing, and every one of them is a flag a config
+    // file cannot fully express: `zmrig -c config.json --donate-level=0` charged
+    // the fee anyway, `--max-temp=70` left the thermal governor off, and
+    // `--profile=free` was ignored. A command line that names a value has to
+    // win over the file, which is the whole point of reading the file first.
+    if (extra.seen.profile) base.profile = extra.profile;
+    if (extra.seen.max_temp) base.max_temp = extra.max_temp;
+    if (extra.seen.donate_percent) base.donate_percent = extra.donate_percent;
+    if (extra.seen.ban_cooldown) base.ban_cooldown = extra.ban_cooldown;
+    if (extra.seen.health_restart) base.health_restart = extra.health_restart;
+    if (extra.seen.health_restart_seconds) base.health_restart_seconds = extra.health_restart_seconds;
+    if (extra.seen.health_warmup) base.health_warmup_seconds = extra.health_warmup_seconds;
+    if (extra.seen.dataset_cache) base.dataset_cache_mb = extra.dataset_cache_mb;
+    if (extra.seen.autotune) {
+        base.autotune = true;
+        base.autotune_seconds = extra.autotune_seconds;
+    }
+    if (extra.seen.thermal_file) {
+        if (base.thermal_file) |old| allocator.free(old);
+        base.thermal_file = extra.thermal_file;
+    }
+    if (extra.api_token) |v| {
+        if (base.api_token) |old| allocator.free(old);
+        base.api_token = v;
+    }
+    if (extra.allow_bad_wallet) base.allow_bad_wallet = true;
+    if (extra.check_wallet) |v| base.check_wallet = v;
+    if (extra.verify_share) base.verify_share = true;
+    if (extra.algo_all) base.algo_all = true;
+    if (extra.seen.mode) base.mode = extra.mode;
+    if (extra.seen.huge_pages) base.huge_pages = extra.huge_pages;
+    if (extra.seen.auto_hugepages) base.auto_hugepages = extra.auto_hugepages;
+    if (extra.seen.huge_pages_jit) base.huge_pages_jit = extra.huge_pages_jit;
+    if (extra.seen.jit) base.jit = extra.jit;
+    if (extra.seen.print_time) base.print_time = extra.print_time;
+    if (extra.seen.retries) base.retries = extra.retries;
+    if (extra.seen.retry_pause) base.retry_pause = extra.retry_pause;
+    if (extra.seen.colors) base.colors = extra.colors;
+    if (extra.seen.verbose) base.verbose = extra.verbose;
+    if (extra.seen.affinity) base.affinity = extra.affinity;
+    if (extra.seen.affinity_mask) base.affinity_mask = extra.affinity_mask;
+    if (extra.seen.user_agent) base.user_agent = extra.user_agent;
+    if (extra.seen.init_threads) base.init_threads = extra.init_threads;
+    // MSR is opt-in, and "opt-in on the command line" has to work too.
+    if (extra.seen.msr) base.msr = extra.msr;
+    if (extra.seen.msr_restore) base.msr_restore = extra.msr_restore;
+    if (extra.seen.priority) base.priority = extra.priority;
+    if (extra.seen.idle_timeout) base.idle_timeout = extra.idle_timeout;
+    if (extra.seen.keepalive_interval) base.keepalive_interval = extra.keepalive_interval;
+    if (extra.seen.scratchpad_prefetch) base.scratchpad_prefetch = extra.scratchpad_prefetch;
+    if (extra.seen.optimized_init) base.optimized_init = extra.optimized_init;
+    if (extra.log_file) |v| base.log_file = v;
+    if (extra.api_port != 0) base.api_port = extra.api_port;
+    if (extra.benchmark) {
+        base.benchmark = true;
+        base.bench_hashes = extra.bench_hashes;
+    }
+
+    // These short-circuit the run, so they must survive the merge: dropping
+    // them turned `zmrig -c config.json --check` into a live miner.
+    if (extra.check) base.check = true;
+    if (extra.self_test) base.self_test = true;
+    if (extra.self_test_light) base.self_test_light = true;
+    if (extra.help) base.help = true;
+    if (extra.version) base.version = true;
+    if (extra.verbose) base.verbose = true;
+    if (extra.seen.background) base.background = extra.background;
+    // The report flags follow the same rule: a config file may already carry a
+    // report file, an interval, an id and a power figure, and a command line
+    // that does not mention them must leave those values alone.
+    if (extra.seen.report) base.report = true;
+    if (extra.seen.report_time) base.report_seconds = extra.report_seconds;
+    if (extra.seen.report_file) {
+        if (base.report_file) |old| allocator.free(old);
+        base.report_file = extra.report_file;
+    }
+    if (extra.seen.report_interval) base.report_interval = extra.report_interval;
+    if (extra.seen.report_id) {
+        if (base.report_id) |old| allocator.free(old);
+        base.report_id = extra.report_id;
+    }
+    if (extra.seen.power) base.power_watts = extra.power_watts;
+    if (extra.http_host.len > 0) base.http_host = extra.http_host;
+
+    if (extra.transport_override) |v| base.transport_override = v;
+    if (extra.ws_path) |v| base.ws_path = v;
+    if (extra.ws_origin) |v| base.ws_origin = v;
+    if (extra.host_header) |v| base.host_header = v;
+    if (extra.connect_to) |v| base.connect_to = v;
+    if (extra.tls_ca) |v| base.tls_ca = v;
+    if (extra.proxy_url) |v| base.proxy_url = v;
+    if (extra.cloudflare) base.cloudflare = true;
 }
 
 // --- tests -----------------------------------------------------------------
@@ -2296,4 +2450,268 @@ test "a config value this binary cannot use is reported, not silently dropped" {
     try testing.expectEqual(Mode.auto, opts.mode);
     try testing.expectEqual(@as(i32, 1), opts.scratchpad_prefetch);
     try testing.expectEqual(@as(i32, -1), opts.priority);
+}
+
+test "a path with a NUL in it is refused, not handed to the kernel" {
+    const testing = std.testing;
+
+    // JSON can carry `\u0000` inside a string, and a POSIX path cannot. The old
+    // code passed it to createFile, which is `unreachable` in Zig's std - in a
+    // ReleaseFast build that is undefined behaviour, and it took the process
+    // down before a single line of the run was printed.
+    var with_log = Options{ .log_file = "logs/zmrig\u{0}.log" };
+    try testing.expectError(error.InvalidPath, validateValues(&with_log));
+
+    var with_ca = Options{ .tls_ca = "/etc/ssl/\u{0}ca.pem" };
+    try testing.expectError(error.InvalidPath, validateValues(&with_ca));
+
+    // An ordinary path is not disturbed by the check.
+    var fine = Options{ .log_file = "logs/zmrig.log", .tls_ca = null };
+    try validateValues(&fine);
+}
+
+// --- the merge, checked against the struct it merges ------------------------
+//
+// A flag that is parsed and then not merged is a flag that silently does
+// nothing whenever a config file is also in play, which is how every installed
+// rig runs. The list below is the contract; the tests that follow walk
+// `@typeInfo(Options)` and fail if a field is not on it, so adding an option
+// without deciding what the merge does with it breaks the build instead of the
+// flag.
+
+const MergePolicy = enum {
+    /// Copied only when `extra.seen.<field>` says the command line set it.
+    seen,
+    /// Copied when the command line gave it a value at all (strings, mostly).
+    given,
+    /// An action: `true` on the command line turns it on, and nothing turns it
+    /// off, because a config file is not allowed to start a sign-off run.
+    action,
+    /// Carried along by another flag: `autotune_seconds` is only meaningful
+    /// when `--autotune` was given, and `bench_hashes` only with `--bench`.
+    together,
+    /// Comes from somewhere else (the config path itself, parsed pools, the
+    /// fields `parseArgs` fills in after the loop).
+    elsewhere,
+};
+
+fn mergePolicy(comptime name: []const u8) MergePolicy {
+    // 66 fields x 66 entries of string comparison: the default comptime branch
+    // quota (1000) is not enough, and exhausting it is a compile error that
+    // looks like a bug in this table.
+    @setEvalBranchQuota(40000);
+
+    const policies = .{
+        // copied from a `seen` flag
+        .{ "mode", MergePolicy.seen },
+        .{ "huge_pages", MergePolicy.seen },
+        .{ "auto_hugepages", MergePolicy.seen },
+        .{ "huge_pages_jit", MergePolicy.seen },
+        .{ "jit", MergePolicy.seen },
+        .{ "print_time", MergePolicy.seen },
+        .{ "retries", MergePolicy.seen },
+        .{ "retry_pause", MergePolicy.seen },
+        .{ "colors", MergePolicy.seen },
+        .{ "verbose", MergePolicy.seen },
+        .{ "affinity", MergePolicy.seen },
+        .{ "affinity_mask", MergePolicy.seen },
+        .{ "user_agent", MergePolicy.seen },
+        .{ "init_threads", MergePolicy.seen },
+        .{ "msr", MergePolicy.seen },
+        .{ "msr_restore", MergePolicy.seen },
+        .{ "priority", MergePolicy.seen },
+        .{ "idle_timeout", MergePolicy.seen },
+        .{ "keepalive_interval", MergePolicy.seen },
+        .{ "scratchpad_prefetch", MergePolicy.seen },
+        .{ "optimized_init", MergePolicy.seen },
+        .{ "background", MergePolicy.seen },
+        .{ "report_seconds", MergePolicy.seen },
+        .{ "report_interval", MergePolicy.seen },
+        .{ "power_watts", MergePolicy.seen },
+        .{ "profile", MergePolicy.seen },
+        .{ "max_temp", MergePolicy.seen },
+        .{ "donate_percent", MergePolicy.seen },
+        .{ "ban_cooldown", MergePolicy.seen },
+        .{ "health_restart", MergePolicy.seen },
+        .{ "health_restart_seconds", MergePolicy.seen },
+        .{ "health_warmup_seconds", MergePolicy.seen },
+        .{ "dataset_cache_mb", MergePolicy.seen },
+        // copied when the command line supplied a value
+        .{ "algo", MergePolicy.given },
+        .{ "threads", MergePolicy.given },
+        .{ "log_file", MergePolicy.given },
+        .{ "api_port", MergePolicy.given },
+        .{ "http_host", MergePolicy.given },
+        .{ "transport_override", MergePolicy.given },
+        .{ "ws_path", MergePolicy.given },
+        .{ "ws_origin", MergePolicy.given },
+        .{ "host_header", MergePolicy.given },
+        .{ "connect_to", MergePolicy.given },
+        .{ "tls_ca", MergePolicy.given },
+        .{ "proxy_url", MergePolicy.given },
+        .{ "report_file", MergePolicy.given },
+        .{ "report_id", MergePolicy.given },
+        .{ "thermal_file", MergePolicy.given },
+        .{ "api_token", MergePolicy.given },
+        // actions: the command line can turn them on and nothing turns them off
+        .{ "check", MergePolicy.action },
+        .{ "self_test", MergePolicy.action },
+        .{ "self_test_light", MergePolicy.action },
+        .{ "help", MergePolicy.action },
+        .{ "version", MergePolicy.action },
+        .{ "benchmark", MergePolicy.action },
+        .{ "report", MergePolicy.action },
+        .{ "verify_share", MergePolicy.action },
+        .{ "autotune", MergePolicy.action },
+        .{ "autotune_seconds", MergePolicy.together },
+        .{ "cloudflare", MergePolicy.action },
+        .{ "allow_bad_wallet", MergePolicy.action },
+        .{ "algo_all", MergePolicy.action },
+        .{ "check_wallet", MergePolicy.action },
+        // not merged, on purpose
+        .{ "pools", MergePolicy.elsewhere },
+        .{ "config_path", MergePolicy.elsewhere },
+        .{ "bench_hashes", MergePolicy.together },
+        .{ "seen", MergePolicy.elsewhere },
+    };
+
+    inline for (policies) |entry| {
+        if (comptime std.mem.eql(u8, entry[0], name)) return entry[1];
+    }
+
+    @compileError("options.mergeInto does not say what to do with Options." ++ name);
+}
+
+test "every field of Options has a merge policy" {
+    // The test is the compile: `mergePolicy` raises `@compileError` for a field
+    // that is not in its table. This loop is what makes the compiler visit them.
+    inline for (std.meta.fields(Options)) |field| {
+        _ = mergePolicy(field.name);
+    }
+}
+
+test "a flag given on the command line beats the config file" {
+    const testing = std.testing;
+
+    var cli = Options{
+        // The four that were silently dropped, plus one action.
+        .profile = .free,
+        .max_temp = 70,
+        .donate_percent = 0,
+        .ban_cooldown = 5,
+        .dataset_cache_mb = 0,
+        .allow_bad_wallet = true,
+        .verify_share = true,
+        .seen = .{
+            .profile = true,
+            .max_temp = true,
+            .donate_percent = true,
+            .ban_cooldown = true,
+            .dataset_cache = true,
+        },
+    };
+    defer cli.deinit(testing.allocator);
+
+    // What a config file would have produced.
+    var from_file = Options{
+        .profile = .watt,
+        .max_temp = null,
+        .donate_percent = @import("fee.zig").default_percent,
+        .ban_cooldown = 900,
+        .dataset_cache_mb = 512,
+    };
+    defer from_file.deinit(testing.allocator);
+
+    mergeInto(testing.allocator, &from_file, &cli);
+
+    try testing.expectEqual(ProfileSetting.free, from_file.profile);
+    try testing.expectEqual(@as(?f32, 70), from_file.max_temp);
+    try testing.expectEqual(@as(u32, 0), from_file.donate_percent);
+    try testing.expectEqual(@as(u32, 5), from_file.ban_cooldown);
+    try testing.expectEqual(@as(?u64, 0), from_file.dataset_cache_mb);
+    try testing.expect(from_file.allow_bad_wallet);
+    try testing.expect(from_file.verify_share);
+
+    // And a command line that does not mention them leaves the file alone.
+    var quiet = Options{};
+    defer quiet.deinit(testing.allocator);
+
+    var kept = Options{ .profile = .watt, .max_temp = 80, .donate_percent = 1 };
+    defer kept.deinit(testing.allocator);
+
+    mergeInto(testing.allocator, &kept, &quiet);
+
+    try testing.expectEqual(ProfileSetting.watt, kept.profile);
+    try testing.expectEqual(@as(?f32, 80), kept.max_temp);
+    try testing.expectEqual(@as(u32, 1), kept.donate_percent);
+}
+
+/// A value of `T` that is different from `default_value`, for the fields the
+/// merge test can generate one for. Strings are excluded on purpose: the merge
+/// moves them, so a generated literal would be freed by `deinit`.
+fn otherValue(comptime T: type, default_value: T) ?T {
+    return switch (@typeInfo(T)) {
+        .Int => if (default_value == 7) @as(T, 8) else @as(T, 7),
+        .Bool => !default_value,
+        .Float => default_value + 1,
+        .Enum => blk: {
+            inline for (std.meta.fields(T)) |f| {
+                const candidate: T = @enumFromInt(f.value);
+                if (candidate != default_value) break :blk candidate;
+            }
+            break :blk default_value;
+        },
+        .Optional => |opt| switch (@typeInfo(opt.child)) {
+            .Pointer, .Array, .Struct, .Union => null,
+            else => otherValue(opt.child, default_value orelse return null) orelse return null,
+        },
+        else => null,
+    };
+}
+
+test "mergeInto copies every field that has a seen flag" {
+    const testing = std.testing;
+    var checked: usize = 0;
+
+    inline for (std.meta.fields(Options)) |field| {
+        if (comptime mergePolicy(field.name) == .seen and @hasField(Seen, field.name)) {
+            const T = field.type;
+            const defaults: Options = .{};
+            const default_value = @field(defaults, field.name);
+
+            if (comptime otherValue(T, default_value) != null) {
+                var extra: Options = .{};
+                defer extra.deinit(testing.allocator);
+                @field(extra, field.name) = otherValue(T, default_value).?;
+                @field(extra.seen, field.name) = true;
+
+                var base: Options = .{};
+                defer base.deinit(testing.allocator);
+
+                mergeInto(testing.allocator, &base, &extra);
+                try testing.expectEqual(otherValue(T, default_value).?, @field(base, field.name));
+
+                // And without the flag, the config file's value stands.
+                var quiet: Options = .{};
+                defer quiet.deinit(testing.allocator);
+                @field(quiet, field.name) = otherValue(T, default_value).?;
+
+                var kept: Options = .{};
+                defer kept.deinit(testing.allocator);
+                @field(kept, field.name) = default_value;
+
+                var no_flags: Options = .{};
+                defer no_flags.deinit(testing.allocator);
+
+                mergeInto(testing.allocator, &kept, &no_flags);
+                try testing.expectEqual(default_value, @field(kept, field.name));
+
+                checked += 1;
+            }
+        }
+    }
+
+    // A guard on the guard: if a refactor stops the loop from finding fields,
+    // this test would pass while checking nothing.
+    try testing.expect(checked >= 25);
 }

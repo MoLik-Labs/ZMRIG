@@ -56,6 +56,7 @@ server on the local machine, then makes the miner talk to all of them:
 | API | `http api`, `http api token`, `http api 404` | summaries, token enforcement, unknown paths |
 | Failure | `login rejected`, `idle watchdog`, `pool failover` | the error is visible; reconnect and failover work |
 | | `hostile pool` | garbage input does not stop shares from being submitted |
+| | `wsbad` | a WebSocket peer that sends a 512-byte ping (RFC 6455 allows 125) is named on stderr and reconnected; truncating it instead leaves the rest of the frame to be read as the next header |
 | Seed | `seed change` | four dataset rebuilds, mining continues |
 | Soak | `soak` | 4 minutes of seed changes, algorithm changes and a dropped link |
 

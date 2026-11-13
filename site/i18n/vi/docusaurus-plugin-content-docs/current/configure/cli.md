@@ -125,6 +125,24 @@ $ zmrig -o gulf.moneroocean.stream:10001 -u 4AdUndXH...684Rgf -a rx/wow --check
 -V, --version
 ```
 
+## Cờ trên dòng lệnh thắng file cấu hình
+
+`-c FILE` được đọc trước, rồi dòng lệnh được áp lên trên, từng trường một. Cái
+gì có trên dòng lệnh thì thắng — kể cả giá trị trùng với mặc định, đúng trường
+hợp từng bị mất:
+
+```bash
+# tắt phí và đặt giới hạn nhiệt, trên rig mà file cấu hình nói khác
+zmrig -c /etc/zmrig/config.json --donate-level=0 --max-temp=70
+```
+
+`--donate-level`, `--max-temp`, `--profile`, `--ban-cooldown`, `--dataset-cache`,
+`--health-warmup`, `--health-restart`, `--thermal-file`, `--api-token`,
+`--autotune`, `--verify-share`, `--allow-bad-wallet` và `--report` được parse rồi
+bị bước merge bỏ đi, nên trên một rig đã cài — nơi lần chạy nào cũng có `-c` —
+chúng không có tác dụng gì. Cờ mà file cấu hình không nhắc tới thì giữ nguyên
+giá trị trong file; cờ mà file có nhắc tới thì được ghi đè.
+
 ## Profile: `free` và `watt`
 
 ```bash
