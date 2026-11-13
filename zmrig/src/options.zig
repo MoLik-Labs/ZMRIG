@@ -1407,13 +1407,27 @@ pub fn parseConfigFile(allocator: std.mem.Allocator, opts: *Options, path: []con
 
                         var mask: u64 = 0;
                         var pinned = false;
+                        var beyond: ?i64 = null;
                         for (arr.items) |entry| {
                             if (entry != .integer) continue;
                             if (entry.integer < 0) continue;
-                            if (entry.integer > 63) continue;
+                            if (entry.integer > 63) {
+                                // Remembered rather than acted on: the rest of
+                                // the list is still what the user meant.
+                                if (beyond == null) beyond = entry.integer;
+                                continue;
+                            }
 
                             mask |= @as(u64, 1) << @intCast(entry.integer);
                             pinned = true;
+                        }
+
+                        // The mask is 64 bits wide, so cpu 64 and above cannot
+                        // be named - and a rig with 96 cores writing
+                        // `[0..95]` would otherwise have 32 threads pinned and
+                        // 32 not, with nothing anywhere to say why they moved.
+                        if (beyond) |index| {
+                            warnIgnored("config: cpu.threads pins cpu {d}, which a 64-bit affinity mask cannot name; that thread is left unpinned", .{index});
                         }
                         if (pinned) opts.affinity_mask = mask;
                     },
@@ -2142,6 +2156,58 @@ test "a thread count in the wrong place is reported" {
     try parseConfigFile(testing.allocator, &pinned, good_path);
 
     try testing.expectEqual(@as(?usize, 8), pinned.threads);
+}
+
+test "an affinity list wider than the mask keeps what it can and says so" {
+    const testing = std.testing;
+    // XMRig writes per-thread CPU indexes here. The mask this miner carries is
+    // 64 bits, so a list written for a 96-core machine cannot be honoured in
+    // full - the CPUs it can name are pinned, and the first one it cannot is
+    // reported (on stderr, which this test cannot capture; the parse result is
+    // what is checked here).
+    const path = "zig-cache-test-wide-affinity.json";
+    const text =
+        \\{"pools":[{"url":"pool.example:3333","user":"x"}],
+        \\ "cpu":{"threads":[0,1,70,90]}}
+    ;
+    {
+        const file = std.fs.cwd().createFile(path, .{}) catch unreachable;
+        defer file.close();
+        file.writeAll(text) catch unreachable;
+    }
+    defer std.fs.cwd().deleteFile(path) catch {};
+
+    var opts = Options{};
+    defer opts.deinit(testing.allocator);
+
+    try parseConfigFile(testing.allocator, &opts, path);
+
+    // Three of the four entries are not a thread count this mask can express,
+    // and the thread count itself is the list length, exactly as before.
+    try testing.expectEqual(@as(?usize, 4), opts.threads);
+    try testing.expectEqual(@as(?u64, 0b11), opts.affinity_mask);
+
+    // A list with nothing nameable in it pins nothing at all rather than
+    // pinning everything to cpu 0.
+    const only_high = "zig-cache-test-wide-affinity-only-high.json";
+    const high_text =
+        \\{"pools":[{"url":"pool.example:3333","user":"x"}],
+        \\ "cpu":{"threads":[70,90]}}
+    ;
+    {
+        const file = std.fs.cwd().createFile(only_high, .{}) catch unreachable;
+        defer file.close();
+        file.writeAll(high_text) catch unreachable;
+    }
+    defer std.fs.cwd().deleteFile(only_high) catch {};
+
+    var wide = Options{};
+    defer wide.deinit(testing.allocator);
+
+    try parseConfigFile(testing.allocator, &wide, only_high);
+
+    try testing.expectEqual(@as(?usize, 2), wide.threads);
+    try testing.expectEqual(@as(?u64, null), wide.affinity_mask);
 }
 
 test "a config value this binary cannot use is reported, not silently dropped" {

@@ -276,6 +276,14 @@ khởi động được:
 zmrig: warning: config: cpu.threads must be a number or an array of CPU indexes; using the default
 ```
 
+Một danh sách chỉ số CPU được tôn trọng tới cpu 63, vì mặt nạ affinity rộng 64
+bit. File viết cho máy nhiều core hơn vẫn giữ được những CPU vừa mặt nạ, và nói
+ra CPU đầu tiên không biểu diễn được, thay vì lặng lẽ dời mấy thread đó:
+
+```console
+zmrig: warning: config: cpu.threads pins cpu 70, which a 64-bit affinity mask cannot name; that thread is left unpinned
+```
+
 ## Chế độ pool: `--verify-share`
 
 Pool nào trả tiền cho share thì phải kiểm tra được share đó. `zmrig` trả lời

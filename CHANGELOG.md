@@ -51,6 +51,14 @@ was pasted into runs at the default thread count with nothing to show for it. Th
 advice is now `"cpu": {"threads": 2}`, and a top-level `"threads"` in an existing
 file is reported rather than dropped.
 
+The same silence hid a second case in the same key. `cpu.threads` may also be a
+list of CPU indexes (XMRig's per-thread affinity), and the mask that carries them
+is 64 bits wide, so every index from 64 up was skipped without a word: a file
+written for a 96-core machine had a third of its threads pinned and the rest
+left to the scheduler, and the only visible symptom was a hashrate that did not
+match the tuning. The indexes that fit are still applied; the first one that does
+not is named on stderr.
+
 ### The one hash path that could crash, and the alignment it assumed
 
 RandomX's per-hash scratchpad pass exists twice: 128-bit AES, which every x86

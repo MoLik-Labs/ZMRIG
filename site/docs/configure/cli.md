@@ -283,6 +283,14 @@ starts:
 zmrig: warning: config: cpu.threads must be a number or an array of CPU indexes; using the default
 ```
 
+A list of CPU indexes is honoured up to cpu 63, because the affinity mask is 64
+bits wide. A file written for a larger machine keeps the CPUs that fit and names
+the first one that does not, rather than quietly moving those threads:
+
+```console
+zmrig: warning: config: cpu.threads pins cpu 70, which a 64-bit affinity mask cannot name; that thread is left unpinned
+```
+
 ## Pool mode: `--verify-share`
 
 A pool that pays for a share has to be able to check it. `zmrig` answers that on
