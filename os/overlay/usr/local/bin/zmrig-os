@@ -1026,7 +1026,7 @@ drift_watching() {
 }
 
 supervise() {
-    local bin args rc fails=0 started autotuned_this_boot=0
+    local bin args rc fails=0 started autotuned_this_boot=0 no_wallet_wait=1
     bin=$(zmrig_bin)
     [ -x "$bin" ] || die "miner binary not found: $bin"
 
@@ -1063,10 +1063,15 @@ supervise() {
         # possible -- the service stays up until somebody configures it.
         load_conf
         if [ -z "$WALLET" ]; then
-            log_os "no wallet configured; waiting 30 s (zmrig-os setup, or zmrig.os.wallet= on the cmdline)"
-            sleep 30
+            log_os "no wallet configured; retrying in ${no_wallet_wait}s (zmrig-os setup, or zmrig.os.wallet= on the cmdline)"
+            sleep "$no_wallet_wait"
+            if [ "$no_wallet_wait" -lt 30 ]; then
+                no_wallet_wait=$((no_wallet_wait * 2))
+                [ "$no_wallet_wait" -le 30 ] || no_wallet_wait=30
+            fi
             continue
         fi
+        no_wallet_wait=1
 
         # Measure the machine once, while it is already mining: a rig that waits
         # 40 s for a benchmark before the first share is a rig somebody thinks is

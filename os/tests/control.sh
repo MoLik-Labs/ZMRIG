@@ -424,6 +424,28 @@ timeout 3 "$TOOL" run > "$ROOTDIR/wait.log" 2>&1
 contains "no wallet configured" "$(cat "$ROOTDIR/wait.log")" &&
     ok "the supervisor waits for a wallet instead of dying" ||
     bad "the supervisor waits for a wallet instead of dying"
+contains "retrying in 1s" "$(cat "$ROOTDIR/wait.log")" &&
+    ok "the supervisor polls promptly for first-boot provisioning" ||
+    bad "the supervisor polls promptly for first-boot provisioning"
+
+# Simulate the USB firstboot import writing os.conf while the supervisor is
+# asleep: the one-second initial retry should pick it up without a 30s stall.
+mkdir -p "$ROOTDIR/sleep-bin"
+printf 'AUTO_AUTOTUNE="0"\n' > "$ROOTDIR/etc/zmrig/os.conf"
+cat > "$ROOTDIR/sleep-bin/sleep" <<EOF
+#!/bin/sh
+if [ "\$1" = 1 ] && [ ! -e "$ROOTDIR/provisioned" ]; then
+    printf 'WALLET="%s"\nAUTO_AUTOTUNE="0"\n' "$WALLET" > "$ROOTDIR/etc/zmrig/os.conf"
+    touch "$ROOTDIR/provisioned"
+fi
+exit 0
+EOF
+chmod +x "$ROOTDIR/sleep-bin/sleep"
+expect_ok "supervisor sees config written during its short poll" env PATH="$ROOTDIR/sleep-bin:$PATH" "$TOOL" run
+contains "start:" "$(cat "$ROOTDIR/var/log/zmrig-os.log" 2>/dev/null)" &&
+    ok "first-boot wallet starts without the former 30s wait" ||
+    bad "first-boot wallet starts without the former 30s wait"
+rm -rf "$ROOTDIR/sleep-bin"
 
 touch "$ROOTDIR/run/zmrig/nostart"
 expect_ok "nostart boots without mining" "$TOOL" run
