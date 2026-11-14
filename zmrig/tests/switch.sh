@@ -91,11 +91,17 @@ run_case() { # name, extra miner flag, expected "no rebuild"
     [ "$QUICK" = 1 ] && { away=14 back=26; }
     # The window after the switch back has to outlast a rebuild, or the
     # `--no-dataset-cache` case stops hashing before it can submit the share
-    # that proves it is hashing *correctly* - and a test that quietly skips its
-    # own second half is worse than one that fails. 18.3 s on two cores, 40 s
-    # of margin.
-    local duration=$((back + 45))
-    [ "$QUICK" = 1 ] && duration=$((back + 40))
+    # that proves it is hashing *correctly*. A 2 GiB RandomX dataset took ~49 s
+    # on a four-thread CI VM in a real failure, so give the uncached case 90 s
+    # beyond the switch; cached reuse keeps the shorter 45 s margin.
+    local margin=45
+    [ "$expect_cache" = 0 ] && margin=90
+    local duration=$((back + margin))
+    if [ "$QUICK" = 1 ]; then
+        margin=40
+        [ "$expect_cache" = 0 ] && margin=80
+        duration=$((back + margin))
+    fi
     : > "$shares"
 
     python3 "$POOL" --port "$PORT" --away "$away" --back "$back" \
