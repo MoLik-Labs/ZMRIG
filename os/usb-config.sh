@@ -62,8 +62,12 @@ usb_config_scan() { # sys_block_root dev_root boot_device mountpoint destination
                 relative=$(usb_config_copy "$mountpoint" "$destination" 2>/dev/null || true)
                 umount "$mountpoint" 2>/dev/null || true
                 if [ -n "$relative" ]; then
+                    # os/init reads these result fields after this sourced call.
+                    # shellcheck disable=SC2034
                     USB_CONFIG_DEVICE="$dev"
+                    # shellcheck disable=SC2034
                     USB_CONFIG_FS="$fs"
+                    # shellcheck disable=SC2034
                     USB_CONFIG_PATH="$relative"
                     return 0
                 fi
