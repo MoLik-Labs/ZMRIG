@@ -128,23 +128,45 @@ $ zmrig -o gulf.moneroocean.stream:10001 -u 4AdUndXH...684Rgf -a rx/wow --check
 -V, --version
 ```
 
+## A flag beats the config file
+
+`-c FILE` is read first and the command line is applied on top, field by field.
+Anything given on the command line wins — including a value that equals the
+default, which is the case that used to be lost:
+
+```bash
+# fee off and a temperature limit, on a rig whose config file says otherwise
+zmrig -c /etc/zmrig/config.json --donate-level=0 --max-temp=70
+```
+
+`--donate-level`, `--max-temp`, `--profile`, `--ban-cooldown`, `--dataset-cache`,
+`--health-warmup`, `--health-restart` (including its seconds value) and
+`--autotune` used to be parsed and then dropped by the merge, so on an installed
+rig — where every run has `-c` — they did nothing at all. A flag the config file
+does not mention keeps whatever the file says; a flag the file does mention is
+overridden. Other flags such as `--thermal-file`, `--http-access-token`,
+`--verify-share`, `--allow-bad-wallet` and `--report` were already merged and are
+not part of that bug.
+
+The command-line algorithm selection follows the same rule: `--algo=auto` clears a global or per-pool pin, and `--algo=rx/0` pins one even if the file says `auto`. The CLI parser must replace both parts of the setting (`algo` and `algo_all`); the global choice must then take precedence over a pool-level pin.
+
 ## Profile: `free` and `watt`
 
 ```bash
 sudo ./oneclick.sh install --wallet 4YourMoneroAddress --profile free  # maximum hashrate
 sudo ./oneclick.sh install --wallet 4YourMoneroAddress --profile watt  # maximum H/W
-sudo ./oneclick.sh install --wallet 4YourMoneroAddress                 # = auto
+sudo ./oneclick.sh install --wallet 4YourMoneroAddress                 # default = free
 ```
 
-`auto` reads the battery: a laptop on battery becomes `watt`, everything else
-becomes `free`. The miner re-reads the profile at startup, so unplugging and
-restarting the service is enough to switch.
+`free` is the default and maximises hashrate on mains or battery. `auto` is an
+alias for `free`; battery state never silently changes performance. Choose
+`watt` explicitly to trade some hashrate for more hashes per watt.
 
 ## Safe mode: mine without cooking the machine
 
-`--max-temp` is the one number this mode is built around. It arms a governor
-that runs once a second, reads the hottest CPU sensor and gives back threads as
-the box warms:
+The safe default is an 80 °C target. `--max-temp` overrides it; the governor
+runs once a second, reads the hottest CPU sensor and gives back threads as the
+box warms. `--no-thermal` explicitly disables the governor:
 
 ```bash
 sudo zmrig -o gulf.moneroocean.stream:10001 -u 4YourMoneroAddress \
@@ -171,7 +193,7 @@ dataset stays in RAM, so a pause costs the shares it did not compute and nothing
 else — the pool connection stays open.
 
 ```text
-thermal: holding 72 C max - k10temp/Tctl reads 61.5 C now; 8 thread(s), step down at 72 C, pause above 87 C
+thermal: holding 72 C max - k10temp/Tctl reads 61.5 C now; 8 thread(s), step down at 72 C, pause at 87 C
 thermal: 73.4 C on k10temp/Tctl -> 7 of 8 threads (target 72 C; 1 step-down(s), 0 step-up(s) so far)
 thermal: 81.2 C on k10temp/Tctl -> 6 of 8 threads (target 72 C; 2 step-down(s), 0 step-up(s) so far)
 ```
@@ -180,8 +202,8 @@ thermal: 81.2 C on k10temp/Tctl -> 6 of 8 threads (target 72 C; 2 step-down(s), 
 the difference between "it throttled" and "it has no sensor and never could":
 
 ```text
-  thermal hold 72 C: k10temp/Tctl 61.5 C now, step down at 72 C, pause above 87 C (--no-thermal turns it off)
-  thermal off (no --max-temp: nothing throttles, however hot the box gets)
+  thermal hold 80 C: k10temp/Tctl 61.5 C now, step down at 80 C, pause at 95 C (--no-thermal turns it off)
+  thermal off (--no-thermal: explicitly disabled)
 ```
 
 The sensors are the CPU ones only — `coretemp`, `k10temp`, `zenpower`,

@@ -59,14 +59,21 @@ test("the default answer produces a runnable one-click command", () => {
   assert.match(result.install, /^curl -fsSL https:\/\/raw\.githubusercontent\.com\/[^/]+\/ZMRIG\/BETA\/oneclick\.sh/);
   assert.match(result.install, /install --wallet 46SQLW7D/);
   assert.match(result.install, /--pool gulf\.moneroocean\.stream:10001/);
+  assert.ok(result.args.includes("--profile"), result.args.join(" "));
+  assert.ok(result.args.includes("free"), result.args.join(" "));
   // --yes is last so nothing after it can be read as an answer to a prompt.
   assert.ok(result.install.endsWith("--yes"), result.install);
 });
 
-test("automatic engine and profile emit no flag at all", () => {
-  const result = build({ wallet: WALLET, engine: "auto", profile: "auto" });
-  assert.ok(!result.args.includes("--engine"), result.args.join(" "));
-  assert.ok(!result.args.includes("--profile"), result.args.join(" "));
+test("auto profile is throughput-first and the wizard defaults to free", () => {
+  const automatic = build({ wallet: WALLET, engine: "auto", profile: "auto" });
+  assert.ok(!automatic.args.includes("--engine"), automatic.args.join(" "));
+  assert.ok(automatic.args.includes("--profile"), automatic.args.join(" "));
+  assert.ok(automatic.args.includes("auto"), automatic.args.join(" "));
+
+  const defaulted = build({ wallet: WALLET });
+  assert.ok(defaulted.args.includes("--profile"), defaulted.args.join(" "));
+  assert.ok(defaulted.args.includes("free"), defaulted.args.join(" "));
 });
 
 test("a fixed engine and profile do emit their flags", () => {

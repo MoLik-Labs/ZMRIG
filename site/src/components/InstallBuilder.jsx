@@ -15,7 +15,7 @@ const INITIAL = {
   host: "",
   failover: [],
   engine: "auto",
-  profile: "auto",
+  profile: "free",
   tls: false,
   cloudflare: false,
   wsPath: "/stratum",

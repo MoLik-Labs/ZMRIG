@@ -158,6 +158,16 @@ pub const Governor = struct {
             return .unpause;
         }
 
+        // Critical means stop now, even when multiple threads remain. This must
+        // precede the hard-cap step-down: reducing one thread every 5 s at a
+        // critical reading can leave a hot CPU cooking while the counter drains.
+        if (t >= self.config.critical_c) {
+            self.paused = true;
+            self.pauses += 1;
+
+            return .pause;
+        }
+
         // Above the point where the hardware is already throttling itself.
         if (t >= self.config.max_c) {
             self.below = false;
@@ -179,15 +189,6 @@ pub const Governor = struct {
             return .pause;
         }
 
-        if (t >= self.config.critical_c) {
-            // Unreachable while critical_c > max_c, which `fromTarget` keeps
-            // true; kept so a hand-written Config cannot silently disable the
-            // pause. See the ordering test below.
-            self.paused = true;
-            self.pauses += 1;
-
-            return .pause;
-        }
 
         // At the budget: shed work, but only once per `step_ms`, because the
         // next 30 s of samples say whether this was a spike or the new normal.
@@ -518,6 +519,15 @@ test "above the hard cap the reaction is immediate" {
 
     try testing.expectEqual(@as(usize, 6), g.threads);
     try testing.expect(g.throttled());
+}
+
+test "critical temperature pauses immediately even with many active threads" {
+    var g = gov(8);
+
+    try testing.expect(g.step(0, g.config.critical_c) == .pause);
+    try testing.expect(g.paused);
+    try testing.expectEqual(@as(usize, 8), g.threads);
+    try testing.expectEqual(@as(u32, 1), g.pauses);
 }
 
 test "at one thread and still critical it pauses, and comes back cold" {

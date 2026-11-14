@@ -11,7 +11,7 @@ entered on every machine.
 ```
   rig                                    bot                             you
   ───                                    ───                             ───
-  zmrig-os id  →  ZMR-1A2B-3C4D-5E6F                                     
+  zmrig-os id  →  ZMR-1A2B-3C4D-5E6F
                   ABCD-1234  ────────────── /enroll ZMR-1A2B-3C4D-5E6F ABCD-1234
   POST /v1/hello  ─────────────────────→  store, alerts, queue
   (every 60 s)    ←─────────────────────  {"commands":[{"cmd":"setup","wallet":…}]}

@@ -31,9 +31,9 @@ export const messages = {
     "builder.engineAutoHint":
       "Switching pool → C++ engine. RandomX-only pool → zmrig.",
     "builder.profile": "Power profile",
-    "builder.profileAuto": "Automatic",
-    "builder.profileFree": "Free electricity — maximum hashrate",
-    "builder.profileWatt": "Metered — maximum hashes per watt",
+    "builder.profileAuto": "Automatic (same as max hashrate)",
+    "builder.profileFree": "Maximum hashrate (default)",
+    "builder.profileWatt": "Optional: maximum hashes per watt",
     "builder.network": "Network",
     "builder.tls": "TLS to the pool",
     "builder.cloudflare": "Only 443 out — WebSocket over TLS",
@@ -104,7 +104,7 @@ export const messages = {
     "builder.note.profileWatt":
       "Metered profile: keeps the powersave governor and fewer SMT threads — a few percent less hashrate, more hashes per watt.",
     "builder.note.profileFree":
-      "Free profile: uses every CPU, for machines whose power is free.",
+      "Maximum-hashrate profile: uses every logical CPU, on mains or battery. The miner still targets 80 C by default and backs off if the CPU overheats.",
     "builder.note.algoPinned":
       "Pinned with --algo {algo}: {coin} is only mined with that algorithm, so both engines give the same shares.",
     "builder.warn.engineForced":
@@ -245,9 +245,9 @@ export const messages = {
     "builder.engineAutoHint":
       "Pool chuyển thuật toán → engine C++. Pool chỉ RandomX → zmrig.",
     "builder.profile": "Chế độ điện",
-    "builder.profileAuto": "Tự nhận diện",
-    "builder.profileFree": "Điện free — hashrate tối đa",
-    "builder.profileWatt": "Trả tiền điện — tối đa hash mỗi watt",
+    "builder.profileAuto": "Tự động (giống tối đa hashrate)",
+    "builder.profileFree": "Hashrate tối đa (mặc định)",
+    "builder.profileWatt": "Tùy chọn: tối đa hash trên mỗi watt",
     "builder.network": "Mạng",
     "builder.tls": "TLS tới pool",
     "builder.cloudflare": "Chỉ ra ngoài được 443 — WebSocket qua TLS",
@@ -317,7 +317,7 @@ export const messages = {
     "builder.note.profileWatt":
       "Chế độ trả điện: giữ governor tiết kiệm điện và bớt thread SMT — hashrate thấp hơn vài %, H/W cao hơn.",
     "builder.note.profileFree":
-      "Chế độ free: dùng hết CPU, chỉ hợp máy có điện free.",
+      "Chế độ hashrate tối đa: dùng mọi CPU logic, dù cắm điện hay dùng pin. Miner vẫn đặt mục tiêu 80 °C và giảm thread nếu CPU quá nóng.",
     "builder.note.algoPinned":
       "Ghim bằng --algo {algo}: {coin} chỉ đào bằng thuật toán đó, nên cả hai engine cho share như nhau.",
     "builder.warn.engineForced":

@@ -77,12 +77,14 @@ they happen:
    `scripts/verify-fee.sh` reads the rate, the address and the off switch out of
    the binary. [`doc/FEE.md`](doc/FEE.md).
 2. **Zero flags to start.** `--wallet <address>` is the only required input: the
-   installer detects the CPU, the RAM, the hypervisor and the battery, then picks
-   the engine, the thread count, the huge-page strategy and the CPU governor,
-   and prints the reason for each choice before it acts.
-3. **It mines without cooking the machine.** `--max-temp=72` arms a governor
-   that reads the hottest CPU sensor once a second and gives back threads as the
-   box warms, stops hashing above 87 °C, and climbs again once it is cool —
+   installer detects the CPU, the RAM and the hypervisor, then picks the engine,
+   maximum-hashrate profile, thread count and huge-page strategy. Battery state
+   never lowers hashrate; an 80 °C thermal target keeps the default safe. Each
+   choice is printed before it acts.
+3. **It mines without cooking the machine.** The default 80 °C target arms a
+   governor that reads the hottest CPU sensor once a second and gives back
+   threads as the box warms, pauses hashing above 95 °C, and climbs again once
+   it is cool. `--max-temp=72` sets a tighter target —
    without rebuilding anything, because a parked thread keeps its VM and the
    dataset stays in RAM. The appliance calls it `zmrig-os mode safe`.
    [`doc/OS.md`](doc/OS.md#safe-the-machine-survives-the-mode).
@@ -127,9 +129,10 @@ curl -fsSL https://raw.githubusercontent.com/MoLik-Labs/ZMRIG/BETA/oneclick.sh \
   | sudo bash -s -- --wallet 4YourMoneroAddress --max-temp 70
 ```
 
-`--max-temp` tells the miner the highest CPU temperature it may use. It gives
-back threads as the machine warms and stops above 85 °C until it cools, so the
-hours it would have spent hardware-throttled are spent at a rate it controls.
+`--max-temp` overrides the safe default target of 80 °C. The miner gives back
+threads as the machine warms and pauses at target + 15 °C until it cools, so
+the hours it would have spent hardware-throttled are spent at a rate it controls.
+`--no-thermal` is an explicit opt-out for machines with external thermal management.
 [`doc/OS.md`](doc/OS.md#safe-the-machine-survives-the-mode) has the exact bands.
 
 ### Other coins
@@ -626,8 +629,9 @@ checks while two of the rows are wrong.
 | `proxy` `npm test` | 60 | extranonce allocation, vardiff, real sockets, WebSocket rig, banned pool left alone |
 | `pool` `npm test` | 52 | PPLNS in BigInt, share verification, payouts, audit log, end-to-end with a real miner |
 | `zmrig/tests/unit.sh` | 20 modules | options, hashing, health, report codes, stratum parsing, proxy handshakes, the per-algorithm memory rule, the cgroup CPU quota read from v2, v1 and a systemd slice, and the thermal governor's every edge |
-| `zmrig/tests/cli.sh` | 66 | flags, exit codes, `--help` covers the parser, `--check` reports the memory of the coin it was asked about and which huge-page mechanism backs it |
-| `zmrig/tests/net.sh` | 29 | TCP/TLS/WS/WSS against a fake pool, ban and refusal handling, failover, seed change |
+| `zmrig/tests/safety.sh` | 7 | a separate `ReleaseSafe` build for inputs that would be undefined in shipped `ReleaseFast`: malformed paths/configs and 36 hostile command lines |
+| `zmrig/tests/cli.sh` | 69 | flags, exit codes, `--help` covers the parser, `--check` reports the memory of the coin it was asked about and which huge-page mechanism backs it — and a flag given on the command line beats the config file (`--donate-level=0`, `--max-temp`) instead of being dropped by the merge |
+| `zmrig/tests/net.sh` | 30 | TCP/TLS/WS/WSS against a fake pool, ban and refusal handling, failover, seed change, and a WebSocket peer that breaks RFC 6455 — which the miner names and reconnects instead of hanging on a desynchronised stream |
 | `zmrig/tests/health.sh` | 7 | the watchdog, both directions: an honest pool is not a fault, an all-reject pool is |
 | `tests/oneclick/*.sh` | 80 | plan, config, governor, tuner targets (against a fake `/proc` and `/sys`), purge (removes only its own paths), branch switching, `--coin` mapping and the algorithm-name guard |
 | `fleet` `npm test` | 100 | the control plane without a token: Device ID derivation, the store's atomic writes and corrupt-file rescue, enrolment rules, the roster (three JSON shapes, a broken one reported rather than thrown, and a fleet that is still enrolled after its disk is emptied), reconciliation (one correction, not one a minute), every command's validation and refusals, the HTTP protocol end to end, the Telegram and Discord renderers, configuration that refuses to start half-done, and the dashboard — login and throttling, CSRF refusal, queued actions, escaping, Brotli/`ETag`/`304`, a GitHub releases call that fails without taking the page down, and the two hashrate alerts: one against the previous check-in, one against the rate the rig measured on itself, and hashrate added up per wallet so a shed of rigs is one number |

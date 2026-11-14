@@ -34,7 +34,11 @@ Plus seven unit tests for the state machine (`health.zig`): a pause is not an
 error, one or two stale shares are normal, and a dip has to last before it counts
 as `degraded`.
 
-## Network suite — 29 cases
+## Safety build
+
+`./zmrig/tests/safety.sh` builds a separate `ReleaseSafe` binary, then feeds it malformed config files and hostile command lines. The installed binary stays `ReleaseFast`; the safety build exists to make undefined inputs fail loudly in tests. `safety.sh` passes seven checks against a separate `ReleaseSafe` build: malformed config shapes, NUL paths, a config-plus-CLI merge with no allocation leaks, and hostile command lines.
+
+## Network suite — 30 cases
 
 It starts a fake pool, a TLS shim, HTTP and SOCKS5 proxies and a WebSocket
 server on the local machine, then makes the miner talk to all of them:
@@ -56,6 +60,7 @@ server on the local machine, then makes the miner talk to all of them:
 | API | `http api`, `http api token`, `http api 404` | summaries, token enforcement, unknown paths |
 | Failure | `login rejected`, `idle watchdog`, `pool failover` | the error is visible; reconnect and failover work |
 | | `hostile pool` | garbage input does not stop shares from being submitted |
+| | `wsbad` | a WebSocket peer that sends a 512-byte ping (RFC 6455 allows 125) is named on stderr and reconnected; truncating it instead leaves the rest of the frame to be read as the next header |
 | Seed | `seed change` | four dataset rebuilds, mining continues |
 | Soak | `soak` | 4 minutes of seed changes, algorithm changes and a dropped link |
 

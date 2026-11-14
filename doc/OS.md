@@ -350,7 +350,7 @@ count, not the clock:
 | below 72 °C | nothing | — |
 | at 72 °C | park one thread | every 30 s |
 | at 80 °C (target + 8) | park one thread | every 5 s |
-| at 87 °C (target + 15) | stop hashing | until it is below 65 °C |
+| at/above 87 °C (target + 15) | stop hashing | until it is below 65 °C |
 | below 67 °C for two minutes | start one thread again | every 30 s |
 
 A parked thread keeps its VM, the dataset stays in RAM and the pool connection

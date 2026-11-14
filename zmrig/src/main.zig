@@ -95,8 +95,8 @@ pub fn main() !void {
         };
 
         var cli = try options.parseArgs(allocator, args[1..]);
-        mergeOptions(allocator, &file_opts, &cli);
-        allocator.free(cli.pools.items); // strings were moved, the array goes away
+        options.mergeInto(allocator, &file_opts, &cli);
+        cli.deinit(allocator); // moved strings/pools were cleared; free what was not merged
         opts.deinit(allocator);
         opts = file_opts;
     }
@@ -140,6 +140,10 @@ pub fn main() !void {
             ) catch {},
             error.InvalidPoolPort => stderr.print(
                 "zmrig: a pool port of 0 is not a port: write host:3333\n",
+                .{},
+            ) catch {},
+            error.InvalidPath => stderr.print(
+                "zmrig: a path in the configuration contains a NUL byte, which no file system can open; fix log-file / tls-ca\n",
                 .{},
             ) catch {},
             error.UnreadableTlsCa => stderr.print(
@@ -478,7 +482,7 @@ pub fn main() !void {
         governor = thermal.Governor.init(thermal.Config.fromTarget(target), miner.threadCount());
 
         if (readTemperature(&opts)) |reading| {
-            logger.info("thermal: holding {d:.0} C max - {s} reads {d:.1} C now; {d} thread(s), step down at {d:.0} C, pause above {d:.0} C", .{
+            logger.info("thermal: holding {d:.0} C max - {s} reads {d:.1} C now; {d} thread(s), step down at {d:.0} C, pause at {d:.0} C", .{
                 governor.?.config.target_c,
                 reading.label(),
                 reading.celsius,
@@ -670,7 +674,7 @@ pub fn main() !void {
                 continue;
             }
 
-            logger.err("login failed: {s}", .{@errorName(e)});
+            logger.err("login failed: {s}", .{describeLoginError(e)});
 
             const base_ms: i64 = @as(i64, opts.ban_cooldown) * 1000;
             switch (session.last_failure) {
@@ -861,6 +865,21 @@ const SessionEnd = union(enum) {
     /// is how a 10-minute ban becomes an hour.
     banned,
 };
+
+/// What a failed login says in the log.
+///
+/// `@errorName` is a name for a programmer; a rig owner reads the log at 2 a.m.
+/// from a phone. The four that have a cause worth naming are spelled out; the
+/// rest keep their name so a bug report still carries it.
+fn describeLoginError(e: anyerror) []const u8 {
+    return switch (e) {
+        error.ConnectionClosed => "the pool closed the connection (check the port and the scheme: TLS pools need tls:// or wss://)",
+        error.WsProtocol => "the endpoint is not speaking WebSocket correctly (check the path and any proxy in front of it)",
+        error.BadResponse => "the endpoint answered the WebSocket upgrade with something that is not HTTP",
+        error.TlsHandshake, error.HandshakeFailed => "the TLS handshake failed (wrong port, a self-signed certificate, or a proxy rewriting the stream)",
+        else => @errorName(e),
+    };
+}
 
 fn runSession(
     allocator: std.mem.Allocator,
@@ -1353,91 +1372,6 @@ const Monitor = struct {
     }
 };
 
-fn mergeOptions(allocator: std.mem.Allocator, base: *options.Options, extra: *options.Options) void {
-    if (extra.algo) |v| base.algo = v;
-    if (extra.threads) |v| base.threads = v;
-    if (extra.pools.items.len > 0) {
-        // Command line pools replace config file pools, like xmrig does. Take
-        // ownership of the CLI buffers instead of copying: `extra` is discarded
-        // right after the merge and a copy would leak on every start.
-        for (base.pools.items) |pool| options.freePool(allocator, pool);
-
-        base.pools.clearRetainingCapacity();
-        base.pools.appendSlice(allocator, extra.pools.items) catch {
-            // Out of memory here means we cannot mine anyway; keep the config
-            // pools rather than dying inside a void function.
-            return;
-        };
-        extra.pools.clearRetainingCapacity();
-    }
-    // Only what the command line set: a plain `-c config.json --verbose` must
-    // not reset mode, threads, retries or huge pages to their defaults.
-    if (extra.seen.mode) base.mode = extra.mode;
-    if (extra.seen.huge_pages) base.huge_pages = extra.huge_pages;
-    if (extra.seen.auto_hugepages) base.auto_hugepages = extra.auto_hugepages;
-    if (extra.seen.huge_pages_jit) base.huge_pages_jit = extra.huge_pages_jit;
-    if (extra.seen.jit) base.jit = extra.jit;
-    if (extra.seen.print_time) base.print_time = extra.print_time;
-    if (extra.seen.retries) base.retries = extra.retries;
-    if (extra.seen.retry_pause) base.retry_pause = extra.retry_pause;
-    if (extra.seen.colors) base.colors = extra.colors;
-    if (extra.seen.verbose) base.verbose = extra.verbose;
-    if (extra.seen.affinity) base.affinity = extra.affinity;
-    if (extra.seen.affinity_mask) base.affinity_mask = extra.affinity_mask;
-    if (extra.seen.user_agent) base.user_agent = extra.user_agent;
-    if (extra.seen.init_threads) base.init_threads = extra.init_threads;
-    // MSR is opt-in, and "opt-in on the command line" has to work too.
-    if (extra.seen.msr) base.msr = extra.msr;
-    if (extra.seen.msr_restore) base.msr_restore = extra.msr_restore;
-    if (extra.seen.priority) base.priority = extra.priority;
-    if (extra.seen.idle_timeout) base.idle_timeout = extra.idle_timeout;
-    if (extra.seen.keepalive_interval) base.keepalive_interval = extra.keepalive_interval;
-    if (extra.seen.scratchpad_prefetch) base.scratchpad_prefetch = extra.scratchpad_prefetch;
-    if (extra.seen.optimized_init) base.optimized_init = extra.optimized_init;
-    if (extra.log_file) |v| base.log_file = v;
-    if (extra.api_port != 0) base.api_port = extra.api_port;
-    if (extra.check) base.check = true;
-    if (extra.self_test) base.self_test = true;
-    if (extra.benchmark) {
-        base.benchmark = true;
-        base.bench_hashes = extra.bench_hashes;
-    }
-
-    // These short-circuit the run, so they must survive the merge: dropping
-    // them turned `zmrig -c config.json --check` into a live miner.
-    if (extra.check) base.check = true;
-    if (extra.self_test) base.self_test = true;
-    if (extra.self_test_light) base.self_test_light = true;
-    if (extra.help) base.help = true;
-    if (extra.version) base.version = true;
-    if (extra.verbose) base.verbose = true;
-    if (extra.seen.background) base.background = extra.background;
-    // The report flags follow the same rule: a config file may already carry a
-    // report file, an interval, an id and a power figure, and a command line
-    // that does not mention them must leave those values alone.
-    if (extra.seen.report) base.report = true;
-    if (extra.seen.report_time) base.report_seconds = extra.report_seconds;
-    if (extra.seen.report_file) {
-        if (base.report_file) |old| allocator.free(old);
-        base.report_file = extra.report_file;
-    }
-    if (extra.seen.report_interval) base.report_interval = extra.report_interval;
-    if (extra.seen.report_id) {
-        if (base.report_id) |old| allocator.free(old);
-        base.report_id = extra.report_id;
-    }
-    if (extra.seen.power) base.power_watts = extra.power_watts;
-    if (extra.http_host.len > 0) base.http_host = extra.http_host;
-
-    if (extra.transport_override) |v| base.transport_override = v;
-    if (extra.ws_path) |v| base.ws_path = v;
-    if (extra.ws_origin) |v| base.ws_origin = v;
-    if (extra.host_header) |v| base.host_header = v;
-    if (extra.connect_to) |v| base.connect_to = v;
-    if (extra.tls_ca) |v| base.tls_ca = v;
-    if (extra.proxy_url) |v| base.proxy_url = v;
-    if (extra.cloudflare) base.cloudflare = true;
-}
 
 /// --check: print what the miner would do, without touching the network.
 /// Applies the RandomX MSR preset when the user asked for it. Returns true when
@@ -1775,7 +1709,6 @@ fn startMiner(logger: *@import("log.zig").Logger, opts: *const options.Options) 
 fn resolveProfile(opts: *options.Options, logger: *@import("log.zig").Logger) topology.Profile {
     const logical = miner_mod.cpuCount();
     const physical = topology.physicalCores(logical);
-    const battery = topology.batteryState();
     // A cgroup CPU quota is not an affinity mask: under `docker --cpus=2`,
     // `systemd CPUQuota=200%` or a Kubernetes limit the process still sees every
     // CPU, so the heuristic below would ask for one thread per physical core and
@@ -1786,9 +1719,9 @@ fn resolveProfile(opts: *options.Options, logger: *@import("log.zig").Logger) to
     const profile: topology.Profile = switch (opts.profile) {
         .free => .free,
         .watt => .watt,
-        // A laptop on battery is the only case where the machine's purpose is
-        // obvious from the hardware itself. Everything else gets max hashrate.
-        .auto => if (battery == .discharging) .watt else .free,
+        // `auto` is throughput-first too. Battery state is not consent to
+        // sacrifice hashrate; watt mode is opt-in via `--profile=watt`.
+        .auto => .free,
     };
 
     // A profile that asks for threads the machine does not have is a profile
@@ -1805,11 +1738,8 @@ fn resolveProfile(opts: *options.Options, logger: *@import("log.zig").Logger) to
     }
 
     if (opts.profile == .auto) {
-        logger.debug("profile auto -> {s} (battery {s}, {d} physical of {d} logical cpu)", .{
-            topology.profileName(profile),
-            @tagName(battery),
-            physical,
-            logical,
+        logger.debug("profile auto -> {s} (throughput-first, {d} physical of {d} logical cpu)", .{
+            topology.profileName(profile), physical, logical,
         });
     }
 
@@ -1872,20 +1802,25 @@ fn runAutotune(
     const margin = 0.02;
 
     for (list) |threads| {
-        // One trial per candidate. `benchmark` builds its own dataset, so the
-        // wall clock per candidate is the dataset init (~16 s) plus the sample
-        // window; that is honest but not free, which is why the candidate list
-        // is short.
+        // One fixed-duration trial per candidate. `benchmark` builds its own
+        // dataset, so the wall clock per candidate is dataset init (~16 s) plus
+        // the requested sample window. A zero hash limit disables early stop:
+        // using `threads * 2000` here made fast CPUs finish well before the
+        // advertised autotune duration and gave candidates unequal samples.
         var trial_opts = opts.*;
         trial_opts.threads = threads;
-        trial_opts.bench_hashes = @as(u64, threads) * 2000;
+        trial_opts.bench_hashes = 0;
 
         const measure = benchmark(allocator, &trial_opts, opts.autotune_seconds, 0) catch |e| {
             try out.print("{d:>8}  {s:>12}  {s}\n", .{ threads, "-", @errorName(e) });
             continue;
         };
 
-        const trial = autotune.Trial{ .threads = threads, .rate = @max(measure.steady_rate, measure.rate) };
+        // The short autotune window is intentionally measured as a single
+        // equal-length average. `steady_rate` is a rolling window and can be
+        // based on only a few samples here; taking its maximum over the average
+        // biases the winner upward on whichever candidate got lucky.
+        const trial = autotune.Trial{ .threads = threads, .rate = measure.rate };
         const better = autotune.isBetter(trial, best, margin);
 
         var rate_buf: [32]u8 = undefined;
@@ -2091,7 +2026,7 @@ fn thermalSummary(opts: *const options.Options) []const u8 {
     const buf = &thermal_summary_buf;
     buf.* = [_]u8{0} ** thermal_summary_buf.len;
 
-    const target = opts.max_temp orelse return std.fmt.bufPrint(buf, "off (no --max-temp: nothing throttles, however hot the box gets)", .{}) catch "off";
+    const target = opts.max_temp orelse return std.fmt.bufPrint(buf, "off (--no-thermal: explicitly disabled)", .{}) catch "off";
 
     const config = thermal.Config.fromTarget(target);
     const reading = readTemperature(opts) orelse
@@ -2099,7 +2034,7 @@ fn thermalSummary(opts: *const options.Options) []const u8 {
             config.target_c, config.critical_c,
         }) catch "on, no sensor";
 
-    return std.fmt.bufPrint(buf, "hold {d:.0} C: {s} {d:.1} C now, step down at {d:.0} C, pause above {d:.0} C (--no-thermal turns it off)", .{
+    return std.fmt.bufPrint(buf, "hold {d:.0} C: {s} {d:.1} C now, step down at {d:.0} C, pause at {d:.0} C (--no-thermal turns it off)", .{
         config.target_c, reading.label(), reading.celsius, config.target_c, config.critical_c,
     }) catch "on";
 }
@@ -2449,6 +2384,21 @@ fn benchmark(allocator: std.mem.Allocator, opts: *const options.Options, cap_sec
     miner.shared.bench_limit.store(opts.bench_hashes, .release);
     miner.shared.publish(&bench_job);
 
+    // Benchmarks and autotune are still sustained CPU load. Run the same
+    // thermal policy as normal mining so a long measurement cannot cook a rig
+    // before the service's monitor thread exists.
+    var bench_governor: ?thermal.Governor = null;
+    if (opts.max_temp) |target| {
+        bench_governor = thermal.Governor.init(thermal.Config.fromTarget(target), miner.threadCount());
+        if (readTemperature(opts)) |reading| {
+            logger.info("benchmark thermal: target {d:.0} C, {s} reads {d:.1} C now; pause at {d:.0} C", .{
+                target, reading.label(), reading.celsius, bench_governor.?.config.critical_c,
+            });
+        } else {
+            logger.warn("benchmark thermal: no CPU sensor found; --max-temp cannot act (use --thermal-file=PATH)", .{});
+        }
+    }
+
     const started = std.time.milliTimestamp();
     var last_report = started;
     var last_sample = started;
@@ -2465,6 +2415,31 @@ fn benchmark(allocator: std.mem.Allocator, opts: *const options.Options, cap_sec
         if (now - last_sample >= 1000) {
             last_sample = now;
             miner.stats.add(miner.shared.totalHashes());
+
+            if (bench_governor) |*gov| {
+                const reading = readTemperature(opts);
+                switch (gov.step(now, if (reading) |r| r.celsius else null)) {
+                    .none => {},
+                    .set_threads => |threads| {
+                        miner.shared.setActiveThreads(threads);
+                        logger.warn("benchmark thermal: {d:.1} C -> {d} of {d} threads", .{
+                            reading.?.celsius, threads, miner.threadCount(),
+                        });
+                    },
+                    .pause => {
+                        miner.shared.pause();
+                        miner.shared.setActiveThreads(0);
+                        logger.warn("benchmark thermal: {d:.1} C; pausing until below {d:.0} C", .{
+                            reading.?.celsius, gov.config.resume_c,
+                        });
+                    },
+                    .unpause => {
+                        miner.shared.unpause();
+                        miner.shared.setActiveThreads(gov.threads);
+                        logger.info("benchmark thermal: resumed at {d} thread(s)", .{gov.threads});
+                    },
+                }
+            }
         }
 
         if (now - last_report >= 10_000) {

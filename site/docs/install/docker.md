@@ -68,7 +68,7 @@ configured with the same vocabulary.
 | `WALLET` | — | the address this rig is paid to. Required |
 | `POOL` | — | `host:port`, or `tls://`, `ws://`, `wss://` |
 | `WORKER` | `x` | the worker name. Many rigs on one wallet aggregate into one balance |
-| `MODE` | `max` | `max` (full speed), `eco` (most hashrate per watt), `safe` (adds the thermal governor), `light` (256 MiB) |
+| `MODE` | `max` | `max` (maximum hashrate with the miner’s default 80 °C thermal target), `eco` (most hashrate per watt), `safe` (watt profile with the tighter `SAFE_TEMP` target), `light` (256 MiB) |
 | `ALGO` | `auto` | `rx/0`, `rx/wow`, … or `auto`, which lets the pool switch the rig between RandomX variants |
 | `THREADS` | `auto` | cache-aware, and capped by a CPU quota (below) |
 | `DONATE` | `3` | the developer fee, in percent. `0` turns it off |

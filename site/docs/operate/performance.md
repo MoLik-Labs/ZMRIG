@@ -246,7 +246,7 @@ The miner samples that once a second (the monitor thread already reads the hash
 counter), and says what it saw when the process stops:
 
 ```console
-$ zmrig -o pool.example:3333 -u … 
+$ zmrig -o pool.example:3333 -u …
 info hashing 29 s of 44 s (65.9 %): 16 s building a dataset
 ```
 

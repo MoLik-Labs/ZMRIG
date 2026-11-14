@@ -34,8 +34,9 @@ run it or `--algo` names a non-RandomX algorithm: on a pool that switches coins
 (`"algo": "auto"`), so the pool can still move the rig to whichever coin pays
 best while the rig keeps the Zig engine. A non-RandomX `--algo` (cn/2, …)
 or `--engine=xmrig` selects the C++ engine, which speaks all 34 algorithms. The
-profile comes from the battery state. `./oneclick.sh plan` prints every decision
-with its reason and touches nothing.
+the default profile maximises hashrate on mains and battery alike; `watt` is
+explicit opt-in. The thermal governor defaults to an 80 °C target. `./oneclick.sh
+plan` prints every decision with its reason and touches nothing.
 
 End state:
 
@@ -76,7 +77,8 @@ sudo ./oneclick.sh purge      # remove everything, config included (asks first)
 | `--rig-id NAME` | name shown on the pool dashboard |
 | `--algo NAME` | pin one algorithm (`rx/0`, `cn/r`, …). Also **skips the 2-minute calibration**, see below. |
 | `--engine NAME` | `auto` (default), `xmrig` (every algorithm) or `zmrig` (the Zig miner, RandomX family). `auto` picks `zmrig` and advertises the RandomX family at login, which is what a switching pool needs to move this rig between coins; a non-RandomX `--algo` picks the C++ engine. See [The Zig engine](#the-zig-engine). |
-| `--profile NAME` | `auto` (default), `free` (maximum hashrate, watts ignored) or `watt` (maximum hashrate per watt). `auto` is `free`, except on a laptop on battery. See [profiles](#profiles-free-vs-watt). |
+| `--profile NAME` | `free` (default, maximum hashrate), `watt` (explicit maximum-hashes-per-watt trade-off), or `auto` (same as `free`). Battery state never lowers the default performance. See [profiles](#profiles-free-vs-watt). |
+| `--max-temp C` | Safe thermal target, default `80` °C: sheds threads as the hottest CPU sensor reaches the target and pauses at target + 15 °C. `--no-thermal` explicitly opts out; otherwise `--max-temp` can set a different target (45..95 °C). |
 | `--autotune[=SEC]` | search for the best thread count after the build, `SEC` seconds per candidate (default 8). On by default for `zmrig`. |
 | `--no-autotune` | keep the built-in `L3 / 2 MiB` heuristic |
 | `--dry-run` | with `purge`: print what would be removed, delete nothing |
@@ -128,14 +130,14 @@ sudo ./oneclick.sh install --wallet 4YourAddress... --profile free
 sudo ./oneclick.sh install --wallet 4YourAddress... --profile watt
 ```
 
-`free` — the machine's electricity costs you nothing (a coffee shop, a lab, an
-office PC that is on anyway). Every logical CPU, `--mode fast`, huge pages,
-`--priority 5`, `performance` governor. This is the default everywhere except a
-laptop on battery.
+`free` — maximum hashrate, regardless of electricity price or battery state.
+Every logical CPU, `--mode fast`, huge pages, `--priority 5`, `performance`
+governor. This is the default.
 
-`watt` — every watt is on the bill (a metered VPS, a laptop, expensive power).
-One thread per physical core, no governor forcing, mining paused on battery, and
-hashes per watt in the report code. The full reasoning, including what could not
+`watt` — an explicit opt-in when power efficiency matters more than gross
+hashrate (a metered VPS, a laptop, expensive power). One thread per physical
+core and no governor forcing. It is never selected just because a battery is
+discharging. Pausing on battery is a separate setting and is off by default. The full reasoning, including what could not
 be measured here, is in [doc/PERFORMANCE.md](PERFORMANCE.md) §2c.
 
 Both profiles take the same 3 % developer fee on Monero time, both are

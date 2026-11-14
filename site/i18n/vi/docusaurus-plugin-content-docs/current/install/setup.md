@@ -64,7 +64,7 @@ Mấy cờ cần biết ngay từ đầu:
 | `--pool HOST:PORT` | pool; tên ngắn như `supportxmr` cũng được |
 | `--rig-id NAME` | tên máy này trên dashboard của pool |
 | `--profile free\|watt` | hashrate tối đa, hoặc hashrate trên watt tối đa |
-| `--max-temp 70` | bớt thread khi CPU nóng lên thay vì để máy bị nướng |
+| `--max-temp 70` | ghi đè mặc định an toàn 80 °C; bớt thread khi CPU nóng lên |
 | `--donate-level 3` | phí developer, `0`..`10`; `0` là tắt |
 
 Còn lại ở [toàn bộ tuỳ chọn của installer](/docs/install/installer).
@@ -216,7 +216,7 @@ mười máy trong [cài không cần người](/docs/install/installer).
 | `the miner rejected the generated config` | ví có ký tự không thuộc base58 | `zmrig --check-wallet 4...`, rồi cài lại với địa chỉ sạch |
 | pool ban IP này | ví sai, hoặc reconnect quá nhiều | chờ hết cooldown; ví sai bị chặn tối thiểu 30 phút |
 | hashrate chỉ bằng một phần tư bảng benchmark | không có huge pages (container hoặc VPS OpenVZ) | `zmrig --check` báo số trang; hỏi nhà cung cấp về trang 2 MiB |
-| máy ồn và nóng | chưa đặt chính sách nhiệt độ | `--max-temp 70`, hoặc `zmrig-os setup --max-temp 70` |
+| máy ồn và nóng | mục tiêu đang cao so với tản nhiệt | `--max-temp 70`, hoặc `zmrig-os setup --max-temp 70` |
 | container dùng ít thread hơn số core | có hạn mức `--cpus` | `docker run ... args` rồi đọc `-t` nó đã chọn |
 | service khởi động lại liên tục | có người sửa config | `sudo journalctl -u zmrig -n 60`, đọc dòng đầu sau khi binary khởi động |
 

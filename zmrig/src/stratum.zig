@@ -151,6 +151,22 @@ pub const Connection = struct {
         self.allocator.destroy(self);
     }
 
+    /// A read can fail for more reasons than "the pool hung up", and reporting
+    /// all of them as `ConnectionClosed` is how a rig spends an afternoon on a
+    /// WebSocket endpoint that is speaking nonsense: the log said the pool
+    /// closed the connection, which is what a healthy pool does at shutdown.
+    /// The transports that mean "closed" stay `ConnectionClosed`; the rest keep
+    /// their name (and the readable message in main.zig) so the log says
+    /// `WsProtocol`, `BadResponse` or `TlsHandshake` instead.
+    fn readError(e: transport.Error) anyerror {
+        return switch (e) {
+            error.EndOfStream, error.WsClosed => error.ConnectionClosed,
+            // Everything else is passed through unchanged: OutOfMemory,
+            // WsProtocol, BadResponse, HandshakeFailed, TlsHandshake.
+            else => e,
+        };
+    }
+
     fn fill(self: *Self) !void {
         if (self.start > 0 and self.start < self.end) {
             std.mem.copyForwards(u8, self.buf[0..], self.buf[self.start..self.end]);
@@ -161,10 +177,7 @@ pub const Connection = struct {
             self.end = 0;
         }
 
-        const n = self.conn.read(self.buf[self.end..]) catch |e| switch (e) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => return error.ConnectionClosed,
-        };
+        const n = self.conn.read(self.buf[self.end..]) catch |e| return readError(e);
 
         if (n == 0) return error.ConnectionClosed;
 
@@ -177,10 +190,7 @@ pub const Connection = struct {
         self.end = 0;
 
         while (true) {
-            const n = self.conn.read(self.buf[0..]) catch |e| switch (e) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => return error.ConnectionClosed,
-            };
+            const n = self.conn.read(self.buf[0..]) catch |e| return readError(e);
 
             if (n == 0) return error.ConnectionClosed;
 

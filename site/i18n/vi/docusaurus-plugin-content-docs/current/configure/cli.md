@@ -125,21 +125,44 @@ $ zmrig -o gulf.moneroocean.stream:10001 -u 4AdUndXH...684Rgf -a rx/wow --check
 -V, --version
 ```
 
+## Cờ trên dòng lệnh thắng file cấu hình
+
+`-c FILE` được đọc trước, rồi dòng lệnh được áp lên trên, từng trường một. Cái
+gì có trên dòng lệnh thì thắng — kể cả giá trị trùng với mặc định, đúng trường
+hợp từng bị mất:
+
+```bash
+# tắt phí và đặt giới hạn nhiệt, trên rig mà file cấu hình nói khác
+zmrig -c /etc/zmrig/config.json --donate-level=0 --max-temp=70
+```
+
+`--donate-level`, `--max-temp`, `--profile`, `--ban-cooldown`, `--dataset-cache`,
+`--health-warmup`, `--health-restart` (kể cả giá trị số giây) và `--autotune`
+từng được parse rồi bị merge bỏ đi, nên trên rig đã cài — nơi lần chạy nào cũng
+có `-c` — chúng không có tác dụng. Cờ mà file cấu hình không nhắc tới thì giữ
+giá trị trong file; cờ mà file có nhắc tới thì được ghi đè. Các cờ như
+`--thermal-file`, `--http-access-token`, `--verify-share`, `--allow-bad-wallet`
+và `--report` vốn đã được merge đúng, không nằm trong lỗi này.
+
+Lựa chọn thuật toán trên dòng lệnh cũng theo quy tắc đó: `--algo=auto` xóa pin toàn cục hoặc pin riêng của pool, còn `--algo=rx/0` ghim một thuật toán dù file ghi `auto`. Parser phải thay cả hai phần của trạng thái (`algo` và `algo_all`); lựa chọn toàn cục phải thắng pin cấp pool.
+
 ## Profile: `free` và `watt`
 
 ```bash
 sudo ./oneclick.sh install --wallet 4YourMoneroAddress --profile free  # hashrate tối đa
 sudo ./oneclick.sh install --wallet 4YourMoneroAddress --profile watt  # H/W tối đa
-sudo ./oneclick.sh install --wallet 4YourMoneroAddress                 # = auto
+sudo ./oneclick.sh install --wallet 4YourMoneroAddress                 # mặc định = free
 ```
 
-`auto` đọc pin: laptop đang dùng pin thành `watt`, còn lại thành `free`. Miner
-đọc lại profile lúc khởi động, nên rút sạc rồi restart service là đủ để đổi.
+`free` là mặc định và tối đa hashrate dù dùng điện lưới hay pin. `auto` là bí danh
+của `free`; trạng thái pin không âm thầm thay đổi hiệu năng. Chỉ chọn `watt` khi
+muốn chủ động đổi một phần hashrate lấy nhiều hash trên mỗi watt hơn.
 
 ## Chế độ an toàn: đào mà không nướng máy
 
-`--max-temp` là con số duy nhất của chế độ này. Nó bật một bộ điều tiết chạy mỗi
-giây, đọc cảm biến CPU nóng nhất và trả lại thread khi máy nóng lên:
+Mục tiêu an toàn mặc định là 80 °C. `--max-temp` ghi đè giá trị đó; bộ điều tiết
+chạy mỗi giây, đọc cảm biến CPU nóng nhất và trả lại thread khi máy nóng lên.
+`--no-thermal` chủ động tắt bộ điều tiết:
 
 ```bash
 sudo zmrig -o gulf.moneroocean.stream:10001 -u 4YourMoneroAddress \
@@ -166,7 +189,7 @@ nguyên trong RAM, nên một lần dừng chỉ mất đúng số share không 
 pool vẫn mở.
 
 ```text
-thermal: holding 72 C max - k10temp/Tctl reads 61.5 C now; 8 thread(s), step down at 72 C, pause above 87 C
+thermal: holding 72 C max - k10temp/Tctl reads 61.5 C now; 8 thread(s), step down at 72 C, pause at 87 C
 thermal: 73.4 C on k10temp/Tctl -> 7 of 8 threads (target 72 C; 1 step-down(s), 0 step-up(s) so far)
 ```
 
@@ -174,8 +197,8 @@ thermal: 73.4 C on k10temp/Tctl -> 7 of 8 threads (target 72 C; 1 step-down(s), 
 khác biệt giữa "nó đã hạ tải" và "nó không có cảm biến và không bao giờ hạ được":
 
 ```text
-  thermal hold 72 C: k10temp/Tctl 61.5 C now, step down at 72 C, pause above 87 C (--no-thermal turns it off)
-  thermal off (no --max-temp: nothing throttles, however hot the box gets)
+  thermal hold 80 C: k10temp/Tctl 61.5 C now, step down at 80 C, pause at 95 C (--no-thermal turns it off)
+  thermal off (--no-thermal: explicitly disabled)
 ```
 
 Chỉ cảm biến của CPU được dùng — `coretemp`, `k10temp`, `zenpower`, `cpu_thermal`,

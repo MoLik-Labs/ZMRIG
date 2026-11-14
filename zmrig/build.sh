@@ -39,6 +39,11 @@ MCPU="native"
 STATIC=0
 STRIP=0
 ZIG="${ZIG:-zig}"   # replaced by scripts/find-zig.sh when left as the default
+# ReleaseFast in every build that ships. Overridable so the test suite can build
+# a ReleaseSafe binary and run the same inputs against it: safety checks are off
+# in ReleaseFast by design, which also means the difference between "wrapped" and
+# "undefined" is invisible until a test binary has them back on.
+ZIG_OPT="${ZIG_OPT:-ReleaseFast}"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -352,8 +357,9 @@ echo "==> archiving libxmorx.a"
 rm -f "${OUT}/libxmorx.a"
 ar rcs "${OUT}/libxmorx.a" "${objects[@]}"
 
-if [ "${OUT_DIR:-}" != "" ] && [ "$BUILD_ZIG" -eq 1 ]; then BUILD_ZIG=0; fi
-
+# `--no-zig` is the only way to stop after the library. OUT_DIR used to do it
+# too, silently: exporting it produced a library, exited 0, and never mentioned a
+# binary - a build that says it worked and has no miner in it.
 if [ "$BUILD_ZIG" -eq 0 ]; then
     echo "built ${OUT}/libxmorx.a"
     exit 0
@@ -400,7 +406,7 @@ else
 fi
 
 "$ZIG" build-exe "${HERE}/src/main.zig" "${TARGET[@]}" \
-    -O ReleaseFast "${CPU_FLAG[@]}" "${STRIP_FLAG[@]}" \
+    -O "${ZIG_OPT}" "${CPU_FLAG[@]}" "${STRIP_FLAG[@]}" \
     --name zmrig \
     -femit-bin="${OUT}/zmrig" \
     --cache-dir "${OUT}/zig-cache" \

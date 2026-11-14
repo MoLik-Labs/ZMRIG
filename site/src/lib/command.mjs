@@ -8,8 +8,8 @@
 // the tests assert behaviour, not prose.
 //
 // Rules encoded here, each one a bug or a near miss at some point:
-//   * `--engine auto` and `--profile auto` mean "let the installer decide", and
-//     the installer decides only when the flag is absent. So: no flag.
+//   * `--engine auto` lets the installer decide. The throughput-first profile
+//     is explicit so battery state can never silently lower hashrate.
 //   * The C++ engine has no WebSocket client and no proxy support. Asking for
 //     either forces zmrig instead of writing a config nothing can run.
 //   * A TLS pool is `tls://host:port`; the scheme is part of the value, because
@@ -152,7 +152,7 @@ function normalise(state) {
       .trim()
       .slice(0, 32),
     engine: s.engine === "xmrig" || s.engine === "zmrig" ? s.engine : "auto",
-    profile: s.profile === "free" || s.profile === "watt" ? s.profile : "auto",
+    profile: s.profile === "watt" || s.profile === "auto" ? s.profile : "free",
     pool: String(s.pool || "moneroocean"),
     host: String(s.host || "").trim(),
     failover: (s.failover || []).filter(Boolean),
@@ -251,7 +251,7 @@ export function build(state) {
     args.push("--ws-path", wsPath);
   }
 
-  if (s.profile !== "auto") args.push("--profile", s.profile);
+  args.push("--profile", s.profile);
   if (s.proxy) args.push("--proxy", s.proxyUrl || "socks5://127.0.0.1:9050");
   if (s.connectTo) args.push("--connect-to", s.connectTo);
   // MSR is written by default on a root install; the flag exists for hosts
@@ -279,7 +279,7 @@ export function build(state) {
   if (coin.algo !== "rx/0") planArgs.push("--algo", coin.algo);
   if (failover.length) planArgs.push("--failover", failover.join(","));
   if (engine !== "auto") planArgs.push("--engine", engine);
-  if (s.profile !== "auto") planArgs.push("--profile", s.profile);
+  planArgs.push("--profile", s.profile);
 
   const plan = s.clone
     ? `sudo ./oneclick.sh ${quoteArgs(planArgs)}`

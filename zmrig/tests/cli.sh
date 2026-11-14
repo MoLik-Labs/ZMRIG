@@ -168,6 +168,37 @@ else
     record FAIL "--no-auto-hugepages is documented" "not in --help"
 fi
 
+# The unqualified/default profile is throughput-first. `auto` is also
+# throughput-first; battery state must never silently shed SMT threads.
+default_profile_threads=$("$BIN" -o pool.example.com:3333 -u "$WALLET" --check 2>/dev/null \
+    | sed -n 's/^ *threads *\([0-9]*\).*/\1/p' | head -1)
+free_profile_threads=$("$BIN" -o pool.example.com:3333 -u "$WALLET" --profile=free --check 2>/dev/null \
+    | sed -n 's/^ *threads *\([0-9]*\).*/\1/p' | head -1)
+if [ -n "$default_profile_threads" ] && [ "$default_profile_threads" = "$free_profile_threads" ]; then
+    record PASS "default profile maximises hashrate" "free: ${default_profile_threads} thread(s)"
+else
+    record FAIL "default profile maximises hashrate" "default '${default_profile_threads}' != free '${free_profile_threads}'"
+fi
+auto_profile_threads=$("$BIN" -o pool.example.com:3333 -u "$WALLET" --profile=auto --check 2>/dev/null \
+    | sed -n 's/^ *threads *\([0-9]*\).*/\1/p' | head -1)
+if [ -n "$auto_profile_threads" ] && [ "$auto_profile_threads" = "$free_profile_threads" ]; then
+    record PASS "auto profile ignores battery state" "auto = free: ${auto_profile_threads} thread(s)"
+else
+    record FAIL "auto profile ignores battery state" "auto '${auto_profile_threads}' != free '${free_profile_threads}'"
+fi
+default_thermal=$("$BIN" -o pool.example.com:3333 -u "$WALLET" --check 2>/dev/null)
+if printf '%s\n' "$default_thermal" | grep -q "thermal target 80 C"; then
+    record PASS "thermal governor defaults to safe 80 C target" ""
+else
+    record FAIL "thermal governor defaults to safe 80 C target" "$(printf '%s\n' "$default_thermal" | grep thermal || echo 'no thermal line')"
+fi
+no_thermal=$("$BIN" -o pool.example.com:3333 -u "$WALLET" --no-thermal --check 2>/dev/null)
+if printf '%s\n' "$no_thermal" | grep -q "thermal off (--no-thermal"; then
+    record PASS "--no-thermal is an explicit override" ""
+else
+    record FAIL "--no-thermal is an explicit override" "$(printf '%s\n' "$no_thermal" | grep thermal || echo 'no thermal line')"
+fi
+
 # --- profiles and autotune -------------------------------------------
 # Both are new contract surface: a typo in either must be an error, not a
 # silently ignored flag that leaves the machine on the wrong profile.
@@ -208,7 +239,7 @@ else
 fi
 
 # `--autotune` is a local measurement: it must not demand a pool.
-if "$BIN" --autotune=1 >/dev/null 2>&1; then
+if "$BIN" --autotune=1 --mode=light >/dev/null 2>&1; then
     record PASS "--autotune runs without a pool" ""
 else
     record FAIL "--autotune runs without a pool" "exited $?"
@@ -285,6 +316,38 @@ else
     record FAIL "pool-level algo=auto is honoured" "got: ${auto_line:-nothing}"
 fi
 rm -f "$auto_cfg"
+
+# A flag has to win over a config file. These four were parsed and then dropped
+# by the merge, so an installed rig - which always runs with `-c` - ignored them:
+# the fee was charged after `--donate-level=0`, and the thermal governor stayed
+# off after `--max-temp`.
+merge_cfg=$(mktemp)
+cat >"$merge_cfg" <<JSON
+{"pools":[{"url":"pool.example.com:3333","user":"$WALLET"}]}
+JSON
+
+merged_donate=$("$BIN" -c "$merge_cfg" --donate-level=0 --check 2>/dev/null | sed -n 's/^ *donate  //p' | head -1)
+case "$merged_donate" in
+    off*) record PASS "--donate-level=0 beats the config file" "$merged_donate" ;;
+    *)    record FAIL "--donate-level=0 beats the config file" "got: ${merged_donate:-nothing}" ;;
+esac
+
+merged_thermal=$("$BIN" -c "$merge_cfg" --max-temp=70 --check 2>/dev/null | sed -n 's/^ *thermal //p' | head -1)
+case "$merged_thermal" in
+    target*70*) record PASS "--max-temp beats the config file" "$merged_thermal" ;;
+    *)          record FAIL "--max-temp beats the config file" "got: ${merged_thermal:-nothing}" ;;
+esac
+
+# ... and the config file still wins where the command line says nothing.
+cat >"$merge_cfg" <<JSON
+{"pools":[{"url":"pool.example.com:3333","user":"$WALLET"}],"max-temp":60}
+JSON
+kept_thermal=$("$BIN" -c "$merge_cfg" --check 2>/dev/null | sed -n 's/^ *thermal //p' | head -1)
+case "$kept_thermal" in
+    target*60*) record PASS "the config file keeps what the CLI did not set" "$kept_thermal" ;;
+    *)          record FAIL "the config file keeps what the CLI did not set" "got: ${kept_thermal:-nothing}" ;;
+esac
+rm -f "$merge_cfg"
 
 # -- the developer fee ----------------------------------------------------
 # It is 3 % of Monero mining time by default, it is stated in --check, it can be

@@ -549,18 +549,20 @@ shares, and a miner that does not get OOM-killed. Everything below that is noise
 
 ---
 
-## 2c. Two profiles: free electricity, or every watt counted
+## 2c. Two profiles: maximum hashrate, or every watt counted
 
-`--profile free` and `--profile watt` are not marketing names, they are two
-different answers to "what does the next hashrate cost".
+`free` is the default, independent of electricity price and battery state.
+`--profile free` and the opt-in `--profile watt` are not marketing names: they
+are two different answers to "what does the next hashrate cost".
 
-**`free`** — the machine is on anyway: a coffee shop laptop, a lab PC, an office
-desktop, a school computer. Power is not a variable, so nothing is traded away:
+**`free`** — maximum gross hashrate, on mains or battery. Nothing is traded
+away:
 every logical CPU, `--mode fast`, huge pages, `--priority 5`, `performance`
 governor.
 
-**`watt`** — the electricity bill moves with the hashrate: a metered VPS, a
-laptop on battery, a country with expensive power. Three decisions change:
+**`watt`** — explicitly trade gross hashrate for energy efficiency, for example
+on a metered VPS or where electricity is expensive. Battery state never selects
+this profile automatically. The thread and governor choices change:
 
 1. **One thread per physical core.** SMT siblings add roughly 5–15 % hashrate
    for 30–40 % more package power: they run the same memory-bound workload on a
@@ -575,9 +577,9 @@ laptop on battery, a country with expensive power. Three decisions change:
    scratchpad read does not need the top bin. The distro default
    (`schedutil`/`powersave`) already tracks utilisation, so `watt` keeps it and
    only repairs a machine stuck on `performance`.
-3. **Pause on battery.** A laptop that drops to battery stops mining rather than
-   draining it — a watt-profile machine that empties its own battery is not
-   saving anything.
+3. **Battery pause is separate and opt-in.** The profile does not infer consent
+   from a battery reading. If desired, configure `pause-on-battery` separately;
+   the installer leaves it off.
 
 Huge pages stay on in both profiles: they raise hashrate **and** lower energy per
 hash, because the win comes from fewer TLB misses and shorter stalls, not from

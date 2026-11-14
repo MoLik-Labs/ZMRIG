@@ -34,7 +34,11 @@ Cộng bảy unit test cho máy trạng thái (`health.zig`): tạm dừng khôn
 một hai share stale là bình thường, và một cú tụt phải kéo dài mới tính là
 `degraded`.
 
-## Bộ test mạng — 29 case
+## Build kiểm tra an toàn
+
+`./zmrig/tests/safety.sh` build một binary `ReleaseSafe` riêng rồi đưa cấu hình lỗi và dòng lệnh hostile vào thử. Binary cài đặt vẫn là `ReleaseFast`; bản safety làm lỗi undefined hiện ra trong test. `safety.sh` qua bảy kiểm tra trên bản build `ReleaseSafe` riêng: cấu hình sai dạng, đường dẫn NUL, merge config với CLI không rò rỉ cấp phát và dòng lệnh hostile.
+
+## Bộ test mạng — 30 case
 
 Nó dựng pool giả, TLS shim, proxy HTTP và SOCKS5 và server WebSocket ngay trên
 máy, rồi bắt miner nói chuyện với tất cả:
@@ -56,6 +60,7 @@ máy, rồi bắt miner nói chuyện với tất cả:
 | API | `http api`, `http api token`, `http api 404` | summary, ép token, đường dẫn lạ |
 | Lỗi | `login rejected`, `idle watchdog`, `pool failover` | lỗi hiện ra; reconnect và failover chạy |
 | | `hostile pool` | rác không ngăn được việc submit share |
+| | `wsbad` | peer WebSocket gửi ping 512 byte (RFC 6455 chỉ cho 125) thì được nêu tên ra stderr và kết nối lại; nếu cắt bớt thì phần còn lại của frame bị đọc như header kế tiếp |
 | Seed | `seed change` | bốn lần dựng lại dataset, vẫn đào tiếp |
 | Soak | `soak` | 4 phút đổi seed, đổi thuật toán và rớt mạng |
 

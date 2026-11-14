@@ -32,9 +32,10 @@ binary mới hơn mã nguồn.
 | Quyết định | Cách installer chọn |
 | --- | --- |
 | Engine | `zmrig` (3 % thời gian Monero, `--donate-level=0` để bỏ). Nó khai báo cả họ RandomX, nên pool đổi thuật toán vẫn chuyển được rig sang coin đang trả tốt nhất. `--algo` ngoài RandomX, hoặc `--engine=xmrig`, sẽ chọn engine C++, engine này không lấy phí. |
-| Profile | `free` (hashrate tối đa) ở mọi nơi, trừ laptop đang dùng pin → `watt` (hash trên mỗi watt tối đa). |
+| Profile | `free` (hashrate tối đa), dù dùng điện lưới hay pin. Chỉ chọn `watt` khi người dùng chủ động yêu cầu. |
 | Thread | Đo sau khi build: mỗi phương án chạy 8 s trên dataset thật, phương án thắng được ghi vào config. |
 | Huge pages | Tính từ dataset. Nếu kernel cấp ít hơn, nó lùi về transparent huge pages và nói rõ. |
+| An toàn nhiệt | Mặc định mục tiêu 80 °C; bộ điều tiết giảm thread khi nóng và tạm dừng ở 95 °C. `--no-thermal` là lựa chọn tắt rõ ràng. |
 | Governor | `performance` cho `free`, giữ nguyên powersave cho `watt`. |
 
 Xem đúng danh sách đó mà không đụng vào máy:
@@ -48,7 +49,7 @@ Xem đúng danh sách đó mà không đụng vào máy:
     engine         zmrig  (RandomX family, 3% dev fee)
     pool           gulf.moneroocean.stream:10001
     algo           auto  (RandomX family: rx/0, rx/wow, rx/arq, …)
-    profile        free  (auto: no battery, electricity is treated as free)
+    profile        free  (mặc định: hashrate tối đa, bất kể trạng thái pin)
     mode           auto (fast when RAM allows)
     huge pages     none yet, the installer reserves what the dataset needs
     autotune       8 s per candidate, winner written to config.json
@@ -85,10 +86,12 @@ sudo ./oneclick.sh install --wallet 4YourMoneroAddress --profile free
 sudo ./oneclick.sh install --wallet 4YourMoneroAddress --profile watt
 ```
 
-`free` dùng mọi CPU logic, `--mode fast`, huge pages và `--priority 5`. `watt`
-giảm còn một thread mỗi core vật lý (SMT thêm 5–15 % hashrate nhưng tốn thêm
-30–40 % điện), không ép CPU lên xung cao nhất, và tự dừng khi laptop chuyển sang
-pin.
+`free` là mặc định, dùng mọi CPU logic, `--mode fast`, huge pages và
+`--priority 5`, bất kể trạng thái pin. Bộ điều tiết nhiệt mặc định nhắm 80 °C và
+giảm thread khi cần; bảo vệ nhiệt của phần cứng vẫn là lớp cuối. `watt` là lựa
+chọn chủ động: dùng một
+thread mỗi core vật lý (SMT thêm 5–15 % hashrate nhưng tốn thêm 30–40 % điện) và
+không ép CPU lên xung cao nhất.
 
 ## Cập nhật, gỡ
 

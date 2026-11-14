@@ -66,7 +66,7 @@ The flags worth knowing on day one:
 | `--pool HOST:PORT` | the pool; a short name such as `supportxmr` also works |
 | `--rig-id NAME` | what this machine is called on the pool dashboard |
 | `--profile free\|watt` | maximum hashrate, or maximum hashrate per watt |
-| `--max-temp 70` | shed threads as the CPU warms instead of cooking it |
+| `--max-temp 70` | override the safe 80 °C default; shed threads as the CPU warms |
 | `--donate-level 3` | the developer fee, `0`..`10`; `0` turns it off |
 
 The rest are in [every installer option](/docs/install/installer).
@@ -222,7 +222,7 @@ loop for ten machines in [unattended installs](/docs/install/installer).
 | `the miner rejected the generated config` | the wallet has a character that is not base58 | `zmrig --check-wallet 4...`, then reinstall with a clean address |
 | the pool bans this IP | wrong wallet, or too many reconnects | wait out the cooldown; a wrong wallet is clamped to at least 30 min |
 | hashrate is a quarter of the benchmarks | no huge pages (a container or an OpenVZ VPS) | `zmrig --check` reports the page count; ask the host for 2 MiB pages |
-| the rig is loud and hot | no temperature policy | `--max-temp 70`, or `zmrig-os setup --max-temp 70` |
+| the rig is loud and hot | target is too high for this cooling setup | `--max-temp 70`, or `zmrig-os setup --max-temp 70` |
 | the container uses fewer threads than the host has cores | a `--cpus` quota | `docker run ... args` and read the `-t` it chose |
 | the service restarts in a loop | somebody edited the config | `sudo journalctl -u zmrig -n 60`, first line after the binary starts |
 

@@ -7,7 +7,8 @@
 # shares over each one. Then runs the harder cases: a seed change, an algorithm
 # switch, an abrupt disconnect, a hostile pool that floods malformed JSON, an
 # idle pool that triggers the watchdog, a pool that closes the socket in the
-# middle of a share, a rejected login, and a fallback to the second pool.
+# middle of a share, a rejected login, a fallback to the second pool, and a
+# WebSocket peer that sends an RFC 6455-invalid 512-byte control frame.
 #
 # The fake pool also has a "deaf" mode (answers the login, never reads again)
 # for reproducing a send that blocks instead of failing:
@@ -570,6 +571,27 @@ if selected invalid; then
         record PASS "invalid shares stop the stream" "rejects=$rejects, then paused"
     else
         record FAIL "invalid shares stop the stream" "rejects=${rejects:-0} (see $log)"
+    fi
+fi
+
+if selected wsbad; then
+    port_bws=$((port++))
+    python3 "$NET/bad_ws.py" --port "$port_bws" --mode long-ping \
+        >"${LOGDIR}/badws.log" 2>&1 &
+    PIDS+=($!)
+    wait_port "$port_bws" 10
+    log="${LOGDIR}/wsbad.log"
+    run_miner wsbad 8 "$log" -o "ws://127.0.0.1:${port_bws}/pool" -t 1 --mode light \
+        --retry-pause 1
+    # A 512-byte ping is a protocol violation. The miner has to name it and
+    # reconnect; the old behaviour was to take 125 bytes, answer with a pong and
+    # leave 387 bytes to be parsed as the next frame header, which is a stream
+    # that never recovers and a log that only said "ConnectionClosed".
+    if grep -q 'not speaking WebSocket correctly' "$log" && \
+       ! grep -q 'Segmentation fault\|panic' "$log"; then
+        record PASS "a broken WebSocket is named" "reconnects=$(grep -c 'connecting to' "$log")"
+    else
+        record FAIL "a broken WebSocket is named" "(see $log)"
     fi
 fi
 

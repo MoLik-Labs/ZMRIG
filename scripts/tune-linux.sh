@@ -34,7 +34,7 @@ HUGE_MODE="2M"          # 2M | 1G | off
 THP_MODE="always"       # always | madvise | off
 SWAPPINESS="10"
 SET_GOVERNOR="performance"
-PROFILE="auto"
+PROFILE="free"
 NUMA_BALANCE="keep"     # off | on | keep
 IRQ_MODE="keep"         # steer | keep
 # Overridable so the profile/gonernor logic can be tested against a fake tree
@@ -456,16 +456,8 @@ step "4. CPU governor"
 # what it found.
 case "$PROFILE" in
     auto)
-        # A laptop on battery is the case the watt profile exists for.
-        for bat in "${POWER_SUPPLY_ROOT}"/BAT*; do
-            [ -r "${bat}/status" ] || continue
-            if [ "$(cat "${bat}/status" 2>/dev/null)" = "Discharging" ]; then
-                PROFILE="watt"
-                info "on battery: using the watt profile for the governor"
-                break
-            fi
-        done
-        [ "$PROFILE" = "auto" ] && PROFILE="free"
+        PROFILE="free"
+        info "auto profile: maximum hashrate (battery state does not lower performance)"
         ;;
 esac
 
@@ -496,7 +488,7 @@ if [ -d "${CPU_ROOT}/cpu0/cpufreq" ]; then
             fi
             ;;
         *)
-            warn "unknown profile '${PROFILE}' (auto, free or watt); leaving the governor alone"
+            warn "unknown profile '${PROFILE}' (free, watt or auto); leaving the governor alone"
             ;;
     esac
 else

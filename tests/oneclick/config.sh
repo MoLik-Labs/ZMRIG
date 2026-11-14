@@ -150,12 +150,20 @@ else
     fail "max-temp in config is '$(json_get "${DIR_T}/config.json" "max-temp")', expected 70"
 fi
 
-# ... and its absence is an absence, not a zero: a config that says nothing
-# cannot throttle a machine that never asked to be throttled.
-if [ "$(json_get "${DIR1}/config.json" "max-temp")" = "null" ]; then
-    pass "no --max-temp writes no max-temp key"
+# A fresh installation has a safe thermal target even when the user does not
+# pass --max-temp explicitly.
+if [ "$(json_get "${DIR1}/config.json" "max-temp")" = "80" ]; then
+    pass "default config includes the safe 80 C thermal target"
 else
-    fail "a max-temp key appeared without the flag"
+    fail "default max-temp is '$(json_get "${DIR1}/config.json" "max-temp")', expected 80"
+fi
+
+DIR_NO_THERMAL="${WORK}/etc-no-thermal"
+run_config "$DIR_NO_THERMAL" --engine=zmrig --pool=supportxmr.com:3333 --no-thermal
+if [ "$(json_get "${DIR_NO_THERMAL}/config.json" "max-temp")" = "0" ]; then
+    pass "--no-thermal is an explicit opt-out in config"
+else
+    fail "--no-thermal produced '$(json_get "${DIR_NO_THERMAL}/config.json" "max-temp")', expected 0"
 fi
 
 # A thread count is written only when the search produced one.

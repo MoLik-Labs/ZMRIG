@@ -115,13 +115,13 @@ else
     fail "an invalid profile was not rejected"
 fi
 
-# On this test machine (a container or a desktop) auto must resolve to free;
-# a laptop on battery would resolve to watt, which is also a pass.
-auto_profile=$(field_of "$(plan)" "profile")
-case "$auto_profile" in
-    free|watt) pass "auto resolves to a concrete profile (${auto_profile})" ;;
-    *)         fail "auto did not resolve, got '${auto_profile}'" ;;
-esac
+# Battery state must never lower the automatic/default hashrate profile.
+auto_profile=$(field_of "$(plan --profile=auto)" "profile")
+if [ "$auto_profile" = free ]; then
+    pass "auto stays throughput-first (free), independent of battery state"
+else
+    fail "auto did not resolve to free, got '${auto_profile}'"
+fi
 
 # --- autotune is planned only where it applies -------------------------
 out=$(plan --pool=supportxmr.com:3333)
@@ -152,17 +152,24 @@ if printf '%s' "$out" | grep -q "hold 70 C"; then
 else
     fail "--max-temp was not planned"
 fi
-if printf '%s' "$out" | grep -q "pause above 85 C"; then
+if printf '%s' "$out" | grep -q "pause at 85 C"; then
     pass "the pause limit is target + 15"
 else
     fail "the pause limit is not target + 15"
 fi
 
 out=$(plan --pool=supportxmr.com:3333)
-if printf '%s' "$out" | grep -q "thermal        off"; then
-    pass "no --max-temp means no governor"
+if printf '%s' "$out" | grep -q "thermal        hold 80 C"; then
+    pass "default plan includes a safe thermal target"
 else
-    fail "a governor was planned without being asked for"
+    fail "the default plan omitted the thermal safety governor"
+fi
+
+out=$(plan --pool=supportxmr.com:3333 --no-thermal)
+if printf '%s' "$out" | grep -q "thermal        off (--no-thermal explicitly requested)"; then
+    pass "thermal governor can only be disabled explicitly"
+else
+    fail "--no-thermal was not reported as an explicit opt-out"
 fi
 
 out=$(plan --pool=supportxmr.com:3333 --max-temp=warm)

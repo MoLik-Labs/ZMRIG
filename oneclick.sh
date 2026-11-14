@@ -96,12 +96,12 @@ NET_KEEPALIVE_INTERVAL=""
 # MSR / NiceHash / affinity for the zmrig engine. "auto" keeps the XMRig
 # default (write the preset, restore on exit); "off" leaves the registers be.
 MSR_MODE="auto"
-# --profile: what this machine is for. "auto" reads the hardware (a laptop on
-# battery becomes "watt", everything else "free"), so a plain install needs no
-# flags at all.
-PROFILE="${MINER_PROFILE:-auto}"
-# Empty means "no thermal policy": the miner is only throttled when asked.
-MAX_TEMP="${MAX_TEMP:-}"
+# --profile: gross hashrate is the default regardless of mains/battery state.
+# `watt` is an explicit lower-throughput choice; `auto` is an alias for free.
+PROFILE="${MINER_PROFILE:-free}"
+# Keep sustained CPU temperature in a conservative range by default. The
+# explicit --no-thermal opt-out is available for externally managed systems.
+MAX_TEMP="${MAX_TEMP:-80}"
 # The developer fee this install will run with. Three percent by default, and a
 # flag because the fee is documented as switchable: "edit donate-level in
 # config.json" is not a switch, it is homework.
@@ -183,12 +183,11 @@ Options
                          is unreachable, bans this IP, or refuses the wallet
   --pass VALUE           pool password            (default: x)
   --rig-id NAME          rig identifier shown on the pool dashboard
-  --profile NAME         auto | free | watt. Default auto: free (max hashrate,
-                         electricity is free) everywhere except a laptop on
-                         battery, which gets watt (max hashrate per watt).
-  --max-temp C           keep the hottest CPU sensor at or below C degrees:
-                         the miner gives back threads as the box warms and
-                         stops above C+15 instead of cooking the machine
+  --profile NAME         free (default, maximum hashrate) | watt (opt-in,
+                         maximum hashrate per watt) | auto (same as free).
+  --max-temp C           safe hottest-CPU target (default 80 C); threads step
+                         down as the box warms, mining pauses at C+15
+  --no-thermal           explicitly disable the thermal governor
   --autotune[=SEC]       search for the best thread count after install
                          (default: on for zmrig, 8 s per candidate)
   --no-autotune          keep the built-in thread heuristic
@@ -277,6 +276,7 @@ while [ $# -gt 0 ]; do
         --profile=*)     PROFILE="${1#*=}" ;;
         --max-temp)      MAX_TEMP="${2:?}"; shift ;;
         --max-temp=*)    MAX_TEMP="${1#*=}" ;;
+        --no-thermal)    MAX_TEMP="0" ;;
         --engine)        ENGINE="${2:?}"; ENGINE_EXPLICIT=1; shift ;;
         --engine=*)      ENGINE="${1#*=}"; ENGINE_EXPLICIT=1 ;;
         --tls)           TLS="true" ;;
@@ -345,9 +345,10 @@ done
 # writes a config, and a typo should fail before the user believes it worked.
 if [ -n "$MAX_TEMP" ]; then
     case "$MAX_TEMP" in
+        0) ;;
         *[!0-9]*) die "--max-temp must be a whole number of degrees Celsius (45..95), got '${MAX_TEMP}'" ;;
     esac
-    if [ "$MAX_TEMP" -lt 45 ] || [ "$MAX_TEMP" -gt 95 ]; then
+    if [ "$MAX_TEMP" != 0 ] && { [ "$MAX_TEMP" -lt 45 ] || [ "$MAX_TEMP" -gt 95 ]; }; then
         die "--max-temp must be 45..95 degrees Celsius, got ${MAX_TEMP}: below 45 the rig would never mine, above 95 nothing is protected"
     fi
 fi
@@ -1143,10 +1144,9 @@ write_config() {
     \"power\": ${NET_POWER}"
     fi
 
-    # zmrig-only keys. `profile` is read by the miner itself (so a laptop that
-    # gets unplugged switches to the watt profile on its next start), and
-    # `threads` is the winner of the install-time search. Both are values this
-    # script generated, never user text.
+    # zmrig-only keys. `profile` is throughput-first unless watt was explicitly
+    # requested; `threads` is the install-time search winner. Both are generated
+    # here, never pasted user text.
     local profile_json=""
     local cpu_threads_json=""
     local health_json=""
@@ -1155,9 +1155,8 @@ write_config() {
         resolve_profile_effective
         profile_json="
     \"profile\": \"${PROFILE_EFFECTIVE}\","
-        # The thermal policy, when one was asked for. Written as a number so the
-        # miner reads it without parsing anything, and left out entirely when
-        # the flag is absent: a config that says nothing cannot throttle.
+        # The thermal policy is written as a number. Zero is the explicit
+        # --no-thermal opt-out; otherwise the default is an 80 C safe target.
         case "${MAX_TEMP}" in
             ''|*[!0-9.]*)
                 [ -n "$MAX_TEMP" ] && die "--max-temp must be a number of degrees Celsius (45..95)"
@@ -2125,47 +2124,21 @@ cmd_purge() {
 #       office machine, a lab PC that is on anyway).
 # watt: one thread per physical core and no SMT-only threads, because the last
 #       few percent of hashrate costs 30-40% more power there.
-# auto: a laptop on battery gets watt, everything else gets free.
-profile_battery_state() {
-    local bat status=""
-    for bat in /sys/class/power_supply/BAT*; do
-        [ -r "${bat}/status" ] || continue
-        status=$(cat "${bat}/status" 2>/dev/null || true)
-        case "$status" in
-            Discharging) printf '%s' "discharging"; return 0 ;;
-            Charging|Full) ;;
-        esac
-    done
-    case "$status" in
-        "") printf '%s' "none" ;;
-        *)  printf '%s' "plugged" ;;
-    esac
-}
-
+# `auto` deliberately has no battery probe: battery state is not permission
+# to lower hashrate. Only an explicit `watt` setting opts into that tradeoff.
 resolve_profile_effective() {
     case "$PROFILE" in
-        free|watt) PROFILE_EFFECTIVE="$PROFILE" ;;
-        auto)
-            case "$(profile_battery_state)" in
-                discharging) PROFILE_EFFECTIVE="watt" ;;
-                *)           PROFILE_EFFECTIVE="free" ;;
-            esac
-            ;;
+        free|auto) PROFILE_EFFECTIVE="free" ;;
+        watt) PROFILE_EFFECTIVE="watt" ;;
         *) die "--profile must be auto, free or watt (got '${PROFILE}')" ;;
     esac
 }
 
 profile_reason() {
     case "$PROFILE" in
-        free) printf '%s' "requested" ;;
-        watt) printf '%s' "requested" ;;
-        auto)
-            case "$(profile_battery_state)" in
-                discharging) printf '%s' "auto: on battery, watts are the limit" ;;
-                none)        printf '%s' "auto: no battery, electricity is treated as free" ;;
-                *)           printf '%s' "auto: on mains power" ;;
-            esac
-            ;;
+        free) printf '%s' "requested: maximum hashrate" ;;
+        watt) printf '%s' "requested: maximum hashes per watt" ;;
+        auto) printf '%s' "auto: maximum hashrate (battery state does not lower performance)" ;;
     esac
 }
 
@@ -2313,7 +2286,12 @@ cmd_plan() {
     printf '    %-14s %s  (%s)\n' "profile" "${PROFILE_EFFECTIVE}" "$(profile_reason)"
     printf '    %-14s %s\n' "mode" "$( [ "$ENGINE" = zmrig ] && echo "auto (fast when RAM allows)" || echo "pool default")"
     printf '    %-14s %s\n' "huge pages" "$(huge_page_plan)"
-    printf '    %-14s %s\n' "thermal" "$( if [ -n "$MAX_TEMP" ]; then printf 'hold %s C: step down at %s C, pause above %s C' "$MAX_TEMP" "$MAX_TEMP" "$((MAX_TEMP + 15))"; else printf 'off (no --max-temp: nothing throttles, however hot the box gets)'; fi )"
+    if [ "$MAX_TEMP" = 0 ]; then
+        thermal_plan="off (--no-thermal explicitly requested)"
+    else
+        thermal_plan="hold ${MAX_TEMP} C: step down at ${MAX_TEMP} C, pause at $((MAX_TEMP + 15)) C"
+    fi
+    printf '    %-14s %s\n' "thermal" "$thermal_plan"
     printf '    %-14s %s\n' "autotune" "$(autotune_plan)"
     printf '    %-14s %s\n' "service" "$( [ "$DO_SERVICE" = 1 ] && echo "${SERVICE_NAME}.service (systemd)" || echo "none, run in the foreground")"
     printf '\n'
