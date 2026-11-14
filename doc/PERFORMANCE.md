@@ -27,7 +27,7 @@ sudo ./scripts/tune-linux.sh
 # 3. measure before/after on the same host
 ./scripts/bench.sh --seconds 300 --hashes 200000
 
-# 4. audit the developer fee (1% of Monero time, switchable off)
+# 4. audit the developer fee (3% of Monero time, switchable off)
 ./scripts/verify-fee.sh --binary zmrig/out/zmrig
 ```
 
@@ -100,6 +100,65 @@ RandomX sources, so `-march` has nothing to optimise there. Flags still help the
 dataset initialiser and the CryptoNight/Argon2 C paths, so `build-optimized.sh`
 keeps them, but do not expect a RandomX speedup from them.
 
+### Where the cycles go: one hash, measured (2026-11 round)
+
+`./zmrig/tests/profile.sh` builds a second copy of the engine with
+`-DXMO_PROFILE` and reports the cycles each phase of a hash costs, through the
+same C API the mining loop calls. On the 2 vCPU Xeon VM (rx/0, one worker), the
+miner's own path — `hash_first`/`hash_next`, which is what the worker loop runs —
+measures:
+
+| Phase | Cycles per hash | Share |
+|---|---:|---:|
+| 8 VM programs (16384 dataset reads) | 5 152 683 | **97.1 %** |
+| final AES pass over the 2 MiB scratchpad | 140 650 | 2.7 % |
+| blake2b of the register file, x7 | 7 968 | 0.2 % |
+| blake2b of the blob | 1 132 | 0.0 % |
+| scratchpad fill | 1 972 | 0.0 % |
+
+The fill line is *empty on purpose*: in the pipelined API the fill of the next
+hash and the final AES pass of the current one are the same loop over the
+scratchpad (`hashAndFillAes1Rx4`). The one-shot API pays for both, which is why
+the same binary through `randomx_calculate_hash` runs the same work at
+**374–405 H/s against 392–433 H/s** pipelined, +5–7 % — and why the miner keeps
+using the pipelined calls.
+
+The VM number is the whole story, and it is arithmetic: a hash is
+`ProgramCount × ProgramIterations` = 8 × 2048 = **16384 random 64-byte reads**
+from the 2080 MiB dataset, each one dependent on the registers the previous read
+returned. Nothing else in the loop is worth 3 %.
+
+The same script measures the other half — what one random read costs here:
+
+```console
+$ ./zmrig/tests/profile.sh 200
+memory: 2048 MiB, 33554432 dependent random reads
+  218.8 ns per read  (a hash makes 16384 of them)
+  ceiling for one thread if nothing overlaps: 279 H/s
+```
+
+At 395–433 H/s the implementation is *above* that naive ceiling, because the VM
+issues a prefetch of the next dataset line one iteration ahead; what is left is
+the chain itself. The measured 2.5 ms per hash over 16384 reads is ~152 ns each,
+i.e. the lookahead hides roughly a third of a 219 ns miss. Bare metal is 70–90 ns
+per miss, which is why the same binary does 800–1 100 H/s in the older rounds on
+this page.
+
+What that rules out, with numbers rather than opinion:
+
+* **Compiler flags.** An interleaved A/B (five rounds each, same minute, same
+  order — host drift on a shared vCPU is ±6 %, larger than any flag effect):
+  medians `-O3 -march=native` **401.7**, `-Ofast` **392.0**,
+  `-funroll-loops` **394.6**, `-O2` **397.2 H/s**. No flag change is worth
+  making, and none was.
+* **The Zig mining loop.** `--bench -t 1` measures **398.1 H/s** through the
+  miner, against **395.7 H/s** through the bare C API with no Zig code in the
+  loop at all: the nonce handling, target check and atomics cost less than the
+  resolution of the measurement.
+* **Rewriting the hash.** It would have to produce the same 16384 dependent
+  random reads in the same order, at which point it is the same program. RandomX
+  was designed for exactly this: the work is the memory latency, not the code.
+
 The real gains are environmental (sections 2–4) and structural (section 6: no
 donation switch).
 
@@ -110,7 +169,7 @@ donation switch).
 | Page size | Typical RandomX gain vs 4 KiB |
 |---|---|
 | 2 MiB explicit (`huge-pages: true`) | +5 % … +20 % |
-| 1 GiB explicit (`1gb-pages: auto`) | +1 % … +3 % on top of 2 MiB |
+| 1 GiB explicit (`hugepages 1g N`, used automatically when reserved) | +1 % … +3 % on top of 2 MiB |
 | Transparent huge pages (fallback) | +2 % … +8 %, less predictable |
 
 `tune-linux.sh` reserves exactly what the algorithm being mined needs, and that
@@ -141,6 +200,79 @@ Measured on the container used for this release (2 vCPU Xeon 2.6 GHz, 3.9 GiB,
 That is the whole story of this engine on a small box: page size and thread
 count decide the hashrate, everything else is noise.
 
+### 1 GiB pages: reserved at boot or not at all
+
+A 2080 MB dataset is 1 040 TLB entries at 2 MiB and two at 1 GiB, so the mapper
+asks for gigantic pages **first**, then the 2 MiB pool, then anonymous memory with
+`MADV_HUGEPAGE` — three attempts, no configuration, and the page size that won is
+printed (`huge pages 2336 MB (explicit, 1 GiB pages)`).
+
+It asks; the kernel decides. A gigantic pool is contiguous physical memory and
+can only be carved out early in boot, so it cannot be a sysctl — on this
+validation host, with 3.9 GiB free and nothing else running, writing
+`/sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages` returns success and
+leaves the pool at 0. That is the normal answer from a virtualised host and it is
+why the fallback is silent rather than a warning: **the rig is not misconfigured
+when there is no 1 GiB pool, it is on 2 MiB pages, which is where the +21 % lives
+anyway.**
+
+Where the pool does exist, it is a kernel parameter:
+
+```bash
+sudo zmrig-os hugepages 1g 3     # Monero dataset: 2080 MB, so 3 pages
+sudo reboot                      # the pool is made from unfragmented memory
+sudo zmrig-os hugepages          # what is reserved, and what this run needs
+sudo zmrig-os hugepages off      # stop reserving it (next boot)
+```
+
+How many pages is a question about the machine, not about Monero: three is right
+for a Monero dataset and wrong on a box that cannot spare 3 GB, because the
+reservation never comes back while it boots. `doctor` answers with
+`plan_gigantic_pages`, which asks for a page only when 2 GiB would still be left
+over for the kernel, the page cache and the shell; on a 4 GB rig it says the
+machine cannot afford one instead of printing a command that would leave 1 GB
+for everything else.
+
+`zmrig-os hugepages` writes `default_hugepagesz=1G hugepagesz=1G hugepages=3`
+into the same GRUB environment block `isolate` uses, composing with it rather
+than replacing it. Reserving a gigantic pool **stops the 2 MiB reservation**:
+three 1 GiB pages have already taken 3 GB of contiguous memory, so the initramfs
+skips `/proc/sys/vm/nr_hugepages` for that boot and `zmrig-os tune` passes
+`--hugepages off`. Both say so in the log — the two pools are alternatives, and
+the miner maps whichever one exists. `zmrig --check` prints the pool and what this run would take
+from it, and `doctor` reports it as information, never as a failure.
+
+The gain on top of 2 MiB is small — published RandomX figures are 1–3 %, and it
+has **not been measured in this environment**: on this sandbox
+`echo 3 > /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages` returns
+success and the pool stays at 0, so the code path that uses a gigantic page has
+never executed here. What has been verified is the fallback and the step below
+it. 2026-11-07, same host, `--bench=3000`, alternating between the two
+configurations so that the box's own drift cannot be mistaken for a gain:
+
+| Pages | Startup line | H/s |
+|---|---|---:|
+| none, `--no-huge-pages` | `huge pages off` | 900.1 / 897.5 |
+| 1200 × 2 MiB reserved | `huge pages 2336 MB (explicit, 2 MiB pages)` | **1090 / 1094** |
+| | | **+21.5 %** |
+| 1 GiB pool | `… (explicit, 1 GiB pages)` | not measurable here |
+
+An earlier pair on the same machine, measured back to back without alternating,
+read 678.1 against 913.2 H/s and would have claimed +34.7 %. That was the box,
+not the pages: this sandbox's throughput moves by up to 20 % between hours, so a
+non-interleaved comparison is worth nothing. The ratio above reproduces to 0.4 %
+because the two configurations take turns.
+
+The MSR preset is the same story with a different cause. As root on this host
+`--msr` reports `intel preset rejected by the kernel (Input/output error)`, which
+is what a virtual machine without MSR passthrough does, so the 5–15 % that
+`doc/CPU.md` quotes for bare metal is **not measurable here** and no number is
+claimed for it.
+
+The gigantic attempt runs first on every one of those rows and falls through to
+the 2 MiB pool, which is what the `explicit, 2 MiB pages` label proves: the label
+is the page size that *won*, not the one that was asked for.
+
 ### The 2026-11 round: what "THP fallback" actually costs
 
 The row above calls the unprivileged case a "THP fallback" as if it were a
@@ -155,8 +287,29 @@ session):
 | none reserved | THP collapsed 99 % of the mapping | 785.9 / 786.1 |
 | none reserved, no `MADV_HUGEPAGE` | 4 KiB | 614.8 / 626.3 |
 
-4 KiB → 2 MiB is the step that matters (≈ +28 %); the reserved pool adds 4–6 %
-on top. So `zmrig` now:
+Those three rows were measured back to back on 2026-11-05, and their ratio
+(+28 %) turned out to be the host drifting rather than the pages: it moves by up
+to 20 % between hours. Re-measured 2026-11-07 by alternating THP on and off in
+one session, no reservation either way:
+
+| Pages | Backing | H/s |
+|---|---|---:|
+| THP `always` | 99 % of the mapping collapsed | 1088 / 1095 |
+| THP `never` | 4 KiB | 892.8 / 900.5 |
+
+A third session, in the 2 vCPU CI sandbox and while auditing the container path,
+reproduced the same shape with the harness `--bench=20000`:
+
+| Pages | Backing | H/s |
+|---|---|---:|
+| 1168 reserved | `MAP_HUGETLB`, unprivileged | 936.4 |
+| none reserved | THP `always` | 920.5 |
+| none reserved | THP `never`, 4 KiB | 771.0 |
+
+**4 KiB → 2 MiB is worth +21 %**, and the reserved pool adds a few per cent on
+top of that (1090 / 1094 against 1088 / 1095 here — inside the noise). The rule
+of thumb that survives both sessions is "about a fifth", which is also what the
+miner's own warning says now. So `zmrig` now:
 
 * prints the kernel's own figure after the dataset is built —
   `huge pages: 2332 MB via THP (99 % of the 2336 MB mapping, measured by the
@@ -188,6 +341,39 @@ unit test for the rule.
 |---|---:|
 | 1 | 42.9 s |
 | 2 | 21.1 s |
+
+### A switch costs 16.5 s, or nothing if the dataset stays mapped
+
+A pool that moves a rig between RandomX forks makes it rebuild the dataset every
+time it comes back: 256 MB cache, then 2080 MB with that fork's program
+configuration. Measured on two vCPUs, cold `rx/0`: **16 491 ms** of zero
+hashrate (20 337 ms on a slower day). The mapping is read-only and the forks only
+change the program, so keeping it is safe — the miner keeps the previous dataset
+mapped by default:
+
+| Event | `--dataset-cache` (default) | `--no-dataset-cache` |
+|---|---:|---:|
+| cold `rx/0` dataset | 16 491 ms | 16 491 ms |
+| switch to `panthera` (rx/0 stays mapped) | 374 ms | 374 ms |
+| switch back to `rx/0` | **0 ms** | 16 491 ms |
+| hashes in 125–135 s across a round trip | 337 338 | 99 973 |
+
+What it costs: the retired mapping stays resident (2336 MB for Monero). The miner
+refuses to hold it when the live dataset plus 64 MB of slack would not fit under
+the cgroup limit, keeps at most two datasets, and logs the decision either way
+(`keeping the rx/0 dataset mapped (2336 MB) so a switch back costs nothing`, and
+on the way back `switched to rx/0 without re-initialising: its dataset was still
+mapped (9 s old, built in 18259 ms, …)` — that engine's own build time, not the
+last build in the log, which is usually the other algorithm's).
+`--dataset-cache=2048` caps it, `--no-dataset-cache` (or `DATASET_CACHE=off` in
+the container) turns it off.
+
+The hashes were verified rather than assumed: shares submitted after a full
+`rx/0 → panthera → rx/0` round trip recompute bit-for-bit through
+`--verify-share`, and `zmrig/tests/switch.sh` asserts that in CI for both
+settings. The bug it was written to catch was real — RandomX's active
+configuration is process-wide, so a retained engine must re-assert it
+(`xmo_engine_activate`) before it hashes.
 
 ### Automatic reservation
 
@@ -240,9 +426,15 @@ grep Huge /proc/meminfo
 # Hugepagesize:     2048 kB
 ```
 
-The miner must run with `CAP_IPC_LOCK` (root, or
-`setcap cap_ipc_lock,cap_sys_rawio,cap_sys_nice+ep build/xmrig`). Otherwise the
-allocation fails and it falls back to transparent huge pages.
+Root is needed to *reserve* the pages (`/proc/sys/vm/nr_hugepages`), not to map
+them. An anonymous `MAP_HUGETLB` mapping needs no capability, and this section
+used to claim otherwise: measured in this repository's sandbox, a process with
+`CapEff: 0`, no `/dev/hugepages` mount and 1168 reserved pages mapped
+**2336 MB of 2336 MB** from the pool (`huge pages: 2336 MB (explicit, 2 MiB
+pages)`), and benchmarked 936.4 H/s. `CAP_IPC_LOCK` is what `mlock()` needs and
+`cap_sys_rawio` is what `/dev/cpu/*/msr` needs; neither is on the huge-page path.
+What does block the mapping is an empty pool, or a cgroup hugetlb limit of 0 -
+see [DOCKER.md](DOCKER.md) for the container case.
 
 To make the reservation persistent, call the script from a systemd unit, e.g.
 `/etc/systemd/system/xmrig-hugepages.service` (`Type=oneshot`,
@@ -357,18 +549,20 @@ shares, and a miner that does not get OOM-killed. Everything below that is noise
 
 ---
 
-## 2c. Two profiles: free electricity, or every watt counted
+## 2c. Two profiles: maximum hashrate, or every watt counted
 
-`--profile free` and `--profile watt` are not marketing names, they are two
-different answers to "what does the next hashrate cost".
+`free` is the default, independent of electricity price and battery state.
+`--profile free` and the opt-in `--profile watt` are not marketing names: they
+are two different answers to "what does the next hashrate cost".
 
-**`free`** — the machine is on anyway: a coffee shop laptop, a lab PC, an office
-desktop, a school computer. Power is not a variable, so nothing is traded away:
+**`free`** — maximum gross hashrate, on mains or battery. Nothing is traded
+away:
 every logical CPU, `--mode fast`, huge pages, `--priority 5`, `performance`
 governor.
 
-**`watt`** — the electricity bill moves with the hashrate: a metered VPS, a
-laptop on battery, a country with expensive power. Three decisions change:
+**`watt`** — explicitly trade gross hashrate for energy efficiency, for example
+on a metered VPS or where electricity is expensive. Battery state never selects
+this profile automatically. The thread and governor choices change:
 
 1. **One thread per physical core.** SMT siblings add roughly 5–15 % hashrate
    for 30–40 % more package power: they run the same memory-bound workload on a
@@ -383,9 +577,9 @@ laptop on battery, a country with expensive power. Three decisions change:
    scratchpad read does not need the top bin. The distro default
    (`schedutil`/`powersave`) already tracks utilisation, so `watt` keeps it and
    only repairs a machine stuck on `performance`.
-3. **Pause on battery.** A laptop that drops to battery stops mining rather than
-   draining it — a watt-profile machine that empties its own battery is not
-   saving anything.
+3. **Battery pause is separate and opt-in.** The profile does not infer consent
+   from a battery reading. If desired, configure `pause-on-battery` separately;
+   the installer leaves it off.
 
 Huge pages stay on in both profiles: they raise hashrate **and** lower energy per
 hash, because the win comes from fewer TLB misses and shorter stalls, not from
@@ -409,13 +603,31 @@ your electricity price, instead of with this table.
 
 ## 3. MSR mod ("HASHRATE WILL BE LOW")
 
-`randomx.rdmsr` / `randomx.wrmsr` are already `true`. What is missing on most
-systems is permission to use them:
+Since 6.48 the preset is no longer opt-in: the default is `auto`. Before doing
+anything the miner probes the machine — does this CPU have a preset, does
+`/dev/cpu/0/msr` answer, and can it be written — and then either applies it or
+prints one line saying why not. `--check` prints the same line, so the answer is
+available before a mining session starts:
+
+```
+  msr     intel preset; reading /dev/cpu/0/msr needs root (auto: the preset is skipped here; --msr tries anyway)
+```
+
+| Setting | What happens |
+| --- | --- |
+| *(nothing)* | `auto`: applied when the machine can take it, one log line either way |
+| `--msr` | try anyway; a VM without passthrough gets a warning and keeps mining |
+| `--no-msr` | never open `/dev/cpu/*` — for containers and for a host that must stay untouched |
+| `"msr": false` in the config | the same as `--no-msr`; a config is an instruction, not a default |
+| `MSR="off"` in `os.conf` (appliance) | the same, and `safe` mode does it regardless of the setting |
+
+What is still missing on most systems is permission, which an appliance has and a
+desktop usually does not:
 
 ```bash
 sudo modprobe msr
 ls -l /dev/cpu/0/msr           # must exist
-sudo ./build/xmrig …           # start as root, or grant CAP_SYS_RAWIO
+sudo ./zmrig …                 # or grant CAP_SYS_RAWIO
 ```
 
 Intel preset: `MSR 0x1a4 = 0xf` (disable L2/L1 prefetchers).
@@ -484,6 +696,39 @@ CPU-only builds (`--all-backends` not passed) disable OpenCL/CUDA/NVML/ADL.
 This removes runtime dependencies and shaves startup time; CPU hashrate is
 identical.
 
+### The Zig binary (`zmrig/build.sh`)
+
+The hash engine is compiled from the same C sources, so the flags above apply;
+the supervisor is Zig at `-O ReleaseFast -mcpu=native`. `build.sh` has an
+`EXTRA_FLAGS` hook for experiments, and one was run:
+
+```bash
+EXTRA_FLAGS="-flto -ffunction-sections -fdata-sections" ./zmrig/build.sh
+```
+
+It does not link. `-flto` puts LLVM bitcode in the archive, and the final
+`zig build-exe` link in this script is not an LTO-aware link step, so the C
+symbols are never materialised (`error: ld.lld: undefined symbol: xmo_msr_probe`,
+referenced from `main.printConfigSummary`). Making it work means building the
+archive as bitcode with `llvm-ar` and teaching the link step about `-flto`; that
+is a build-system change, not a flag, and it buys little: the RandomX hot loop is
+JIT-compiled at runtime, so a C-level optimisation cannot reach it. Startup,
+option parsing and the stratum client are all it would touch.
+
+`-fstrip` and `--gc-sections` change the size of the binary, not the hashrate.
+
+There is one more reason not to publish a number from this machine. The same
+binary, benchmarked three times in the same 2 vCPU sandbox with nothing else
+running, reported **88.86 H/s**, **64.02 H/s** and **113.5 H/s** — a factor of
+1.8 between the slowest and the fastest run. Whatever the hypervisor was doing
+in between, it was larger than every optimisation in this document put together.
+Any comparison made on a machine like this is a coin toss dressed as a
+measurement.
+
+Measure on the target rig: quiet machine, three runs, and write the spread down
+before believing a 1 % win. The numbers in the rest of this file were taken that
+way, on hardware, with the spread stated.
+
 **Static binaries**: `--static` produces a fully static build for old
 distributions. It disables `dlopen` of GPU drivers, which is fine for CPU-only.
 
@@ -538,7 +783,7 @@ good compromise on a single rig, `0` lets the pool switch as fast as it wants.
   "randomx": {
     "mode": "auto",
     "rdmsr": true,
-    "wrmsr": true,
+    "msr": "auto",
     "numa": true,
     "scratchpad_prefetch_mode": 1
   },
@@ -566,6 +811,68 @@ Thread tuning beyond auto-config:
 one thread per **physical** core (affinity list from
 `lscpu -e=cpu,core,cache`), no SMT siblings.
 
+### A CPU quota is a ceiling, and the default respects it
+
+`docker --cpus=2`, `systemd CPUQuota=200%` and a Kubernetes `limits.cpu` are the
+same mechanism: a CFS quota on the *group*, not an affinity mask. The process
+still sees every CPU, so a thread count derived from the CPU count oversubscribes
+and the kernel then stops the whole group when the quota is spent — a thread with
+a scratchpad in L3 waits out the rest of the period instead of finishing a share.
+
+`zmrig` reads the quota (`cpu.max` on cgroup v2, `cpu.cfs_quota_us`/`period` on
+v1, at the path `/proc/self/cgroup` names) and uses it as a ceiling on the
+*default* thread count:
+
+```console
+$ ZMRIG_CGROUP_ROOT=/tmp/cgroup-with-1-cpu zmrig --check
+cpu quota: 1 cpu(s) available of 2 visible, using 1 thread(s)
+profile free: 1 thread(s) of 2 logical cpu (2 physical cores)
+```
+
+An explicit `-t` is never lowered: a person who measured their own machine wins
+over a heuristic, and the quota can be raised at any time. `--autotune` searches
+inside the quota for the same reason — measuring 16 threads under a 2-CPU quota
+reports the throttled number as if it were the machine's best. The same cap is in
+the container's entrypoint, so `docker run --cpus=2 … args` shows the thread count
+the miner is actually going to use.
+
+This is a correctness fix with a performance consequence, and the size of that
+consequence is **unverified here**: the CI sandbox has no quota set on its own
+cgroup and cannot create one, so no before/after number is quoted.
+
+### Memory is a cgroup too, and `/proc/meminfo` is the host's
+
+The same trap one level up: `docker run --memory=1g` on a 32 GB host reports
+32 GB of RAM, so the miner sized itself for a 2336 MB mapping, started building
+it, and was OOM-killed. `zmrig` now reads `memory.max` (v2) or
+`memory.limit_in_bytes` (v1) and uses **the smaller of that and the machine** for
+every memory decision: the fast/light verdict, the huge-page plan, and the
+`--bench` pre-flight.
+
+`--check` states it in two lines, because the first one alone is ambiguous:
+
+```console
+$ docker run --rm --memory=1g … zmrig --check
+  budget  924 MB usable of 3939 MB total: the cgroup limit is 1024 MB, 100 MB of it already in use
+  fit     light mode: 2847 MB needed, 924 MB usable -> no dataset, about 10x slower
+  memory  rx/0 maps 256 MB, 128 pages of 2 MiB (or 1 of 1 GiB): no pages reserved …
+```
+
+The `memory` line is the *decision*, not the request: with the limit above it
+prints 256 MB (the cache, which is all light mode maps), and on an open machine
+it prints 2336 MB. It used to print the host figure in both cases, which is a
+plan for a mapping the miner had already declined.
+
+The benchmark path was worse, because it is silent: `--bench` refused to start
+only when `/proc/meminfo` was short, and inside a 1 GB container that file is
+the host's. It now asks both, and names the cgroup when that is the reason:
+
+```console
+$ docker run --rm --memory=1g … zmrig --bench=1000
+zmrig: this machine can give the dataset 924 MB of the 2404 MB it needs: its cgroup allows 1024 MB (100 MB of it already in use)
+       raise the limit, free some memory, or use --mode light
+```
+
 ---
 
 ## 8. How to measure honestly
@@ -585,6 +892,66 @@ Rules:
    proxy, rejected shares and switch overheads are not.
 
 ---
+
+## 8c. Was it hashing, or only fast?
+
+A rate is not an income. The miner samples once a second whether the hash counter
+moved, and when it did not, why: the dataset being built (measured by the engine),
+the thermal governor holding a thread back, or nothing at all - no job, a lost
+pool, a reconnect in flight. The session ends with the sum:
+
+```
+info hashing 29 s of 44 s (65.9 %): 16 s building a dataset
+```
+
+and a minute that was mostly the last category is worth a warning rather than a
+percentage nobody reads.
+
+Measured on two vCPUs, same host, against two hostile pools:
+
+| Pool | Behaviour | Result |
+|---|---|---|
+| drops the socket every 5 s | 6–7 reconnects in 45 s | **0 s** lost (the workers hash the last job while the main thread reconnects) |
+| accepts, never replies | no job at all | `hashing 0 s of 24 s`, reason named |
+
+`zmrig/tests/duty.sh` asserts both on every push, in about 70 s.
+
+The same instrument was pointed at a claim the fee documentation makes and had
+never measured - that a fee hand-over costs the user nothing. An 18-minute run
+at `--donate-level=10`, one full session: **1 084 s of 1 099 s hashing (98.6 %)**,
+the 16 s being the startup dataset; the fee session itself (60 s owed, 59 s on
+the developer wallet, then back) lost **0 s**, because the two reconnects it
+needs keep the workers on the job they already have. The same
+instrument re-measured two claims that were previously assumptions:
+`--no-optimized-init` changes nothing measurable (build 19.9–20.9 s portable
+against 20.1–20.9 s optimised), and mining through a pool is not slower than
+`--bench` (928–961 H/s against 934–970 H/s, which is this machine's run-to-run
+spread).
+
+## 8b. Memory does not drift
+
+A rig runs for weeks, so a leak of a few megabytes a minute is a rig that dies
+three days after it was installed, and nothing in the log says why. Measured on
+the test host, 2026-11-07: eight minutes at 1.2 kH/s against a fake pool that
+changes the seed and the algorithm underneath it, `-t 2`, 1 422 shares accepted,
+0 rejected.
+
+| t (s) | RSS | VmData | VmPeak |
+|---:|---:|---:|---:|
+| 30 | 2 407 764 KB | 2 422 496 KB | 2 622 108 KB |
+| 240 | 2 417 300 KB | 2 430 176 KB | 2 622 108 KB |
+| 480 | 2 428 824 KB | 2 437 856 KB | 2 622 108 KB |
+
+RSS moves by about 20 MB in total, in steps, and it moves both ways — it is the
+dataset being re-touched after a seed change, not growth. `VmData` and `VmPeak`
+are the honest test for the allocator and they do not move. A second run sampling
+every ten seconds for six minutes showed the same: heap flat, RSS oscillating
+around the dataset, no trend.
+
+Eight minutes is not a week. What it does rule out is the failure mode that
+matters — an allocation per share, per job or per reconnect that is never
+returned, which is visible within a few hundred shares and is what the RSS steps
+would look like if they only ever went up.
 
 ## 9. Troubleshooting
 

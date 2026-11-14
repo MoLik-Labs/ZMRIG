@@ -7,6 +7,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { operatorAddress } = require('./operator');
+const { check } = require('./address');
+
+// Long enough to hold a standard address and nothing else: the shape a typo
+// preserves, which is exactly why the checksum below has to run.
+const ADDRESS_SHAPE = /^[48][1-9A-HJ-NP-Za-km-z]{94}$/;
 
 const DEFAULTS = {
   // --- identity ---------------------------------------------------------
@@ -56,6 +61,22 @@ const DEFAULTS = {
   verifier_binary: 'zmrig',
   verifier_concurrency: 2,
   verifier_timeout: 10000,
+  // `light` keeps a 256 MiB cache and rebuilds the dataset for every share:
+  // 22 ms a share, warm, on the 2 vCPU test host. `fast` builds the 2 GiB
+  // dataset once and reads it: 2.9 ms a share, measured, same hashes. It costs
+  // 2.3 GiB of RAM *per verifier process* and 21 s at startup, so it is a
+  // deliberate choice and not a default - see pool/README.md.
+  verifier_mode: 'light',
+  // Hashing threads *inside* each verifier process (`-t`). One dataset is
+  // shared by all of them, so `threads: 2, concurrency: 1` does the work of two
+  // processes for half the RAM: measured on the 2 vCPU test host, warm, one
+  // seed - light 46 shares/s at 1 thread against 87 at 2, fast 349 against
+  // 626. A share has to be in flight for a thread to have work, so the pool
+  // keeps `verifier_pipeline` shares outstanding per process.
+  verifier_threads: 1,
+  // 0 means "twice the thread count", which is where the measurements stop
+  // improving.
+  verifier_pipeline: 0,
 
   // --- accounting -------------------------------------------------------
   // PPLNS: the last N seconds of shares split the block reward.
@@ -146,6 +167,11 @@ function loadConfig(file, overrides = {}) {
   config.reserve = env('RESERVE', config.reserve);
   config.verifier_binary = env('VERIFIER_BINARY', config.verifier_binary);
   config.verifier_concurrency = envNumber('VERIFIER_CONCURRENCY', config.verifier_concurrency);
+  // Trimmed as well as lowercased: `VERIFIER_MODE="fast "` in a compose file
+  // is a fast pool, not a silent light one.
+  config.verifier_mode = String(env('VERIFIER_MODE', config.verifier_mode)).trim().toLowerCase();
+  config.verifier_threads = envNumber('VERIFIER_THREADS', config.verifier_threads);
+  config.verifier_pipeline = envNumber('VERIFIER_PIPELINE', config.verifier_pipeline);
   config.template_interval = envNumber('TEMPLATE_INTERVAL', config.template_interval);
   config.strict_address = envBool('STRICT_ADDRESS', config.strict_address);
 
@@ -166,8 +192,21 @@ function validateConfig(config) {
     problems.push(`fee_percent must be between 0 and 10, got ${config.fee_percent}`);
   }
 
-  if (config.strict_address && config.payout_mode !== 'ledger') {
-    // Only enforced when real money can move.
+  // The fee destination is the one address in this process that never logs in,
+  // so the pool's own login check never sees it. A single wrong character in it
+  // is still a 95-character base58 string: it looks like an address, it is
+  // published on the status page, and every fee payment would go to a key
+  // nobody holds. Ledger mode still tolerates a placeholder - nothing leaves
+  // the box - but a string shaped like an address has to decode.
+  const feeAddress = String(config.operator_address ?? '').trim();
+  if (ADDRESS_SHAPE.test(feeAddress)) {
+    const verdict = check(feeAddress);
+    if (!verdict.ok) {
+      problems.push(`operator_address cannot be paid: ${verdict.reason} (${feeAddress})`);
+    }
+  } else if (config.strict_address && config.payout_mode !== 'ledger') {
+    // Only enforced when real money can move, and only for values that are not
+    // address-shaped at all (a placeholder like "not-an-address").
     const { looksLikeAddress } = require('./util');
     if (!looksLikeAddress(config.operator_address)) {
       problems.push(`operator_address does not look like a Monero address: ${config.operator_address}`);

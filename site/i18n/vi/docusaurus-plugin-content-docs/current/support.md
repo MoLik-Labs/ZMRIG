@@ -1,12 +1,12 @@
 ---
 title: Hỗ trợ và donate
 description: Nơi gửi Monero, cách kiểm tra địa chỉ trước khi gửi, một khoản donate không mua được gì, và những gì giúp dự án nhiều hơn.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
+image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 ---
 
 # Hỗ trợ và donate
 
-Miner Zig đã lấy 1 % thời gian đào Monero làm phí
+Miner Zig đã lấy 3 % thời gian đào Monero làm phí
 ([chi tiết](/docs/reference/fee)); engine C++ thì không lấy gì. Trang này tồn
 tại cho những người vẫn muốn gửi thêm. Không phần mềm nào đọc địa chỉ bên dưới.
 
@@ -57,6 +57,19 @@ print(len(raw), body[0], "OK" if digest == checksum else "BAD")
 
 Checksum sai nghĩa là gõ nhầm, chép thiếu, hoặc đó chưa từng là địa chỉ Monero.
 
+Cách ngắn nhất để kiểm là chính miner, sau khi đã cài:
+
+```console
+$ zmrig --check-wallet 46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ
+valid   46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ
+  check checksum verified (Keccak-256)
+  kind  standard
+  net   mainnet
+```
+
+Bộ dựng lệnh trên trang tài liệu kiểm mọi địa chỉ Monero theo cùng cách trước khi
+đưa bạn một câu lệnh, và `zmrig-os setup` cũng vậy.
+
 ## Một khoản donate không mua gì
 
 - **Không ảnh hưởng gì tới miner.** Không gì đọc trang này lúc build hay lúc
@@ -70,7 +83,7 @@ Checksum sai nghĩa là gõ nhầm, chép thiếu, hoặc đó chưa từng là 
 
 ## Những gì giúp hơn một khoản chuyển tiền
 
-1. **Đào về pool.** Phí 1 % là thứ nuôi công việc, và nó chỉ tồn tại khi có người
+1. **Đào về pool.** Phí 3 % là thứ nuôi công việc, và nó chỉ tồn tại khi có người
    đào.
 2. **Gửi một phép đo.** `zmrig/tests/ab.sh` so hai cài đặt trên cùng một máy; một
    bảng trước/sau kết thúc tranh luận mà ý kiến không làm được.

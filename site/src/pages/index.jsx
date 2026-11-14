@@ -5,15 +5,15 @@ import Link from "@docusaurus/Link";
 import useDocusaurusContext from "@docusaurus/useDocusaurusContext";
 import CopyButton from "../components/CopyButton";
 
-const RAW = "https://raw.githubusercontent.com/NggKhaiz/ZMRIG/BETA/oneclick.sh";
+const RAW = "https://raw.githubusercontent.com/MoLik-Labs/ZMRIG/BETA/oneclick.sh";
 
 const COMMAND = `curl -fsSL ${RAW} \\
   | sudo bash -s -- --wallet 4YourMoneroAddress`;
 
 const COPY = {
   en: {
-    eyebrow: "RandomX miner · 1 % developer fee, switchable off",
-    lede: "One command installs a miner that needs a wallet address and nothing else: it detects the CPU, reserves huge pages, measures the real thread count, writes a systemd unit, and prints the 1 % developer fee it takes — with the flag that removes it. The documentation below is the whole manual — installation, pools, networks that only allow 443, measured benchmarks and a calculator that costs nothing to run.",
+    eyebrow: "RandomX miner · 3 % developer fee, switchable off",
+    lede: "One command installs a miner that needs a wallet address and nothing else: it detects the CPU, reserves huge pages, measures the real thread count, writes a systemd unit, and prints the 3 % developer fee it takes — with the flag that removes it. The documentation below is the whole manual — installation, pools, networks that only allow 443, measured benchmarks and a calculator that costs nothing to run.",
     cta: "Read the documentation",
     cta2: "Build a command",
     copy: "Copy",
@@ -52,8 +52,8 @@ const COPY = {
     moneyCta: "Open the calculator",
   },
   vi: {
-    eyebrow: "Miner RandomX · phí 1 %, tắt được",
-    lede: "Một lệnh cài xong miner chỉ cần địa chỉ ví: nó tự nhận CPU, tự đặt huge pages, tự đo số thread thật, viết systemd unit, và in ra khoản phí 1 % nó lấy kèm cờ để bỏ. Phần tài liệu bên dưới là toàn bộ sách hướng dẫn — cài đặt, pool, mạng chỉ mở 443, benchmark đo được, và bảng tính chạy miễn phí ngay trong trình duyệt.",
+    eyebrow: "Miner RandomX · phí 3 %, tắt được",
+    lede: "Một lệnh cài xong miner chỉ cần địa chỉ ví: nó tự nhận CPU, tự đặt huge pages, tự đo số thread thật, viết systemd unit, và in ra khoản phí 3 % nó lấy kèm cờ để bỏ. Phần tài liệu bên dưới là toàn bộ sách hướng dẫn — cài đặt, pool, mạng chỉ mở 443, benchmark đo được, và bảng tính chạy miễn phí ngay trong trình duyệt.",
     cta: "Đọc tài liệu",
     cta2: "Tự ghép lệnh",
     copy: "Copy",
@@ -62,7 +62,7 @@ const COPY = {
     parts: [
       [
         "Miner",
-        "XMRig 6.26.0 đã bỏ toàn bộ code donate, cộng thêm miner Zig hoàn chỉnh trên cùng engine RandomX. Phí 1 % thời gian Monero ở engine Zig, in ra rõ và tắt được; engine C++ không có mã phí.",
+        "XMRig 6.26.0 đã bỏ toàn bộ code donate, cộng thêm miner Zig hoàn chỉnh trên cùng engine RandomX. Phí 3 % thời gian Monero ở engine Zig, in ra rõ và tắt được; engine C++ không có mã phí.",
         "Đọc về hai engine",
         "/docs/install/engines",
       ],
@@ -97,7 +97,7 @@ export default function Home() {
   const { i18n } = useDocusaurusContext();
   const locale = i18n.currentLocale === "vi" ? "vi" : "en";
   const c = COPY[locale];
-  const socialImage = `https://nggkhaiz.github.io/ZMRIG/img/og-${locale}.png`;
+  const socialImage = `https://molik-labs.github.io/ZMRIG/img/og-${locale}.png`;
 
   return (
     <Layout title="ZMRIG" description={c.lede}>

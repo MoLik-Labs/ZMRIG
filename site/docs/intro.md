@@ -1,8 +1,8 @@
 ---
 title: What ZMRIG is
-description: A RandomX miner with a 1 % developer fee you can see and switch off, the installer that sets it up, a farm proxy and a self-hosted pool. What each part does, what it costs, and where the code came from.
+description: A RandomX miner with a 3 % developer fee you can see and switch off, the installer that sets it up, a farm proxy and a self-hosted pool. What each part does, what it costs, and where the code came from.
 slug: /intro
-image: https://nggkhaiz.github.io/ZMRIG/img/og-en.png
+image: https://molik-labs.github.io/ZMRIG/img/og-en.png
 ---
 
 # What ZMRIG is
@@ -11,12 +11,12 @@ ZMRIG is a complete Monero mining setup, not a collection of scripts:
 
 | Part | What it is | What it costs |
 | --- | --- | --- |
-| **Miner** | XMRig 6.26.0 with every line of donation code removed, plus a complete Zig miner on the same RandomX engine | **1 %** of Monero time on the Zig engine, printed and switchable off; the C++ engine has no fee code |
+| **Miner** | XMRig 6.26.0 with every line of donation code removed, plus a complete Zig miner on the same RandomX engine | **3 %** of Monero time on the Zig engine, printed and switchable off; the C++ engine has no fee code |
 | **Installer** | `oneclick.sh`: one flag, host tuning, systemd unit, self-check, purge | free |
 | **Proxy** | one pool connection for a farm: extranonce per rig, per-rig difficulty, tunnels | free |
 | **Pool** | self-hosted Monero pool: stratum over TCP and WebSocket, PPLNS, every share verified | 1 % of each block, nothing else |
 
-The miner works with any pool. The 1 % on the pool in this repository is what
+The miner works with any pool. The 3 % time fee, and the 1 % the pool takes, are what
 keeps the project running; the miner itself takes nothing either way, and there
 is no account, token or telemetry anywhere in it.
 

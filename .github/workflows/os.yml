@@ -1,0 +1,548 @@
+# ZMRIG OS image build: assemble the live image, boot it in QEMU, publish it.
+#
+# Runs on every push to BETA or master that touches the appliance, the miner or
+# the tuner, on tags, and on a pull request that touches the same paths -- a
+# workflow that only ever runs after a merge is a workflow nobody has tested.
+#
+# Publishing is deliberate: a push builds and uploads an artifact, a tag or a
+# manual run with publish=true creates the release, and every past version stays
+# downloadable because assets are replaced in place (--clobber), not the release.
+#
+name: Appliance image
+
+# Builds the bootable ZMRIG OS image.
+#
+# Every push to BETA or master rebuilds it with the code of that commit, so the
+# image a rig downloads is never older than the release notes. Versioned
+# releases are created on tags and on master pushes (one release per version,
+# assets replaced in place, so every past version stays downloadable); BETA
+# publishes a rolling pre-release.
+#
+# Nothing here needs a GPU, a KVM host or a secret: the ISO is cross-built.
+
+on:
+  push:
+    branches: [BETA, master]
+    tags: ['v*']
+    paths:
+      - 'os/**'
+      - 'zmrig/**'
+      - 'scripts/tune-linux.sh'
+      - '.github/workflows/os.yml'
+  # A weekly rebuild, because the image resolves `latest-stable` Alpine and a
+  # kernel that disappears upstream should break a scheduled build rather than a
+  # user's first boot. It only publishes from master; see the `publish` job.
+  schedule:
+    - cron: '17 4 * * 1'
+  pull_request:
+    paths:
+      - 'os/**'
+      - 'zmrig/**'
+      - 'scripts/tune-linux.sh'
+      - '.github/workflows/os.yml'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Attach the images to a release'
+        type: boolean
+        default: true
+      channel:
+        description: 'Release channel'
+        type: choice
+        options: [beta, stable]
+        default: beta
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: os-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  control:
+    name: zmrig-os control tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Shellcheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends shellcheck
+          # Warnings fail the job, not just errors. The scripts are POSIX sh on
+          # purpose and `.shellcheckrc` silences the one thing that means here
+          # (`local`, which busybox ash has and POSIX does not) so anything left
+          # is a real finding: an unquoted expansion, a dead variable, a `for`
+          # loop over a quoted string that only ever runs once.
+          shellcheck -s sh -S warning \
+            os/overlay/usr/local/bin/zmrig-os \
+            os/overlay/usr/local/lib/zmrig/firstboot.sh \
+            os/init os/plan.sh os/chroot-setup.sh os/make-initramfs.sh os/upstream.sh
+
+      # The same check over every script in the repository, not only the ones
+      # named above: the dialect comes from each shebang, so the bash helpers are
+      # read as bash and the appliance scripts as sh.
+      - name: Shellcheck, every script
+        run: bash tests/lint/shellcheck.sh
+
+      # Nothing shipped still talks to the person who wrote it: no `set -x` in a
+      # boot script, no debug port, no stray TODO in the appliance.
+      - name: No debug leftovers
+        run: bash tests/lint/no-debug.sh
+
+      - name: Self-check (files, syntax, exec bits)
+        run: bash os/build-iso.sh --self-check
+
+      - name: Control tool
+        run: bash os/tests/control.sh
+
+      # The memory and CPU plan, on fake topologies: how many pages an
+      # algorithm needs, and which CPUs "isolate N" actually takes.
+      - name: Memory and CPU plan
+        run: bash os/tests/plan.sh
+
+      # The rig half of the control plane, against the real server from fleet/.
+      # It needs node, which the runner has, and nothing else.
+      - name: Fleet agent (enrol, configure, report)
+        run: bash os/tests/fleet.sh
+
+      # What the image is built from, and whether the weekly rebuild has anything
+      # to do. Fixtures, no network, same script the scheduled job runs.
+      - name: Upstream and the base
+        run: bash tests/upstream/upstream.test.sh
+
+  # Does the weekly rebuild have anything to do? The image resolves Alpine's
+  # `latest-stable`, so a new point release upstream is a new image - but a
+  # Monday that finds nothing is 15 minutes of ISO builds and 300 MB of upload
+  # for an identical file. A push always builds; only the schedule asks.
+  upstream:
+    name: What the image is built from
+    needs: control
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Report the base
+        run: sh os/upstream.sh
+
+      - name: Would a rebuild change anything?
+        id: check
+        run: |
+          if sh os/upstream.sh --check; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=No rebuild::upstream is on the same Alpine as the published image"
+          fi
+
+  iso:
+    name: ISO ${{ matrix.arch }}
+    needs: [control, upstream]
+    # A scheduled run goes ahead only when upstream moved. Everything else - a
+    # push, a tag, a pull request, a manual run - builds unconditionally.
+    if: |
+      always() &&
+      needs.control.result == 'success' &&
+      (github.event_name != 'schedule' || needs.upstream.outputs.changed == 'true')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86-64-v3, x86-64-v2]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Cache the Alpine base system
+        uses: actions/cache@v4
+        with:
+          path: /tmp/zmrig-os-build/cache
+          key: alpine-latest-stable-minirootfs
+
+      - name: Install the ISO toolchain
+        run: sudo ./os/deps.sh
+
+      # Which compiler actually got picked, and from where. The miner is
+      # written for Zig 0.13 and the runner ships a newer one; when this line
+      # said 0.15 the build failed 200 lines later with an error that pointed at
+      # the source instead of the toolchain.
+      - name: Report the toolchain
+        run: |
+          echo "zig:      $(./scripts/find-zig.sh) -> $(./scripts/find-zig.sh | xargs -r -I{} {} version)"
+          echo "mksquashfs: $(mksquashfs -version 2>&1 | head -1)"
+          echo "xorriso:  $(xorriso -version 2>&1 | head -1)"
+          echo "grub:     $(grub-mkrescue --version 2>&1 | head -1)"
+          echo "cpus:     $(nproc)"
+          echo "memory:   $(free -m | awk '/^Mem:/ {print $2 " MiB total, " $7 " MiB available"}')"
+          echo "disk:     $(df -h --output=avail /home/runner | tail -1 | xargs) available"
+
+      - name: Build the image
+        run: |
+          set -o pipefail
+          sudo ./os/build-iso.sh --arch "${{ matrix.arch }}" --out dist 2>&1 | tee build.log
+
+      # A failed step otherwise says "exit code 1" and nothing else; the log
+      # lives in a blob store that is not readable from everywhere. The last
+      # lines of the build become an annotation on the commit, which is where
+      # a maintainer looks first anyway.
+      - name: Explain the failure
+        if: failure()
+        run: |
+          [ -s build.log ] || { echo "no build log was written"; exit 0; }
+          # The tail alone is misleading: warnings trail the one line that
+          # matters, and a compile that spawns four processes buries it. Take
+          # the errors by name first, then the last few lines for context.
+          {
+            grep -E '^==> ' build.log | tail -n 4 || true
+            grep -m 3 -E 'command:' build.log || true
+            grep -m 10 -E 'error: |fatal error|undefined reference|cannot find' build.log || true
+          } | sed -e 's/%/%25/g' -e 's/\r//g' -e 's/::/#/g' -e 's/^/| /' \
+            | awk 'BEGIN{ORS=""} {print $0 "%0A"}' > annotation.txt
+          echo "::error title=ISO build failed::$(cat annotation.txt)"
+          echo "---- errors ----"
+          cat annotation.txt
+
+      - name: Boot it in QEMU
+        # One architecture is enough to prove the image reaches userspace; the
+        # other differs only in the compiler flags of the miner it contains.
+        if: matrix.arch == 'x86-64-v3'
+        run: |
+          sudo ./os/smoke-qemu.sh "$(ls dist/*.iso | head -1)" | tee smoke.log
+        env:
+          BOOT_TIMEOUT: 900
+
+      - name: Show what was built
+        run: |
+          ls -lh dist/
+          cat dist/*.iso.json
+          [ -f dist/size-report.txt ] && cat dist/size-report.txt || true
+
+      # The size report is the only way to answer "why is the image this big"
+      # without downloading it, and the job log is not readable from every place
+      # that asks. One comment per architecture, updated in place.
+      - name: Post the size report
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          [ -f dist/size-report.txt ] || exit 0
+          marker="<!-- size-report:${{ matrix.arch }} -->"
+          { echo "$marker"; echo '```'; cat dist/size-report.txt; echo '```'; } > body.md
+
+          existing=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+              --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -1)
+
+          if [ -n "$existing" ]; then
+              gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$existing" \
+                  -F body=@body.md --jq .id >/dev/null
+          else
+              gh api -X POST "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+                  -F body=@body.md --jq .id >/dev/null
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: iso-${{ matrix.arch }}
+          path: |
+            dist/*.iso
+            dist/*.iso.sha256
+            dist/*.iso.json
+            dist/size-report.txt
+          retention-days: 14
+          if-no-files-found: error
+
+  publish:
+    name: Publish the images
+    needs: iso
+    # A push to master publishes the release for the version in the source, and
+    # a push to BETA updates the rolling pre-release. Both replace their assets
+    # in place (--clobber), so the download link for a version never goes stale
+    # and nobody has to cut a tag to get an image to test. The header of this
+    # file claimed that was already true; it was not - only tags and a manual run
+    # with publish=true ever reached this job, so an ordinary merge built an
+    # image, uploaded an artifact that expires in 14 days, and published nothing.
+    if: |
+      always() &&
+      needs.iso.result == 'success' &&
+      github.event_name != 'pull_request' && (
+        (github.event_name == 'workflow_dispatch' && inputs.publish) ||
+        startsWith(github.ref, 'refs/tags/v') ||
+        github.ref == 'refs/heads/master' ||
+        github.ref == 'refs/heads/BETA'
+      )
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      CHANNEL: ${{ inputs.channel || 'stable' }}   # a dispatch or a tag; BETA overrides it below
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Work out the tag
+        id: tag
+        run: |
+          VERSION=$(sed -n 's/^pub const version = "\(.*\)";/\1/p' zmrig/src/main.zig | head -1)
+
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "channel=${CHANNEL}" >> "$GITHUB_OUTPUT"
+          elif [ "${GITHUB_REF_NAME}" = "BETA" ]; then
+            echo "tag=os-beta" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            # The manifest name has to match the channel the release *is*, not
+            # the input default: a rig with CHANNEL="beta" asks for
+            # zmrig-os-beta-<arch>.json under this tag, and uploading a stable
+            # manifest here used to leave that request with a 404 while the
+            # release looked published.
+            echo "channel=beta" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "channel=${CHANNEL}" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Create the release if it does not exist
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          PRE="${{ steps.tag.outputs.prerelease }}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            exit 0
+          fi
+
+          # The notes are written to a file: backticks inside a `run:` block are
+          # a command substitution, and the sentence that explains `dd` would
+          # have become a command that overwrites a disk.
+          NOTES=$(mktemp)
+          {
+            printf 'Bootable ZMRIG OS image, built from %s.\n\n' "${GITHUB_SHA:0:8}"
+            cat <<'EOF'
+          Write it to a stick and boot it:
+
+              dd if=zmrig-os-*.iso of=/dev/sdX bs=4M status=progress conv=fsync
+
+          The wizard asks for your wallet on the console on the first boot, or
+          pass `zmrig.os.wallet=4...` on the kernel command line. Nothing is
+          installed to any disk, and nothing on the stick is modified.
+
+          x86-64-v3 needs AVX2 (any x86 CPU since ~2015); x86-64-v2 runs on
+          everything since Nehalem. The .json next to each image is the manifest
+          `zmrig-os update` reads.
+          EOF
+          } > "$NOTES"
+
+          if [ "$PRE" = "true" ]; then
+            gh release create "$TAG" --title "ZMRIG OS (rolling beta)" \
+              --notes-file "$NOTES" --prerelease
+          else
+            gh release create "$TAG" --title "ZMRIG OS ${{ steps.tag.outputs.version }}" \
+              --notes-file "$NOTES"
+          fi
+
+      - name: Attach the images and the channel manifests
+        env:
+          CHANNEL: ${{ steps.tag.outputs.channel }}
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+
+          # One manifest per channel and per instruction level: the updater on a
+          # rig asks for the level its own image was compiled for.
+          for meta in dist/*.iso.json; do
+            arch=$(sed -n 's/.*"arch": "\(.*\)",/\1/p' "$meta" | head -1)
+            cp "$meta" "dist/zmrig-os-${CHANNEL}-${arch}.json"
+          done
+
+          # Only the channel manifests are re-uploaded: a bare
+          # `dist/zmrig-os-*-*.json` also matches `*.iso.json`, which would
+          # upload every manifest twice under two names. `ls` is used instead of
+          # globs directly so a channel that was not built in this run (a beta
+          # dispatch has no stable manifest) does not turn into a literal
+          # filename handed to `gh`.
+          files=$(ls dist/*.iso dist/*.iso.sha256 \
+                       dist/zmrig-os-stable-*.json dist/zmrig-os-beta-*.json 2>/dev/null || true)
+          if [ -z "$files" ]; then
+            echo "::error title=Nothing to upload::the build produced no images"
+            exit 1
+          fi
+
+          # shellcheck disable=SC2086
+          gh release upload "$TAG" $files --clobber
+
+      # A release is only a release if the link works. This asks GitHub for
+      # every asset over HTTPS, the same way a user does, and fails the job when
+      # one is missing -- otherwise the first person to notice is somebody
+      # following the download link in the docs.
+      - name: Verify every download link
+        run: |
+          set -u
+          TAG="${{ steps.tag.outputs.tag }}"
+          bad=0
+
+          for iso in dist/*.iso; do
+            name=$(basename "$iso")
+            url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${name}"
+            code=$(curl -sIL -o /dev/null -w '%{http_code}' "$url" || echo 000)
+            size=$(curl -sIL "$url" | tr -d '\r' | awk 'BEGIN{IGNORECASE=1} /^content-length:/{v=$2} END{print v+0}')
+            local_size=$(stat -c %s "$iso")
+            if [ "$code" != "200" ]; then
+              echo "::error title=Missing release asset::$name answered $code"
+              bad=1
+            elif [ "$size" != "$local_size" ]; then
+              # GitHub occasionally reports the compressed transfer size for
+              # HEAD; report it, but do not fail a release over it.
+              echo "note: $name is $local_size bytes locally, $size over the wire"
+            else
+              echo "ok   $name -> $code, $size bytes"
+            fi
+          done
+
+          for manifest in $(ls dist/zmrig-os-stable-*.json dist/zmrig-os-beta-*.json 2>/dev/null || true); do
+            name=$(basename "$manifest")
+            url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${name}"
+            code=$(curl -sIL -o /dev/null -w '%{http_code}' "$url" || echo 000)
+            [ "$code" = "200" ] || { echo "::error title=Missing manifest::$name answered $code"; bad=1; }
+          done
+
+          exit "$bad"
+
+      # One version per channel, not an archive.
+      #
+      # The rolling tag replaces its assets in place, so a rig reads the manifest
+      # and never a stale ISO - but a person opening the release page should not
+      # have to work out which of four images is the current one. Every asset
+      # that belongs to a different version is removed *after* the new build has
+      # been uploaded and verified, never before: a failed build must not leave
+      # an empty release behind.
+      - name: Remove assets from older versions
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -u
+          TAG="${{ steps.tag.outputs.tag }}"
+          current="zmrig-os-${VERSION}-x86-64-"
+
+          gh release view "$TAG" --json assets -q '.assets[].name' > /tmp/assets.txt
+          while read -r name; do
+            [ -n "$name" ] || continue
+            case "$name" in
+              "$current"*) ;;                      # this build: keep
+              zmrig-os-stable-*.json|zmrig-os-beta-*.json) ;;  # channel manifests: keep
+              zmrig-os-*-x86-64-v*.iso|zmrig-os-*-x86-64-v*.iso.sha256)
+                echo "removing $name (not ${VERSION})"
+                gh release delete-asset "$TAG" "$name" --yes >/dev/null
+                ;;
+            esac
+          done < /tmp/assets.txt
+
+          echo "assets now:"
+          gh release view "$TAG" --json assets -q '.assets[].name'
+
+      # The release notes are written twice on purpose: before the upload they
+      # say what the image is, and after it they say where it is. A note with a
+      # link in it that 404s is worse than no note at all, which is why this runs
+      # after the step above.
+      - name: Put the download links in the release notes
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          NOTES=$(mktemp)
+
+          {
+            printf '**ZMRIG OS %s** — bootable live image, built from [`%s`](https://github.com/%s/commit/%s).\n\n' \
+              "${{ steps.tag.outputs.version }}" "${GITHUB_SHA:0:8}" "$GITHUB_REPOSITORY" "$GITHUB_SHA"
+            cat <<'EOF'
+          Write it to a stick and boot it:
+
+          ```
+          dd if=zmrig-os-*.iso of=/dev/sdX bs=4M status=progress conv=fsync
+          ```
+
+          Check the download first — every image has its checksum next to it:
+
+          ```
+          sha256sum -c zmrig-os-*.iso.sha256
+          ```
+
+          The wizard asks for your wallet on the console on the first boot, or
+          pass `zmrig.os.wallet=4...` on the kernel command line. Nothing is
+          installed to any disk, and nothing on the stick is modified.
+
+          | file | what it is |
+          | --- | --- |
+          | `x86-64-v3` (recommended) | AVX2 and AES-NI — any x86 CPU since about 2015 |
+          | `x86-64-v2` | everything since Nehalem |
+          | `zmrig-os-beta-*.json` | the manifest `zmrig-os update` reads |
+
+          Only the current version is attached: the rolling tag replaces its files
+          in place, so a download link never points at a build that was replaced.
+          EOF
+            echo
+            echo '## Downloads'
+            echo
+            echo '| image | size | sha256 |'
+            echo '| --- | ---: | --- |'
+            # v3 first: it is the faster build, and the one almost every rig
+            # wants. `sort -r` puts v3 above v2 without hard-coding the level.
+            for iso in $(ls dist/*.iso | sort -r); do
+              name=$(basename "$iso")
+              sum=$(cut -d' ' -f1 "$iso.sha256")
+              echo "| [$name](https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${name}) | $(du -h "$iso" | cut -f1) | \`$sum\` |"
+            done
+            echo
+            # `releases/latest` follows the newest *stable* release, so on the
+            # rolling beta tag that URL would point somewhere else entirely.
+            if [ "${{ steps.tag.outputs.prerelease }}" != "true" ]; then
+              echo 'This release is the newest stable one, so these URLs always'
+              echo 'work without knowing the version:'
+              echo
+              for iso in dist/*.iso; do
+                echo "<https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/$(basename "$iso")>"
+              done
+              echo
+            fi
+            echo 'Operator manual: <https://molik-labs.github.io/ZMRIG/docs/appliance/iso>'
+            echo 'What changed: [CHANGELOG](https://github.com/'"${GITHUB_REPOSITORY}"'/blob/'"${GITHUB_REF_NAME:-BETA}"'/CHANGELOG.md)'
+            echo
+            echo 'Or serve them from your own host — `serve/` redirects `/iso/v3`,'
+            echo '`/iso/v2` and `/iso/beta` to the newest asset on each channel.'
+          } > "$NOTES"
+
+          # The title names the version, because the tag does not: `os-beta` is
+          # rolling, so anybody looking at the release list sees which build is
+          # in it without opening it.
+          if [ "${{ steps.tag.outputs.prerelease }}" = "true" ]; then
+            gh release edit "$TAG" --title "ZMRIG OS ${{ steps.tag.outputs.version }} (rolling beta)" \
+              --notes-file "$NOTES"
+          else
+            gh release edit "$TAG" --title "ZMRIG OS ${{ steps.tag.outputs.version }}" \
+              --notes-file "$NOTES"
+          fi
+
+      - name: Summarise
+        run: |
+          {
+            echo "### ZMRIG OS ${{ steps.tag.outputs.version }}"
+            echo
+            echo "| file | size | sha256 |"
+            echo "| --- | ---: | --- |"
+            for iso in dist/*.iso; do
+              echo "| $(basename "$iso") | $(du -h "$iso" | cut -f1) | $(cut -d' ' -f1 "$iso.sha256") |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"

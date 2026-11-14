@@ -2,7 +2,7 @@
 title: ZMRIG là gì
 description: Miner RandomX không phí developer, installer cài đặt nó, proxy cho farm và pool tự dựng. Từng phần làm gì, tốn bao nhiêu, và mã nguồn đến từ đâu.
 slug: /intro
-image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
+image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 ---
 
 # ZMRIG là gì
@@ -11,12 +11,12 @@ ZMRIG là một bộ đào Monero hoàn chỉnh, không phải mớ script rời
 
 | Phần | Là gì | Tốn gì |
 | --- | --- | --- |
-| **Miner** | XMRig 6.26.0 đã xoá sạch mọi dòng mã donate, cộng thêm miner Zig hoàn chỉnh trên cùng engine RandomX | **1 %** thời gian Monero ở engine Zig, in ra và tắt được; engine C++ không có mã phí |
+| **Miner** | XMRig 6.26.0 đã xoá sạch mọi dòng mã donate, cộng thêm miner Zig hoàn chỉnh trên cùng engine RandomX | **3 %** thời gian Monero ở engine Zig, in ra và tắt được; engine C++ không có mã phí |
 | **Installer** | `oneclick.sh`: một cờ, tinh chỉnh host, unit systemd, tự kiểm tra, gỡ cài đặt | miễn phí |
 | **Proxy** | một kết nối pool cho cả farm: extranonce riêng từng rig, độ khó riêng, tunnel | miễn phí |
 | **Pool** | pool Monero tự dựng: stratum qua TCP và WebSocket, PPLNS, mọi share đều được kiểm lại | 1 % mỗi block, không gì khác |
 
-Miner chạy được với bất kỳ pool nào. 1 % ở pool trong repo này là thứ giữ dự án
+Miner chạy được với bất kỳ pool nào. Phí 3 % thời gian và 1 % của pool trong repo này là thứ giữ dự án
 sống; bản thân miner không lấy gì của bạn, và không có tài khoản, token hay
 telemetry ở bất kỳ đâu trong đó.
 

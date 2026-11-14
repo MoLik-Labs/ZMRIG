@@ -30,3 +30,78 @@ jobs:
 
       - name: Run site tests
         run: npm run test:web
+
+      # The builder, the coin table and the donation copy are plain modules with
+      # no DOM and no Docusaurus in their import graph, so they run on a bare
+      # Node: no install step, no second copy of the lockfile to keep in sync.
+      - name: Run builder and copy tests
+        run: node --test site/tests/*.test.mjs
+
+      # These five walk the repository, not the built site, so they need no
+      # npm at all: link targets and in-page anchors, published-page
+      # consistency, the install URL that a repository rename silently breaks,
+      # the appliance's config keys, which drifted out of both the example file
+      # and the doc table, and the setup guide's commands, which are the one
+      # thing a reader runs verbatim.
+      - name: Run documentation tests
+        run: |
+          bash tests/docs/links.sh
+          bash tests/docs/pages.sh
+          bash tests/docs/identity.sh
+          bash tests/docs/config-keys.sh
+          bash tests/docs/setup-page.sh
+
+      # Two rules about the repository itself, in the job that runs fastest and
+      # needs nothing installed.
+      #
+      # `repo-size.sh` is about the download: a rig installs over somebody's
+      # metered connection, and a stray build artefact in Git is paid for by
+      # every clone forever. `tool-layout.sh` is about finding things: the tool
+      # is one page of the repository, and a script that is not on it does not
+      # exist for the person who has to repair a rig at 3 a.m.
+      - name: Repository size and tool layout
+        run: |
+          bash tests/lint/repo-size.sh
+          bash tests/lint/tool-layout.sh
+
+      # The web host. `serve/` has no dependencies, so the unit tests need no
+      # install step; the last one boots the real process on a socket.
+      - name: Run web host tests
+        run: cd serve && npm test
+
+      # The host serves the site from the root of its own domain, which is a
+      # different Docusaurus build from the one GitHub Pages gets under /ZMRIG/.
+      # Building it here is what stops that configuration from rotting: a page
+      # that only works with the Pages baseUrl fails this step, not a deploy.
+      - name: Build the site for the web host and serve it
+        run: |
+          set -euo pipefail
+          cd site
+          # package-lock.json is not committed in this repository, so this is
+          # `npm install` here too, not `npm ci`.
+          npm install --no-audit --no-fund
+          SITE_BASE_URL=/ \
+          SITE_URL=https://zmrig.example.com \
+          SITE_DOWNLOAD_URL=https://zmrig.example.com/download \
+            npx docusaurus build
+
+          cd ../serve
+          node scripts/precompress.js ../site/build
+
+          PORT=8099 SITE_ROOT=../site/build GITHUB_REPO=MoLik-Labs/ZMRIG \
+            node server.js > /tmp/serve.log 2>&1 &
+          server=$!
+          trap 'kill $server 2>/dev/null || true' EXIT
+
+          for _ in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:8099/healthz > /dev/null 2>&1; then break; fi
+            sleep 0.25
+          done
+
+          curl -fsS http://127.0.0.1:8099/healthz | grep -q '"ok":true'
+          curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8099/ | grep -qx 200
+          curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8099/docs/intro | grep -qx 200
+          curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8099/vi/docs/intro | grep -qx 200
+          curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8099/download | grep -qx 200
+          # A brotli-capable client gets fewer bytes than the file.
+          echo "brotli: $(curl -s -o /dev/null -w '%{size_download}' -H 'accept-encoding: br' http://127.0.0.1:8099/ | head -1) bytes"

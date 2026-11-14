@@ -44,6 +44,11 @@ enum xmo_algo {
  * 2 GiB dataset.
  */
 xmo_engine *xmo_engine_new(int algo, int flags, char *err, size_t errlen);
+
+/* Make `engine`'s algorithm the active RandomX configuration. Called with the
+ * workers stopped; required after switching to an engine that was created
+ * earlier, because the configuration is process-wide. */
+void xmo_engine_activate(xmo_engine *engine);
 void        xmo_engine_free(xmo_engine *engine);
 
 /* Number of bytes the dataset and the cache need for this algorithm. */
@@ -71,6 +76,11 @@ int  xmo_engine_seed(xmo_engine *engine, const uint8_t *seed, size_t seed_len,
  * miner reports it as one. */
 size_t xmo_engine_huge_pages(const xmo_engine *engine);
 size_t xmo_engine_huge_pages_total(const xmo_engine *engine);
+
+/* The page size that backed the mapping: 0 for ordinary pages, 2048 for 2 MiB
+ * pages, 1048576 for 1 GiB pages. A 1 GiB mapping reports "explicit" only when
+ * the kernel really did hand pages out of the gigantic pool. */
+size_t xmo_engine_huge_page_kb(const xmo_engine *engine);
 size_t xmo_engine_total_memory(const xmo_engine *engine);
 
 /* RandomX memory-latency fix. These return 0 on success, 1 when this machine
@@ -98,6 +108,23 @@ void xmo_hash_next(xmo_vm *vm, uint64_t *temp, const uint8_t *blob,
 /* Commitments are part of the Monero v2 proof of work. */
 void xmo_commitment(const uint8_t *blob, size_t len, const uint8_t *hash_in,
                     uint8_t *out);
+
+/*
+ * The 512-bit (AVX-512 + VAES) implementation of the per-hash scratchpad pass,
+ * for the conformance test. The miner selects it on Zen 5 and nowhere else; the
+ * point of these two calls is that the test suite can put it through the same
+ * inputs as the ordinary path on *any* CPU that can execute it, with buffers
+ * that are deliberately not 64-byte aligned (a stack `uint64_t[8]` is not).
+ *
+ *   xmo_wide_scratchpad_available()  1 when this CPU can run it, 0 when not.
+ *   xmo_wide_scratchpad_agrees()     0 = not tested (no such CPU),
+ *                                    1 = both implementations ran and agree,
+ *                                   -1 = they disagree, i.e. a wrong hash for
+ *                                        whoever uses the wide path.
+ * `report` receives one line either way.
+ */
+int xmo_wide_scratchpad_available(void);
+int xmo_wide_scratchpad_agrees(char *report, size_t report_len);
 
 /* JIT / dataset tuning knobs (see crypto/randomx/randomx.h). */
 void xmo_set_scratchpad_prefetch(int mode);

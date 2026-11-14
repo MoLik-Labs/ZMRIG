@@ -15,7 +15,7 @@ const INITIAL = {
   host: "",
   failover: [],
   engine: "auto",
-  profile: "auto",
+  profile: "free",
   tls: false,
   cloudflare: false,
   wsPath: "/stratum",
@@ -387,6 +387,7 @@ export default function InstallBuilder() {
               copiedLabel={t("builder.copied")}
               manualLabel={t("common.manualCopy")}
               className="zm-btn zm-btn--primary"
+              disabled={Boolean(result.blocked)}
             />
           </div>
           <pre>

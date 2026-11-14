@@ -3,11 +3,14 @@
 # network available. Everything that needs a package manager happens here so the
 # host script stays a plain orchestrator.
 #
-# Arguments: /tmp/chroot-setup.sh <kernel-package> <channel>
+# Arguments: /tmp/chroot-setup.sh <kernel-package> <channel> [firmware]
+#   firmware = minimal (default) keeps only what a wired rig needs;
+#              all keeps the package's whole /lib/firmware.
 set -eu
 
 KERNEL_PKG="${1:-linux-lts}"
 CHANNEL="${2:-stable}"
+FIRMWARE="${3:-minimal}"
 
 export PATH=/sbin:/bin:/usr/sbin:/usr/bin
 export HOME=/root
@@ -24,6 +27,10 @@ apk update --no-progress
 # a time source (TLS handshakes and pool logins both fail on a wrong clock), an
 # ssh server so the rig never needs a keyboard, curl for the updater, e2fsprogs
 # for the persistence partition and pciutils for the doctor.
+# Every package here has a job on a rig: no documentation, no shells beyond
+# busybox, no editors, no python. dosfstools is for the installer's EFI
+# partition, e2fsprogs for the data partition and for `install`, util-linux for
+# sfdisk (a real GPT writer - busybox fdisk cannot).
 apk add --no-progress --no-cache \
     alpine-base \
     "${KERNEL_PKG}" \
@@ -31,14 +38,99 @@ apk add --no-progress --no-cache \
     busybox \
     kmod \
     e2fsprogs \
+    dosfstools \
     util-linux \
     curl \
     ca-certificates \
     chrony \
     openssh \
-    pciutils \
     ifupdown-ng \
-    dhcpcd
+    dhcpcd \
+    zstd
+
+# ---------------------------------------------------------------- kernel
+# The kernel module tree is the single largest thing in this image - bigger than
+# everything else combined - and a mining rig uses a fraction of it. Keep what a
+# machine needs to boot, reach a pool, read a temperature sensor and run in a
+# VM; drop the rest. The list is directories, not modules, so a kernel update
+# does not silently lose a driver that a new rig needs.
+say "pruning the module tree"
+
+# Dropped wholesale: a rig has no sound card, no camera, no GPU to drive, no
+# InfiniBand fabric, no CAN bus and no staging driver it should rely on. These
+# are 80 % of the module tree by bytes and none of them has ever hashed a block.
+DROP="sound media gpu infiniband isdn wan can iio staging nfc bluetooth thunderbolt"
+
+for tree in /lib/modules/*; do
+    [ -d "$tree" ] || continue
+    before=$(du -sk "$tree" | cut -f1)
+    total=$(find "$tree" -type f -name '*.ko*' | wc -l)
+
+    # Deleting inside a pipeline would run in a subshell; this loop runs in the
+    # current shell so the deletions actually happen.
+    find "$tree" -type f \( -name '*.ko' -o -name '*.ko.gz' -o -name '*.ko.xz' -o -name '*.ko.zst' \) > /tmp/modlist
+    while read -r ko; do
+        rel="${ko#"$tree"/}"
+        for d in $DROP; do
+            case "$rel" in
+                kernel/drivers/"$d"/*) rm -f "$ko"; break ;;
+            esac
+        done
+    done < /tmp/modlist
+    rm -f /tmp/modlist
+
+    # Every removed module takes its dependencies' last user with it, and a
+    # modules.dep pointing at a file that is gone turns modprobe's "not found"
+    # into "cannot load anything", so the index is rebuilt from what is left.
+    depmod -a "$(basename "$tree")" 2>/dev/null || true
+    after=$(du -sk "$tree" | cut -f1)
+    left=$(find "$tree" -type f -name '*.ko*' | wc -l)
+    printf '    %s: dropped %s of %s modules, %s MB -> %s MB\n' \
+        "$(basename "$tree")" "$((total - left))" "$total" \
+        "$((before / 1024))" "$((after / 1024))"
+done
+
+# ---------------------------------------------------------------- firmware
+# Two things in the kernel package have no use on a rig and are most of the
+# image:
+#
+#   /boot/initramfs-*   the stock Alpine initramfs, ~170 MB. This image builds
+#                       its own (make-initramfs.sh) and never reads that one.
+#   /lib/firmware       GPU, Wi-Fi, InfiniBand and smart-NIC blobs. A rig has
+#                       wired ethernet and no display; the common drivers
+#                       (e1000e, igb, ixgbe, r8169 with its rtl_nic blobs) either
+#                       need no firmware or are in the keep list below.
+#
+# `--firmware all` turns the second one off for a board with an exotic NIC.
+say "removing the stock initramfs and unused firmware"
+
+rm -f /boot/initramfs-* /boot/System.map-* /boot/config-* /boot/initrd-* 2>/dev/null || true
+
+if [ "$FIRMWARE" = "all" ]; then
+    printf '    firmware: kept (%s)\n' "$(du -sh /lib/firmware 2>/dev/null | cut -f1)"
+elif [ -d /lib/firmware ]; then
+    FWKEEP=/tmp/fwkeep
+    rm -rf "$FWKEEP"
+    mkdir -p "$FWKEEP"
+    before=$(du -sk /lib/firmware | cut -f1)
+
+    # Wired NIC firmware that some server boards genuinely need, plus CPU
+    # microcode, which is stability rather than features.
+    for keep in rtl_nic bnx2 bnx2x tg3 intel/ice amd-ucode; do
+        [ -e "/lib/firmware/$keep" ] || continue
+        mkdir -p "$FWKEEP/$(dirname "$keep")"
+        cp -a "/lib/firmware/$keep" "$FWKEEP/$keep"
+    done
+
+    rm -rf /lib/firmware
+    mkdir -p /lib/firmware
+    cp -a "$FWKEEP/." /lib/firmware/
+    rm -rf "$FWKEEP"
+    printf '    firmware: %s MB -> %s MB\n' \
+        "$((before / 1024))" "$(( $(du -sk /lib/firmware | cut -f1) / 1024 ))"
+else
+    printf '    firmware: the package ships none\n'
+fi
 
 # A static busybox is what the initramfs runs on. It is a separate package on
 # some Alpine releases and a file inside the main package on others, so this is
@@ -139,15 +231,20 @@ if grep -q '^tty1::' /etc/inittab 2>/dev/null; then
 fi
 
 # ---------------------------------------------------------------- accounts
-# doas rather than sudo: one binary, no PAM stack, and the only user is root.
-printf 'permit persist :wheel\n' > /etc/doas.d/doas.conf 2>/dev/null || true
-
+# No sudo, no doas: nothing in this image runs as anyone but root, and a
+# privilege-escalation config for a tool that is not installed is a line that
+# reads like a feature. The console is root on tty1 and OpenRC runs the rest.
 passwd -l root >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------- tidy
 # Nothing in the image should be able to pull a package at runtime: an appliance
 # that installs things is an appliance whose state nobody can reproduce.
-rm -rf /var/cache/apk/* /tmp/* 2>/dev/null || true
+#
+# /tmp/chroot-kver is this script's only output to the host, and it lives in the
+# directory being emptied, so `rm -rf /tmp/*` deleted it on the way out and the
+# caller failed with "No such file or directory" 200 lines later.
+rm -rf /var/cache/apk/* 2>/dev/null || true
+find /tmp -mindepth 1 -maxdepth 1 ! -name chroot-kver -exec rm -rf {} + 2>/dev/null || true
 mkdir -p /var/cache/apk
 
 mkdir -p /etc/zmrig

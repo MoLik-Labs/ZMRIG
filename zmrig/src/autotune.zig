@@ -1,10 +1,9 @@
 //! Picking the thread count by measurement instead of by heuristic.
 //!
-//! The default is XMRig's rule: one thread per 2 MiB of L3 cache, capped by the
-//! hardware thread count. It is a good guess, and on plenty of machines it is
-//! wrong -- a locked-down BIOS, a shared vCPU, an L3 that is shared between
-//! cores, or a cache-size file the kernel does not publish. When it is wrong it
-//! is wrong down (`threads 1` on a 4-core box), which costs tens of percent.
+//! The default throughput profile starts with every logical CPU, but the fastest
+//! sustained count can be lower when a memory bus, shared vCPU quota or thermal
+//! limit saturates. This module supplies a bounded candidate set so install-time
+//! autotune can measure those machine-specific tradeoffs instead of guessing.
 //!
 //! This module holds the part that is not I/O: which candidates to try, and
 //! whether a result is a real win. The measuring itself lives in `main.zig`,
@@ -27,11 +26,15 @@ pub const Trial = struct {
 /// thread (the maximum-throughput choice). A handful of points in between are
 /// added when the machine is big enough for them to differ.
 pub fn candidates(profile: topology.Profile, logical: usize, physical: usize, out: []usize) []usize {
-    const max = @min(logical, out.len);
-    if (max == 0) return out[0..0];
+    // `out.len` limits how many candidates we can store, not the thread-count
+    // limit. Clamping thread counts to the buffer capacity made every machine
+    // with more than eight logical CPUs benchmark only 1 and 8 threads -
+    // exactly the rigs where a measured search is most valuable.
+    if (logical == 0 or out.len == 0) return out[0..0];
 
+    const max = logical;
     const phys = @max(@min(physical, logical), 1);
-    const logical_n = @max(logical, 1);
+    const logical_n = logical;
 
     var count: usize = 0;
 
@@ -52,9 +55,11 @@ pub fn candidates(profile: topology.Profile, logical: usize, physical: usize, ou
     switch (profile) {
         // Watts do not matter: try everything up to every logical CPU.
         .free => {
-            // On a small machine the list would otherwise hold one entry, and a
-            // single measurement cannot tell "best" from "only".
-            if (phys >= max) add(out, &count, 1, max);
+            // Add low/intermediate points even when `physical` reaches the
+            // searchable ceiling (common with a CPU quota). One measurement at
+            // the maximum alone cannot tell whether oversubscription helps.
+            add(out, &count, 1, max);
+            if (phys > 2) add(out, &count, phys / 2, max);
             add(out, &count, phys, max);
             if (phys * 3 / 2 < logical_n) add(out, &count, phys * 3 / 2, max);
             add(out, &count, (phys + logical_n) / 2, max);
@@ -68,6 +73,17 @@ pub fn candidates(profile: topology.Profile, logical: usize, physical: usize, ou
             if (phys > 2) add(out, &count, phys / 2, max);
             add(out, &count, phys, max);
         },
+    }
+
+    // Start with the maximum count permitted by the profile. `isBetter` ignores
+    // sub-noise gains, so this tie-break makes free mode retain maximum gross
+    // throughput unless a lower count wins by a clear, repeatable margin.
+    const preferred = if (profile == .free) logical_n else phys;
+    for (out[0..count], 0..) |value, index| {
+        if (value == preferred) {
+            std.mem.swap(usize, &out[0], &out[index]);
+            break;
+        }
     }
 
     return out[0..count];
@@ -108,26 +124,54 @@ test "the candidate list is deduplicated, bounded and never empty" {
 
     var buf: [8]usize = undefined;
 
-    // 4 cores / 8 threads, profile free: cover one core, six, seven, eight.
+    // 4 cores / 8 threads, profile free: cover low, per-core, SMT and maximum.
     const free_list = candidates(.free, 8, 4, &buf);
-    try testing.expect(free_list.len >= 2);
+    try testing.expect(free_list.len >= 4);
+    try testing.expectEqual(@as(usize, 8), free_list[0]);
 
     for (free_list) |n| {
         try testing.expect(n >= 1);
         try testing.expect(n <= 8);
     }
 
-    // The maximum-thread candidate must be present for profile free: that is
-    // the whole point of the profile.
+    // Both the conservative floor and maximum-throughput candidate must be
+    // present, even when SMT makes physical < logical.
+    var seen_floor = false;
     var seen_max = false;
     for (free_list) |n| {
+        if (n == 1) seen_floor = true;
         if (n == 8) seen_max = true;
     }
+    try testing.expect(seen_floor);
     try testing.expect(seen_max);
+
+    // Candidate storage is deliberately small, but it must not cap the thread
+    // count on a larger rig. The old clamp silently skipped every count above 8.
+    var large_buf: [8]usize = undefined;
+    const large_list = candidates(.free, 128, 64, &large_buf);
+    try testing.expectEqual(@as(usize, 128), large_list[0]);
+    try testing.expect(large_list.len <= large_buf.len);
+    var seen_large_max = false;
+    for (large_list) |n| {
+        try testing.expect(n <= 128);
+        if (n == 128) seen_large_max = true;
+    }
+    try testing.expect(seen_large_max);
+
+    // With a CPU quota below physical cores, still explore more than one
+    // nontrivial point before concluding the whole quota is best.
+    var quota_buf: [8]usize = undefined;
+    const quota_list = candidates(.free, 8, 32, &quota_buf);
+    var seen_quota_mid = false;
+    for (quota_list) |n| {
+        if (n == 4) seen_quota_mid = true;
+    }
+    try testing.expect(seen_quota_mid);
 
     // profile watt: never above the physical core count.
     var watt_buf: [8]usize = undefined;
     const watt_list = candidates(.watt, 8, 4, &watt_buf);
+    try testing.expectEqual(@as(usize, 4), watt_list[0]);
     for (watt_list) |n| {
         try testing.expect(n >= 1);
         try testing.expect(n <= 4);

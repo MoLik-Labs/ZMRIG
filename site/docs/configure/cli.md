@@ -1,7 +1,7 @@
 ---
 title: Command reference
 description: Every zmrig flag, grouped by what it touches, plus config validation, self-test and autotune.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-en.png
+image: https://molik-labs.github.io/ZMRIG/img/og-en.png
 ---
 
 # Command reference
@@ -34,6 +34,13 @@ show it in brackets.
     --ban-cooldown=N       seconds to skip a pool after a ban, a rejected
                            wallet or a full-pool message [900]
                            a rejected wallet is floored at 30 minutes
+    --check-wallet=ADDR    decode a Monero address - length, base58 alphabet,
+                           network byte, Keccak-256 checksum - print the kind,
+                           the network and the keys, and exit 1 if a mainnet
+                           pool could not pay it
+    --allow-bad-wallet     start anyway when the address fails its checksum.
+                           Under rx/0 a bad checksum is otherwise a refusal:
+                           the rig would mine and never be paid
     --idle-timeout=N       drop a silent connection after N s [300, 0 = off]
     --keepalive-interval=N [60, 0 = off]
 ```
@@ -50,7 +57,50 @@ show it in brackets.
     --priority=N           1..5 (XMRig scale) or a raw nice value, e.g. -10
     --scratchpad-prefetch=N 0 nop, 1 prefetcht0 [default], 2 prefetchnta, 3 load
     --no-optimized-init    portable dataset initialiser
+    --dataset-cache[=MB]   keep the previous dataset mapped across an algorithm
+                           switch, so a pool that moves between RandomX forks
+                           does not pay a rebuild on the way back [auto: keep
+                           whatever fits; 0 or --no-dataset-cache turns it off]
     --autotune[=SECONDS]   measure candidate thread counts, no pool needed
+    --max-temp=C           keep the hottest CPU sensor at or below C degrees
+    --thermal-file=PATH    read the temperature from PATH instead of sysfs
+    --no-thermal           turn the governor off
+```
+
+## The wallet address
+
+`-u/--user` takes the address the pool pays. For Monero it is decoded before the
+first share: 95 characters (106 with a payment id), base58, a network byte, and a
+four-byte Keccak-256 checksum. One wrong character is the failure that a
+character count cannot see — the rig hashes perfectly and the payout goes to an
+address whose spend key nobody holds — so under `rx/0` it is a refusal:
+
+```console
+$ zmrig -o gulf.moneroocean.stream:10001 -u 4AdUndXH...684Rgf
+error 4AdUndXH...684Rgf is not a valid Monero address: checksum does not match: at least one character is wrong
+error this rig would mine and never be paid; check it with `zmrig --check-wallet 4AdUndXH...684Rgf`
+error if that login is not a Monero address, pass --allow-bad-wallet
+```
+
+`--check-wallet ADDR` is the same check without a pool, and `--check` prints the
+verdict next to the rest of the configuration:
+
+```console
+$ zmrig -o gulf.moneroocean.stream:10001 -u 4... --check
+  wallet  standard mainnet checksum verified
+```
+
+Every other algorithm keeps the check advisory: this repository only claims to
+know Monero's format, and a login that is address-shaped but is another
+CryptoNote coin's address must not stop a rig from starting. `--allow-bad-wallet`
+turns the refusal into the old warning when that is what you have. The summary
+line says which case it is, so a dry run of a Wownero rig is not read as a rig
+that will not start:
+
+```console
+$ zmrig -o gulf.moneroocean.stream:10001 -u 4AdUndXH...684Rgf -a rx/wow --check
+  wallet  INVALID: checksum does not match: at least one character is wrong
+          not a Monero address: if this is another coin's address, mining is unaffected (--allow-bad-wallet silences the check)
 ```
 
 ## Logging and lifecycle
@@ -78,17 +128,90 @@ show it in brackets.
 -V, --version
 ```
 
+## A flag beats the config file
+
+`-c FILE` is read first and the command line is applied on top, field by field.
+Anything given on the command line wins — including a value that equals the
+default, which is the case that used to be lost:
+
+```bash
+# fee off and a temperature limit, on a rig whose config file says otherwise
+zmrig -c /etc/zmrig/config.json --donate-level=0 --max-temp=70
+```
+
+`--donate-level`, `--max-temp`, `--profile`, `--ban-cooldown`, `--dataset-cache`,
+`--health-warmup`, `--health-restart` (including its seconds value) and
+`--autotune` used to be parsed and then dropped by the merge, so on an installed
+rig — where every run has `-c` — they did nothing at all. A flag the config file
+does not mention keeps whatever the file says; a flag the file does mention is
+overridden. Other flags such as `--thermal-file`, `--http-access-token`,
+`--verify-share`, `--allow-bad-wallet` and `--report` were already merged and are
+not part of that bug.
+
+The command-line algorithm selection follows the same rule: `--algo=auto` clears a global or per-pool pin, and `--algo=rx/0` pins one even if the file says `auto`. The CLI parser must replace both parts of the setting (`algo` and `algo_all`); the global choice must then take precedence over a pool-level pin.
+
 ## Profile: `free` and `watt`
 
 ```bash
 sudo ./oneclick.sh install --wallet 4YourMoneroAddress --profile free  # maximum hashrate
 sudo ./oneclick.sh install --wallet 4YourMoneroAddress --profile watt  # maximum H/W
-sudo ./oneclick.sh install --wallet 4YourMoneroAddress                 # = auto
+sudo ./oneclick.sh install --wallet 4YourMoneroAddress                 # default = free
 ```
 
-`auto` reads the battery: a laptop on battery becomes `watt`, everything else
-becomes `free`. The miner re-reads the profile at startup, so unplugging and
-restarting the service is enough to switch.
+`free` is the default and maximises hashrate on mains or battery. `auto` is an
+alias for `free`; battery state never silently changes performance. Choose
+`watt` explicitly to trade some hashrate for more hashes per watt.
+
+## Safe mode: mine without cooking the machine
+
+The safe default is an 80 °C target. `--max-temp` overrides it; the governor
+runs once a second, reads the hottest CPU sensor and gives back threads as the
+box warms. `--no-thermal` explicitly disables the governor:
+
+```bash
+sudo zmrig -o gulf.moneroocean.stream:10001 -u 4YourMoneroAddress \
+    --max-temp=72 --profile watt
+```
+
+| what happens | when |
+| --- | --- |
+| nothing | below 72 °C |
+| one thread is parked | at 72 °C, at most once every 30 s |
+| a thread is parked immediately | at 80 °C (target + 8), at most once every 5 s |
+| hashing stops | at 87 °C (target + 15) even on one thread |
+| hashing resumes at one thread | once the sensor is back under 65 °C |
+| a thread comes back | after two minutes below 67 °C (target − 5) |
+
+The two speeds matter. At the target a spike is normal — a boost bin, one burst
+of shares — so it waits. At the hard cap the hardware is already protecting
+itself, so it acts at once. Stepping back up is deliberately slow: cooling for
+two minutes and heating up in ten seconds is how a fan bearing dies, and it also
+makes the measured average worse than holding one thread less.
+
+Nothing is rebuilt while this happens. A parked thread keeps its VM and the
+dataset stays in RAM, so a pause costs the shares it did not compute and nothing
+else — the pool connection stays open.
+
+```text
+thermal: holding 72 C max - k10temp/Tctl reads 61.5 C now; 8 thread(s), step down at 72 C, pause at 87 C
+thermal: 73.4 C on k10temp/Tctl -> 7 of 8 threads (target 72 C; 1 step-down(s), 0 step-up(s) so far)
+thermal: 81.2 C on k10temp/Tctl -> 6 of 8 threads (target 72 C; 2 step-down(s), 0 step-up(s) so far)
+```
+
+`zmrig --check` prints whether a governor is armed and what it can see, which is
+the difference between "it throttled" and "it has no sensor and never could":
+
+```text
+  thermal hold 80 C: k10temp/Tctl 61.5 C now, step down at 80 C, pause at 95 C (--no-thermal turns it off)
+  thermal off (--no-thermal: explicitly disabled)
+```
+
+The sensors are the CPU ones only — `coretemp`, `k10temp`, `zenpower`,
+`cpu_thermal`, `acpitz` and the Super I/O chips — so a warm NVMe or a warm GPU
+never costs a thread. A machine with no sensor at all says so once and keeps
+mining at the thread count it was given: an unreadable thermometer is not a
+reason to stop earning. `--thermal-file=PATH` points the governor at a file
+instead, for a board whose sensor is exposed by the BMC.
 
 ## Threads, measured rather than guessed
 
@@ -106,10 +229,18 @@ zmrig --autotune=8        # no pool required, 8 s per candidate
          2   999.750 H/s  best so far
 best: 2 thread(s) at 999.750 H/s
 autotune-best-threads=2
+
+keep it:
+  "cpu": {"threads": 2}
+  or on the command line: -t 2
 ```
 
 A difference under 2 % counts as noise, so it does not change the thread count
 because of one lucky run.
+
+The advice is written in the spelling the config file actually reads —
+`cpu.threads`, not a `threads` at the top of the file, which is ignored (the
+miner says so on stderr if it finds one).
 
 ## Validate before you run
 
@@ -125,16 +256,105 @@ config ok
   threads 2 (default would be 2)
   cpus    [0,1] on 2 cpu(s), 2 physical core(s)
   mode    auto, huge pages on, jit on
-  memory  rx/0 maps 2336 MB, 1168 pages of 2 MiB: no pages reserved; transparent huge pages collapse the mapping instead
+  memory  rx/0 maps 2336 MB, 1168 pages of 2 MiB (or 3 of 1 GiB): no pages reserved; transparent huge pages collapse the mapping instead
+  1g      no pool: this mode would need 3 page(s) of 1 GiB, and the mapping uses 2 MiB pages instead (doc/PERFORMANCE.md has the one-line reservation)
   thp     madvise (default): the hint this miner sets is honoured, so no root step is needed
-  msr     intel preset; reading /dev/cpu/0/msr needs root (off: --msr is worth 5-15% on Zen 3/4 …)
+  msr     intel preset; reading /dev/cpu/0/msr needs root (auto: the preset is skipped here; --msr tries anyway)
 ```
+
+The `msr` line is the answer, not a nag: the prefetcher-off preset is worth
+**5–15 %** on bare metal, and since 6.48 it is applied **by itself** when the
+machine can take it (`auto`). What the parentheses say is which of three states
+this run is in — `auto: …` (decided by the probe), `on: --msr` (asked for),
+`off: --no-msr` (refused, which a config with `"msr": false` also does).
+
+The `1g` line is the pool that cannot be made at runtime: it says whether the
+1 GiB pages the mapper would rather use exist, and `zmrig-os hugepages 1g 3`
+reserves them at the next boot. Empty is the normal answer on a virtual machine
+and costs nothing — 2 MiB pages are where almost all of the gain is.
 
 The `memory` line is the coin's own size — `panthera maps 192 MB, 96 pages` —
 and the `thp` line answers the question it raises: `madvise` and `always` mean
 the kernel backs the mapping with 2 MiB pages without any root step, `never`
-means it does not and the miner will be ~28 % slower until pages are reserved.
+means it does not and the miner will be ~18 % slower until pages are reserved.
 
 `--check` reads the file and prints; it opens no socket and allocates no
 dataset. If the file is root-only, run it with `sudo` or you get
 `cannot read …: check the path or run as root`.
+
+It is a refusal, not a preview, for the values a run cannot use — the ones that
+used to be blessed here and then dropped at start-up:
+
+```console
+$ zmrig -o gulf.moneroocean.stream:10001 -u 4... -t 0 --check
+zmrig: 0 is not a thread count this miner can run: -t takes 1..128
+$ zmrig -o gulf.moneroocean.stream:10001 -u 4... --scratchpad-prefetch=7 --check
+zmrig: --scratchpad-prefetch=7 is not a mode: 0 = no prefetch, 1 = prefetcht0 (default), 2 = prefetchnta, 3 = a plain load
+$ zmrig -o gulf.moneroocean.stream:10001 -u 4... --priority=99 --check
+zmrig: --priority=99 is not a priority: 1..5 on XMRig's scale, -20..19 as a raw nice value, or -1 to leave the scheduler alone
+```
+
+`--tls-ca FILE` is read here too: a trust store that cannot be opened is a
+handshake that cannot succeed, and finding that out from a provisioning script
+is cheaper than finding it out from a rig that never connects. A config file
+that names a value this binary cannot use says so once, on stderr, and then
+carries on with the default — an XMRig file written for another version still
+starts:
+
+```console
+zmrig: warning: config: cpu.threads must be a number or an array of CPU indexes; using the default
+```
+
+A list of CPU indexes is honoured up to cpu 63, because the affinity mask is 64
+bits wide. A file written for a larger machine keeps the CPUs that fit and names
+the first one that does not, rather than quietly moving those threads:
+
+```console
+zmrig: warning: config: cpu.threads pins cpu 70, which a 64-bit affinity mask cannot name; that thread is left unpinned
+```
+
+A `pools` entry that is not an object is reported for the same reason: the miner
+would otherwise exit with "no pool configured", which is true and says nothing
+about the line that caused it.
+
+```console
+zmrig: warning: config: pools[0] is not a pool object (it needs url and user); skipping it
+```
+
+## Pool mode: `--verify-share`
+
+A pool that pays for a share has to be able to check it. `zmrig` answers that on
+stdin/stdout, one JSON line in and one out, with its log on stderr:
+
+```bash
+zmrig --verify-share < shares.jsonl > hashes.jsonl
+```
+
+In `light` mode (the default here, whatever `--mode` says elsewhere) it keeps a
+256 MB cache and rebuilds the dataset for every share: **22 ms** each, 46 shares
+a second on a 2 vCPU box. `--mode=fast` builds the 2 GiB dataset once instead —
+21 s of startup at 2 threads, 42 s at 1 — and then reads it: **2.9 ms** a share,
+350 a second. Same hashes, different memory.
+
+```bash
+zmrig --verify-share --mode=fast < shares.jsonl > hashes.jsonl
+```
+
+That is 2336 MB of RAM per process, so the miner checks before it takes it: with
+`--no-huge-pages`, or on a host where the free memory and free huge pages do not
+add up to 2336 MB, it says so and stays on the light cache instead of being
+killed halfway through the first share.
+
+```text
+warning --mode fast needs 2336 MB for the dataset and only 1269 MB can be
+        allocated here: using the light cache (about 9x slower per share)
+```
+
+`-t/--threads` inside this mode is how many shares are hashed at once, and it
+costs nothing extra in memory — the threads share the dataset, one VM each, the
+same way the miner itself runs. On the 2 vCPU test box, warm and on one seed:
+one thread verifies 46 shares/s in light mode and 349 in fast, two threads
+verify 87 and **626**. A pool should therefore prefer `VERIFIER_THREADS` over
+more verifier processes, and only run as many `fast` processes as the machine
+has RAM for; `pool/src/index.js --check` does that arithmetic and prints the
+number that fits.

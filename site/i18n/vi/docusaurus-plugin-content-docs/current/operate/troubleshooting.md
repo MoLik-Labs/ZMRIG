@@ -1,7 +1,7 @@
 ---
 title: Lỗi thường gặp
 description: Bảng triệu chứng → nguyên nhân cho những lỗi thật sự xảy ra, những bug đã sửa để bạn không phải gặp, và cần gửi gì khi báo lỗi.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
+image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 ---
 
 # Lỗi thường gặp
@@ -21,6 +21,8 @@ image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
 | API trả 401 | có cấu hình access token | gửi `Authorization: Bearer TOKEN` |
 | API không tới được từ máy khác | nó bind `127.0.0.1` theo thiết kế | đừng mở ra; dùng SSH tunnel |
 | `--tls-ca` không có tác dụng | file nằm trong `/tmp` mà unit dùng `PrivateTmp` | đặt ở `/etc/zmrig/tls-ca.pem` |
+| `hashing 41 % of the last minute: 35 s with no job` | pool đã mất, hoặc đang trong lúc nối lại | xem các dòng `connecting to` ngay trên đó; share chỉ còn đến từ job cuối cho tới khi pool trả lời |
+| dòng kết thúc ghi `55 % of 29 s: 14 s building a dataset` | bình thường với lần chạy ngắn: dataset đầu tiên chiếm 14–20 s đồng hồ | không cần làm gì; ở lần chạy dài tỉ lệ đó chỉ vài phần trăm, và `--dataset-cache` xoá nó đi sau mỗi lần đổi thuật toán |
 
 ## Những bug đã sửa, để bạn không phải gặp
 

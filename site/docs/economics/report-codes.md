@@ -1,7 +1,7 @@
 ---
 title: Report codes
 description: The ZMRIG1. format — what a machine measures, how to decode a code yourself, and why it contains no wallet or token.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-en.png
+image: https://molik-labs.github.io/ZMRIG/img/og-en.png
 ---
 
 # Report codes
@@ -44,6 +44,9 @@ format:
   "pw": 22,
   "pwsrc": "rapl",
   "hw": 66.8,
+  "tmax": 72,
+  "tc": 68.5,
+  "at": 7,
   "health": "ok",
   "pool": "gulf.moneroocean.stream:10001",
   "ts": 1793412000
@@ -59,7 +62,14 @@ format:
 | `up` | uptime in seconds |
 | `pw`, `pwsrc` | watts, and the source: `rapl`, `hwmon`, `user`, `none` |
 | `hw` | hashes per watt, when power is known, else `null` |
+| `tmax` | the `--max-temp` target, or `null` when no thermal policy is armed |
+| `tc` | the temperature the governor last acted on, or `null` |
+| `at` | threads currently allowed to hash — below `thr` while it is throttling |
 | `health` | the miner's view of its own income: `ok`, `warming`, `degraded`, `stalled`, `rejected` |
+
+`at` below `thr` is the one field a fleet dashboard cannot derive from
+hashrate: a throttled rig and a healthy rig at half load look identical from the
+pool side, and only one of them has a bearing on its way out.
 
 Nothing else is in it. **No wallet address, no pool password, no public IP, no
 hostname** beyond the worker name you chose yourself.

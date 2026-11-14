@@ -1,7 +1,7 @@
 ---
 title: Networks that only allow 443
 description: Cloudflare relays, SOCKS5 and HTTP proxies, --connect-to and pinned CAs, for VPS providers and office networks that block everything except HTTPS.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-en.png
+image: https://molik-labs.github.io/ZMRIG/img/og-en.png
 ---
 
 # Networks that only allow 443

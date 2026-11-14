@@ -99,10 +99,71 @@ case "$profile" in
     *)         fail "profile in config is '${profile}', expected free or watt" ;;
 esac
 
-if [ "$(json_get "${DIR1}/config.json" "donate-level")" = "1" ]; then
-    pass "donate-level is written as 1 (the documented developer fee)"
+if [ "$(json_get "${DIR1}/config.json" "donate-level")" = "3" ]; then
+    pass "donate-level is written as 3 (the documented developer fee)"
 else
-    fail "donate-level is $(json_get "${DIR1}/config.json" "donate-level"), expected 1"
+    fail "donate-level is $(json_get "${DIR1}/config.json" "donate-level"), expected 3"
+fi
+
+# --- the fee switch the documentation promises ----------------------------
+# "0 turns it off" is a promise about the tool, not only about the binary: the
+# value has to reach the file, or the operator is editing JSON by hand, which is
+# what the docs used to tell them to do.
+DIR_F0="${WORK}/etc-fee-off"
+if run_config "$DIR_F0" --engine=zmrig --pool=supportxmr.com:3333 --donate-level=0; then
+    if [ "$(json_get "${DIR_F0}/config.json" "donate-level")" = "0" ]; then
+        pass "--donate-level=0 writes donate-level 0"
+    else
+        fail "donate-level is $(json_get "${DIR_F0}/config.json" "donate-level"), expected 0"
+    fi
+else
+    fail "config refused --donate-level=0: $(tail -2 "${WORK}/log")"
+fi
+
+DIR_F5="${WORK}/etc-fee-five"
+run_config "$DIR_F5" --engine=zmrig --pool=supportxmr.com:3333 --donate-level 5
+if [ "$(json_get "${DIR_F5}/config.json" "donate-level")" = "5" ]; then
+    pass "--donate-level 5 (space form) writes 5"
+else
+    fail "the space form wrote '$(json_get "${DIR_F5}/config.json" "donate-level")'"
+fi
+
+# The miner accepts 0..10 and rejects 11; the installer must not write a config
+# the miner will refuse at boot.
+if run_config "${WORK}/etc-fee-bad" --engine=zmrig --pool=supportxmr.com:3333 --donate-level=11; then
+    fail "config accepted --donate-level=11, which the miner rejects"
+else
+    pass "config refuses --donate-level=11"
+fi
+if run_config "${WORK}/etc-fee-nan" --engine=zmrig --pool=supportxmr.com:3333 --donate-level=three; then
+    fail "config accepted --donate-level=three"
+else
+    pass "config refuses a fee that is not a number"
+fi
+
+# --- the thermal policy reaches the file the miner reads -------------------
+DIR_T="${WORK}/etc-thermal"
+run_config "$DIR_T" --engine=zmrig --pool=supportxmr.com:3333 --max-temp=70
+if [ "$(json_get "${DIR_T}/config.json" "max-temp")" = "70" ]; then
+    pass "--max-temp is written to config.json"
+else
+    fail "max-temp in config is '$(json_get "${DIR_T}/config.json" "max-temp")', expected 70"
+fi
+
+# A fresh installation has a safe thermal target even when the user does not
+# pass --max-temp explicitly.
+if [ "$(json_get "${DIR1}/config.json" "max-temp")" = "80" ]; then
+    pass "default config includes the safe 80 C thermal target"
+else
+    fail "default max-temp is '$(json_get "${DIR1}/config.json" "max-temp")', expected 80"
+fi
+
+DIR_NO_THERMAL="${WORK}/etc-no-thermal"
+run_config "$DIR_NO_THERMAL" --engine=zmrig --pool=supportxmr.com:3333 --no-thermal
+if [ "$(json_get "${DIR_NO_THERMAL}/config.json" "max-temp")" = "0" ]; then
+    pass "--no-thermal is an explicit opt-out in config"
+else
+    fail "--no-thermal produced '$(json_get "${DIR_NO_THERMAL}/config.json" "max-temp")', expected 0"
 fi
 
 # A thread count is written only when the search produced one.
@@ -156,6 +217,30 @@ if [ "$(json_get "${DIR5}/config.json" "health.restart")" = "false" ]; then
     pass "--no-health-restart is written as health.restart=false"
 else
     fail "--no-health-restart did not reach the config"
+fi
+
+# --- 6. the MSR preset is written as "auto" unless it was pinned --------
+# A config file travels: the same config.json copied to a laptop and to a VPS
+# must not promise a register write to a machine that cannot do it. `auto`
+# leaves the decision to the miner's probe; the two flags pin it.
+DIR6="${WORK}/etc-msr"
+run_config "$DIR6" --engine=zmrig --pool=supportxmr.com:3333
+if [ "$(json_get "${DIR6}/config.json" "randomx.msr")" = "auto" ]; then
+    pass "the MSR setting defaults to auto in the config"
+else
+    fail "the MSR setting is not auto by default (got '$(json_get "${DIR6}/config.json" "randomx.msr")')"
+fi
+run_config "${WORK}/etc-msr-on" --engine=zmrig --pool=supportxmr.com:3333 --msr
+if [ "$(json_get "${WORK}/etc-msr-on/config.json" "randomx.msr")" = "true" ]; then
+    pass "--msr is written as randomx.msr=true"
+else
+    fail "--msr did not reach the config"
+fi
+run_config "${WORK}/etc-msr-off" --engine=zmrig --pool=supportxmr.com:3333 --no-msr
+if [ "$(json_get "${WORK}/etc-msr-off/config.json" "randomx.msr")" = "false" ]; then
+    pass "--no-msr is written as randomx.msr=false"
+else
+    fail "--no-msr did not reach the config"
 fi
 
 echo

@@ -8,6 +8,13 @@
 // Every number here is a BigInt in atomic units (1e-12 XMR). Floats are only
 // used for display, because rounding a payout down to the last piconero must
 // never depend on the platform's floating point.
+//
+// A rig logs in as `wallet.rig` or `wallet/rig`. The wallet is the account and
+// the rig is a label on it: fifty machines pointed at the same address are one
+// balance, one PPLNS weight and one payout, and the rig names are only how the
+// operator tells them apart. Nothing is ever keyed by `wallet.rig`, because two
+// rigs sharing a wallet sitting in two buckets would be paid twice for the same
+// window and neither bucket would reach the minimum payout on its own.
 
 'use strict';
 
@@ -27,8 +34,21 @@ class Ledger {
     this.auditFile = options.auditFile || null;
     this.log = options.logger || (() => {});
 
-    this.workers = new Map();   // address -> { pending, paid, shares, lastSeen, worker }
-    this.shares = [];           // { ts, difficulty(BigInt), address }
+    this.workers = new Map();   // address -> { pending, paid, shares, lastSeen, worker, rigs }
+    // A rig name is free text from a public connection, so the per-wallet rig
+    // map is capped: a miner that changes its name on every reconnect must not
+    // be able to grow it without limit.
+    this.maxRigs = Number(options.maxRigs ?? 64);
+    // { ts, difficulty(BigInt), address }, oldest first. The live window is
+    // `shares[head..]`: expiring a share moves `head` instead of splicing the
+    // array, because `splice(0, n)` memmoves every remaining entry and this is
+    // the path every rig's every share takes. Measured on the test host with a
+    // full hour (200 000 shares) in the window: 55.1 us per share with the
+    // splice against 1.2 us without, and the cost was flat in the number of
+    // shares kept. `head` is folded back into the array by `compactShares()`
+    // once it is both large and worth the copy.
+    this.shares = [];
+    this.head = 0;
     this.blocks = [];           // found blocks and how they were split
     this.payouts = [];          // transfer history
     this.totals = {
@@ -53,12 +73,18 @@ class Ledger {
       const raw = JSON.parse(fs.readFileSync(this.stateFile, 'utf8'));
 
       for (const [address, entry] of Object.entries(raw.workers || {})) {
+        const rigs = {};
+        for (const [name, rig] of Object.entries(entry.rigs || {})) {
+          rigs[name] = { shares: Number(rig.shares || 0), lastSeen: Number(rig.lastSeen || 0) };
+        }
+
         this.workers.set(address, {
           pending: BigInt(entry.pending || '0'),
           paid: BigInt(entry.paid || '0'),
           shares: Number(entry.shares || 0),
           lastSeen: Number(entry.lastSeen || 0),
           worker: entry.worker || '',
+          rigs,
         });
       }
 
@@ -89,6 +115,7 @@ class Ledger {
         shares: entry.shares,
         lastSeen: entry.lastSeen,
         worker: entry.worker,
+        rigs: entry.rigs || {},
       };
     }
 
@@ -109,8 +136,19 @@ class Ledger {
     const dir = path.dirname(this.stateFile);
     if (dir && dir !== '.') fs.mkdirSync(dir, { recursive: true });
 
+    // Compact, not indented. This runs on the pool's main thread - the one that
+    // parses every rig's share - once a minute, and pretty-printing is not
+    // free: with 20 000 workers, measured on the test host, `JSON.stringify`
+    // takes 34.3 ms indented against 18.4 ms compact, the write 18.6 ms against
+    // 10.3 ms, and the file 7.0 MB against 4.8 MB (which is also the cost of
+    // reading it back at startup). 53 ms against 29 ms of stall, per save.
+    //
+    // The state file is machine data, not a configuration file: it is written
+    // by this method and read by `restore()`. `jq . state.json` is the way to
+    // read it as a human, and that costs the operator one command instead of
+    // the pool fifty milliseconds an hour.
     const tmp = `${this.stateFile}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(payload, null, 2));
+    fs.writeFileSync(tmp, JSON.stringify(payload));
     fs.renameSync(tmp, this.stateFile); // atomic on POSIX
   }
 
@@ -129,17 +167,39 @@ class Ledger {
 
   // --- shares -----------------------------------------------------------
 
+  /**
+   * The one bucket a wallet owns, created on first sight.
+   *
+   * `address` must already be a bare wallet (splitLogin does the splitting), so
+   * every rig behind the same wallet lands here. `workerName` only labels it.
+   */
   workerFor(address, workerName) {
     let entry = this.workers.get(address);
 
     if (!entry) {
-      entry = { pending: 0n, paid: 0n, shares: 0, lastSeen: 0, worker: workerName || '' };
+      entry = { pending: 0n, paid: 0n, shares: 0, lastSeen: 0, worker: '', rigs: {} };
       this.workers.set(address, entry);
     }
 
-    if (workerName) entry.worker = workerName;
+    if (!entry.rigs) entry.rigs = {};
+
+    if (workerName) {
+      entry.worker = workerName;
+      if (!entry.rigs[workerName]) entry.rigs[workerName] = { shares: 0, lastSeen: 0 };
+    }
 
     return entry;
+  }
+
+  /** Forgets the least recently seen rig when a wallet has too many labels. */
+  trimRigs(entry) {
+    const names = Object.keys(entry.rigs || {});
+    if (names.length <= this.maxRigs) return;
+
+    names
+      .sort((a, b) => (entry.rigs[a].lastSeen || 0) - (entry.rigs[b].lastSeen || 0))
+      .slice(0, names.length - this.maxRigs)
+      .forEach((name) => { delete entry.rigs[name]; });
   }
 
   /** Records an accepted share. Returns the worker entry. */
@@ -151,18 +211,45 @@ class Ledger {
     entry.shares += 1;
     entry.lastSeen = ts;
 
-    this.shares.push({ ts, difficulty: diff, address });
+    // The rig is kept on the share, not only in the counter: per-rig hashrate
+    // over the window has to come from the same records the payout does, or the
+    // two numbers disagree and neither is worth reading.
+    if (worker) {
+      const rig = entry.rigs[worker] || { shares: 0, lastSeen: 0 };
+      rig.shares += 1;
+      rig.lastSeen = ts;
+      entry.rigs[worker] = rig;
+      this.trimRigs(entry);
+    }
+
+    this.shares.push({ ts, difficulty: diff, address, worker });
     this.totals.shares += 1;
     this.totals.difficultY += diff;
 
-    // Keep the array bounded: drop anything older than the window, but never
-    // less than a minute of history.
+    // Keep the window bounded: drop anything older than the window, but never
+    // less than a minute of history. Advancing `head` is O(1) here - each entry
+    // is looked at once in its life, by the loop that skips it - and the
+    // occasional compaction is amortised over at least 4 096 shares.
     const cutoff = ts - Math.max(this.windowSeconds, 60);
-    let drop = 0;
-    while (drop < this.shares.length && this.shares[drop].ts < cutoff) drop += 1;
-    if (drop > 0) this.shares.splice(0, drop);
+    while (this.head < this.shares.length && this.shares[this.head].ts < cutoff) this.head += 1;
+    this.compactShares();
 
     return entry;
+  }
+
+  /** Fold the expired prefix away. Called from `addShare`, so it costs one copy
+   *  of the live window and then pays for itself over at least 4 096 shares.
+   *
+   *  The `65536` is the other half of the trade: with a window that is full for
+   *  an hour, `head` grows by one per share and would otherwise only be folded
+   *  back when half the array was stale, keeping megabytes of dead entries
+   *  alive. Copying 65 536 entries costs about 1 ms, once. */
+  compactShares() {
+    if (this.head < 4096) return;
+    if (this.head * 2 < this.shares.length && this.head < 65536) return;
+
+    this.shares = this.shares.slice(this.head);
+    this.head = 0;
   }
 
   windowWeights(ts = Math.floor(Date.now() / 1000)) {
@@ -170,7 +257,8 @@ class Ledger {
     const weights = new Map();
     let total = 0n;
 
-    for (const share of this.shares) {
+    for (let i = this.head; i < this.shares.length; i++) {
+      const share = this.shares[i];
       if (share.ts < cutoff) continue;
       weights.set(share.address, (weights.get(share.address) || 0n) + share.difficulty);
       total += share.difficulty;
@@ -183,6 +271,21 @@ class Ledger {
    *  The floor on the span matters: one lucky share in the first second would
    *  otherwise read as hundreds of GH/s. 120 s is short enough to react, long
    *  enough to be honest. */
+  /**
+   * Seconds the estimate covers: from the oldest share still in the list, but
+   * never less than two minutes (a burst of shares in one second is not a
+   * 600 MB/s rig) and never more than the window.
+   *
+   * One function, because the pool rate and every per-wallet and per-rig rate
+   * are derived from it: if they each guessed their own span, a wallet with
+   * three rigs would not add up to the pool.
+   */
+  windowSpan(ts = Math.floor(Date.now() / 1000)) {
+    const oldest = this.shares[this.head]?.ts ?? ts;
+
+    return Math.min(Math.max(ts - oldest, 120), Math.max(this.windowSeconds, 120));
+  }
+
   estimateHashrate(ts = Math.floor(Date.now() / 1000)) {
     const { total } = this.windowWeights(ts);
     if (total === 0n) return 0;
@@ -191,10 +294,73 @@ class Ledger {
     // `total` carries difficulty with six decimals. Multiplying by 2^32 here
     // reported a 100 H/s miner as 100 GH/s.
     const hashes = Number(total) / 1e6;
-    const oldest = this.shares[0]?.ts ?? ts;
-    const span = Math.min(Math.max(ts - oldest, 120), Math.max(this.windowSeconds, 120));
 
-    return hashes / span;
+    return hashes / this.windowSpan(ts);
+  }
+
+  /**
+   * Everything one wallet owns, summed across every rig behind it.
+   *
+   * This is the answer to "I have forty machines on one address, what is mine?"
+   * The balance is one number because the bucket is one bucket; the rig list is
+   * how the operator finds the machine that went quiet.
+   */
+  walletSummary(login, ts = Math.floor(Date.now() / 1000)) {
+    const { address } = splitLogin(login);
+    const entry = this.workers.get(address);
+    if (!entry) return null;
+
+    const cutoff = ts - this.windowSeconds;
+    const span = this.windowSpan(ts);
+    const rigs = new Map();
+
+    // Rigs that have been quiet long enough to fall out of the window still get
+    // listed with a zero rate: a machine that stopped is the one to look at.
+    for (const [name, rig] of Object.entries(entry.rigs || {})) {
+      rigs.set(name, { name: name || 'default', difficulty: 0n, shares: 0, lastSeen: Number(rig.lastSeen || 0) });
+    }
+
+    let total = 0n;
+    let sharesInWindow = 0;
+
+    for (let i = this.head; i < this.shares.length; i++) {
+      const share = this.shares[i];
+      if (share.address !== address || share.ts < cutoff) continue;
+
+      const name = share.worker || '';
+      const rig = rigs.get(name) || { name: name || 'default', difficulty: 0n, shares: 0, lastSeen: 0 };
+      rig.difficulty += share.difficulty;
+      rig.shares += 1;
+      if (share.ts > rig.lastSeen) rig.lastSeen = share.ts;
+      rigs.set(name, rig);
+
+      total += share.difficulty;
+      sharesInWindow += 1;
+    }
+
+    const poolTotal = this.windowWeights(ts).total;
+    const list = [...rigs.values()]
+      .filter((rig) => rig.shares > 0 || rig.lastSeen > 0)
+      .map((rig) => ({
+        name: rig.name,
+        shares: rig.shares,
+        hashrate: Number(rig.difficulty) / 1e6 / span,
+        lastSeen: rig.lastSeen,
+      }))
+      .sort((a, b) => b.hashrate - a.hashrate || b.lastSeen - a.lastSeen);
+
+    return {
+      address,
+      pending: entry.pending.toString(),
+      paid: entry.paid.toString(),
+      shares: entry.shares,
+      sharesInWindow,
+      rigs: list,
+      rigCount: list.length,
+      hashrate: Number(total) / 1e6 / span,
+      sharePercent: poolTotal > 0n ? Number((total * 10000n) / poolTotal) / 100 : 0,
+      lastSeen: entry.lastSeen,
+    };
   }
 
   // --- blocks -----------------------------------------------------------
@@ -220,7 +386,7 @@ class Ledger {
       fee: '0',
       feeXmr: '0.000000000000',
       operatorAddress: this.operatorAddress,
-      shares: this.shares.length,
+      shares: this.shares.length - this.head,
       distributed: [],
       leftover: '0',
     };
@@ -333,16 +499,59 @@ class Ledger {
 
   // --- reporting --------------------------------------------------------
 
+  /** `stats()` for the status page, the JSON API and `/metrics` - the three
+   *  places that ask for a number a human reads, as often as a browser or a
+   *  Prometheus scraper feels like it.
+   *
+   *  The work is linear in the window (200 000 shares is 21.6 ms on the test
+   *  host) and nothing in it changes between two shares except `now`, so the
+   *  answer is memoised on those: the share count, the expired prefix and the
+   *  second. A scrape loop at 1 Hz therefore pays for one walk, not one per
+   *  endpoint, and a rig sending a share invalidates it by changing the count.
+   *  Callers get a shallow copy: the top list is an array they could otherwise
+   *  sort in place. */
   stats() {
     const now = Math.floor(Date.now() / 1000);
-    const { total } = this.windowWeights(now);
-    const top = [...this.windowWeights(now).weights.entries()]
+    const key = `${this.shares.length}:${this.head}:${now}`;
+
+    if (this.statsCache && this.statsCache.key === key) {
+      return { ...this.statsCache.value, top: this.statsCache.value.top.slice() };
+    }
+
+    const value = this.computeStats(now);
+    this.statsCache = { key, value };
+
+    return { ...value, top: value.top.slice() };
+  }
+
+  computeStats(now) {
+    // One pass, not two: `windowWeights` walks the whole window with a Map and
+    // BigInt additions, and calling it twice for one JSON response was pure
+    // duplication on the status page's path.
+    const { weights, total } = this.windowWeights(now);
+    const top = [...weights.entries()]
       .sort((a, b) => (a[1] === b[1] ? 0 : a[1] > b[1] ? -1 : 1))
       .slice(0, 20)
       .map(([address, weight]) => ({
         address,
         sharePercent: total > 0n ? Number((weight * 10000n) / total) / 100 : 0,
+        rigs: Object.keys(this.workers.get(address)?.rigs || {}).length,
       }));
+
+    // The window statistics the status page shows, counted in the same walk.
+    // `activeWorkers` is miners seen in the last five minutes, which is not the
+    // same question as "in the window" - a rig that stopped an hour ago still
+    // holds its share of the window but is not active.
+    const activeCutoff = now - 300;
+    const windowCutoff = now - this.windowSeconds;
+    const active = new Set();
+    let sharesInWindow = 0;
+
+    for (let i = this.head; i < this.shares.length; i++) {
+      const share = this.shares[i];
+      if (share.ts > activeCutoff) active.add(share.address);
+      if (share.ts > windowCutoff) sharesInWindow += 1;
+    }
 
     return {
       feePercent: this.feePercent,
@@ -350,10 +559,13 @@ class Ledger {
       windowSeconds: this.windowSeconds,
       hashrate: this.estimateHashrate(now),
       workers: this.workers.size,
-      activeWorkers: this.shares.filter((s) => s.ts > now - 300).length > 0
-        ? new Set(this.shares.filter((s) => s.ts > now - 300).map((s) => s.address)).size
-        : 0,
-      sharesInWindow: this.shares.filter((s) => s.ts > now - this.windowSeconds).length,
+      // Wallets are the accounts; rigs are the machines pointed at them.
+      rigs: [...this.workers.values()].reduce((sum, entry) => sum + Object.keys(entry.rigs || {}).length, 0),
+      // One pass instead of three: this runs on every status request and every
+      // /metrics scrape, and `filter` allocates an array the size of the window
+      // for a number.
+      activeWorkers: active.size,
+      sharesInWindow,
       blocks: this.totals.blocks,
       rewardXmr: formatXmr(this.totals.rewardAtomic),
       feeXmr: formatXmr(this.totals.feeAtomic),

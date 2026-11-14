@@ -98,14 +98,14 @@ else
     fail "watt profile changed powersave to '$(gov "${WORK}/c")'"
 fi
 
-# --- auto: the battery decides ------------------------------------------
+# --- auto: throughput-first, regardless of battery ----------------------
 make_tree "${WORK}/d" schedutil
 printf 'Discharging\n' > "${WORK}/d/ps/BAT0/status"
 run_tune "${WORK}/d"
-if [ "$(gov "${WORK}/d")" = "schedutil" ]; then
-    pass "auto on battery behaves like watt"
+if [ "$(gov "${WORK}/d")" = "performance" ]; then
+    pass "auto on battery remains throughput-first like free"
 else
-    fail "auto on battery set the governor to '$(gov "${WORK}/d")'"
+    fail "auto on battery unexpectedly changed governor to '$(gov "${WORK}/d")'"
 fi
 
 make_tree "${WORK}/e" schedutil

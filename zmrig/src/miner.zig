@@ -17,7 +17,9 @@ const memory_mod = @import("memory.zig");
 const hugepages_mod = @import("hugepages.zig");
 const stratum = @import("stratum.zig");
 
-pub const max_threads = 128;
+/// One number, in the module that has to police it (`-t`) and the one that has
+/// to allocate for it (this one).
+pub const max_threads = options.max_threads;
 
 /// XMRig reserves nonce windows of 32768 per thread, we do the same.
 const nonce_chunk: u32 = 32768;
@@ -196,6 +198,15 @@ pub const Shared = struct {
     next_nonce: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     running: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
     paused: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// How many workers may hash right now; 0 means "all of them".
+    ///
+    /// This is the thermal governor's handle. Pausing every worker and
+    /// resuming later would be simpler, but a paused miner produces nothing at
+    /// all while a three-thread miner on a hot box still produces most of what
+    /// a four-thread one would - the fourth thread is what costs the degrees.
+    /// A parked worker keeps its VM and its place in the dataset, so it costs
+    /// nothing to park it for a minute and wake it up.
+    active_threads: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
     bench_limit: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     hashes: [max_threads]Counter = [_]Counter{.{}} ** max_threads,
     thread_count: usize = 0,
@@ -230,6 +241,17 @@ pub const Shared = struct {
         return @max(self.thread_count, @min(hw, max_threads));
     }
 
+    /// Threads allowed to hash right now, resolved against the thread count.
+    pub fn activeCount(self: *const Shared) usize {
+        const limit = self.active_threads.load(.acquire);
+
+        return if (limit == 0 or limit > self.thread_count) self.thread_count else limit;
+    }
+
+    pub fn setActiveThreads(self: *Shared, n: usize) void {
+        self.active_threads.store(n, .release);
+    }
+
     pub fn pause(self: *Shared) void {
         self.paused.store(true, .release);
     }
@@ -255,6 +277,25 @@ fn randomNonceBase() u32 {
     return std.mem.readInt(u32, &bytes, .little);
 }
 
+/// How many retired engines may stay mapped. Two covers the shape a
+/// multi-algorithm pool actually produces - the coin it is on and the one it
+/// came from - and a third would only be paid for in RAM.
+pub const max_retained = 2;
+
+/// An engine that is not hashing but is still mapped, with the seed it holds.
+pub const Retained = struct {
+    wrapped: api.Wrapped,
+    seed: [32]u8 = [_]u8{0} ** 32,
+    has_seed: bool = false,
+    at_ms: i64 = 0,
+    /// What this engine's own dataset cost to build, in ms. Kept per engine
+    /// rather than read from `last_seed_ms` at adopt time: on a pool that
+    /// rotates, the last build is usually the *other* algorithm's (374 ms for
+    /// panthera beside 16 491 ms for rx/0), and quoting the wrong one turns a
+    /// measurement into a boast.
+    build_ms: u64 = 0,
+};
+
 pub const Engine = struct {
     logger: *log.Logger,
     wrapped: ?api.Wrapped = null,
@@ -267,6 +308,43 @@ pub const Engine = struct {
     /// same problem is how a reader stops trusting the log.
     advise_hugepages: bool = true,
 
+    /// Engines kept mapped after an algorithm switch.
+    ///
+    /// A pool that moves a rig between RandomX forks - MoneroOcean picks the
+    /// coin per job - used to pay a full dataset rebuild every time it moved
+    /// back: 20.0 s of zero hashrate on two threads, measured end to end
+    /// through a fake pool (rx/0 -> panthera -> rx/0), for a dataset that had
+    /// been in memory a minute earlier. Keeping the old engine mapped makes
+    /// the return cost nothing.
+    ///
+    /// It is not free - a retained engine is memory the next one cannot use -
+    /// so nothing is retained unless the kernel can hand out the new mapping
+    /// on top of it, with the usual 512 MB of slack. A 4 GB box therefore
+    /// keeps Panthera's 192 MB and not Monero's 2336 MB, and a 2 GB container
+    /// keeps nothing at all: exactly the old behaviour, decided per switch
+    /// rather than by a constant.
+    retained: [max_retained]?Retained = [_]?Retained{null} ** max_retained,
+    retained_bytes: u64 = 0,
+    /// `false` for `--no-dataset-cache`, which is also what `--mode=light`
+    /// effectively gets: an engine without a dataset is cheap to rebuild.
+    cache_enabled: bool = true,
+    /// Cap on retained bytes; 0 means "whatever the kernel allows".
+    cache_limit_bytes: u64 = 0,
+    cache_hits: u64 = 0,
+    /// Measured cost of the initialisations this session avoided, in ms, so
+    /// the log can say what the cache was worth instead of claiming a win.
+    cache_saved_ms: u64 = 0,
+    last_seed_ms: u64 = 0,
+    /// Every initialisation this process has done, in ms. The monitor reads it
+    /// once a second to tell "the rig is idle" from "the rig is building a
+    /// dataset", which is the difference between a fault and the cost of a
+    /// seed change.
+    total_init_ms: u64 = 0,
+    /// True while `seedNow` is inside the engine. Written from the mining
+    /// thread and read from the monitor thread, so it is atomic; the value in
+    /// between is a whole second of attribution either way.
+    building: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
     const Self = @This();
 
     pub fn init(logger: *log.Logger, flags: api.EngineFlags) Self {
@@ -274,23 +352,190 @@ pub const Engine = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        self.dropRetained();
+
         if (self.wrapped) |*wrapped| wrapped.destroy();
         self.wrapped = null;
         self.algo = null;
         self.has_seed = false;
     }
 
-    /// Creates (or recreates) the engine when the algorithm changes. A pool can
-    /// switch us between RandomX forks at any time and each fork has its own
-    /// cache/dataset configuration.
-    pub fn ensure(self: *Self, algo: api.Algo) !void {
-        if (self.wrapped != null and self.algo != null and self.algo.? == algo) return;
-
-        if (self.wrapped != null) {
-            self.logger.info("switching algorithm to {s}, re-initialising the dataset", .{algo.label()});
-            self.deinit();
+    /// Destroys every retained engine. Called on shutdown and when a new
+    /// engine needs the room more than the cache does.
+    pub fn dropRetained(self: *Self) void {
+        for (&self.retained) |*slot| {
+            if (slot.*) |*r| {
+                r.wrapped.destroy();
+                slot.* = null;
+            }
         }
 
+        self.retained_bytes = 0;
+    }
+
+    fn freeSlot(self: *Self) ?usize {
+        for (self.retained, 0..) |slot, i| {
+            if (slot == null) return i;
+        }
+
+        return null;
+    }
+
+    /// May `bytes` stay mapped while another `extra_live` bytes are mapped?
+    ///
+    /// `bytes` is *already* mapped - it is the engine being retired - so it is
+    /// not part of what the kernel has to find: only `extra_live` is. Getting
+    /// this backwards is how the first version of this cache refused to keep a
+    /// 2336 MB dataset that was in memory at that moment (the check subtracted
+    /// it twice and asked for 3 GB of free RAM on a 3.9 GB box).
+    /// `extra_live` is 0 when the engine that replaces it is already mapped
+    /// too, which is the adopt path: nothing new is allocated at all.
+    fn mayRetain(self: *Self, bytes: u64, extra_live: u64) bool {
+        return retentionFits(bytes, extra_live, availableMemory(self.flags.huge_pages),
+            memory_mod.slack_bytes, self.cache_enabled, self.cache_limit_bytes, self.retained_bytes);
+    }
+
+    /// Keeps `wrapped` for a later switch back, or destroys it when it cannot
+    /// be afforded. `live_bytes` is the size of the engine that will hash next.
+    fn keep(self: *Self, wrapped: api.Wrapped, live_bytes: u64) void {
+        var w = wrapped;
+
+        // An engine with no dataset built is a malloc, not 20 seconds: keeping
+        // it would spend memory to save nothing.
+        if (!self.has_seed or !self.cache_enabled) {
+            w.destroy();
+
+            return;
+        }
+
+        const bytes = w.totalMemory();
+
+        if (!self.mayRetain(bytes, live_bytes)) {
+            self.logger.debug("not keeping the {s} dataset for reuse: {d} MB would not fit beside the next one ({d} MB free)", .{
+                w.algo.label(), bytes / (1024 * 1024), availableMemory(self.flags.huge_pages) / (1024 * 1024),
+            });
+            w.destroy();
+
+            return;
+        }
+
+        const slot = self.freeSlot() orelse blk: {
+            // Full: the oldest entry is the one least likely to be asked for.
+            var oldest: usize = 0;
+            for (self.retained, 0..) |r, i| {
+                const other = r orelse continue;
+                if (other.at_ms < (self.retained[oldest] orelse other).at_ms) oldest = i;
+            }
+
+            break :blk oldest;
+        };
+
+        if (self.retained[slot]) |*old| {
+            self.retained_bytes -= old.wrapped.totalMemory();
+            old.wrapped.destroy();
+            self.retained[slot] = null;
+        }
+
+        self.retained[slot] = .{
+            .wrapped = w,
+            .seed = self.seed,
+            .has_seed = self.has_seed,
+            .at_ms = nowMs(),
+            .build_ms = self.last_seed_ms,
+        };
+        self.retained_bytes += bytes;
+
+        self.logger.info("keeping the {s} dataset mapped ({d} MB) so a switch back costs nothing", .{ w.algo.label(), bytes / (1024 * 1024) });
+    }
+
+    /// Takes a retained engine that already holds this algorithm and seed.
+    /// Returns true when the switch needed no initialisation at all.
+    fn adopt(self: *Self, algo: api.Algo, seed_value: [32]u8, has_seed: bool) bool {
+        for (self.retained, 0..) |slot, i| {
+            const r = slot orelse continue;
+            if (r.wrapped.algo != algo) continue;
+            if (has_seed and (!r.has_seed or !std.mem.eql(u8, &r.seed, &seed_value))) continue;
+
+            const age_ms = nowMs() - r.at_ms;
+
+            self.retained[i] = null;
+            self.retained_bytes -= r.wrapped.totalMemory();
+
+            // The engine being replaced goes into the cache slot it just
+            // vacated, subject to the same budget check: on a small box this
+            // is where the swap is refused and the old engine is freed.
+            // Nothing new is mapped by an adoption, so the displaced engine
+            // costs the cache nothing but its own bytes (checked against the
+            // cap, not against free memory).
+            if (self.wrapped) |current| self.keep(current, 0);
+
+            self.wrapped = r.wrapped;
+            self.algo = algo;
+            self.seed = r.seed;
+            self.has_seed = r.has_seed;
+            self.cache_hits += 1;
+            self.cache_saved_ms += r.build_ms;
+
+            self.logger.info("switched to {s} without re-initialising: its dataset was still mapped ({d} s old, built in {d} ms, {d} initialisation(s) saved), hash engine ready immediately", .{
+                algo.label(), @divTrunc(age_ms, 1000), r.build_ms, self.cache_hits,
+            });
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /// Switches to `algo`, reusing a retained engine when one matches, and
+    /// otherwise building a new one. Callers have already stopped the workers:
+    /// a worker's VM points into the engine that is about to be replaced.
+    pub fn switchTo(self: *Self, algo: api.Algo, seed_value: [32]u8, has_seed: bool, threads: usize) !void {
+        if (self.adopt(algo, seed_value, has_seed)) return;
+
+        // A retained engine that cannot be reused is memory the new one needs:
+        // dropping it here is what keeps a rig out of light mode when the pool
+        // hands it a second Monero-sized variant.
+        const need = algo.memoryBytes(self.flags.full_memory);
+        if (self.retained_bytes != 0 and availableMemory(self.flags.huge_pages) < need + memory_mod.slack_bytes) {
+            self.logger.debug("dropping {d} MB of retained datasets to make room for {s}", .{ self.retained_bytes / (1024 * 1024), algo.label() });
+            self.dropRetained();
+        }
+
+        if (self.wrapped) |current| {
+            self.logger.info("switching algorithm to {s}, re-initialising the dataset", .{algo.label()});
+            self.wrapped = null;
+            self.algo = null;
+            self.keep(current, need);
+        }
+
+        try self.create(algo);
+
+        if (has_seed) try self.seedNow(seed_value, threads);
+    }
+
+    /// What a job needs from the engine, so the caller knows whether anything
+    /// has to happen at all - and whether the threads have to be restarted.
+    pub const Change = enum {
+        /// Same algorithm, same seed: publish the job and keep hashing.
+        none,
+        /// Same algorithm, new seed: rebuild the cache in place.
+        seed,
+        /// Different algorithm: switch engines (possibly for free).
+        engine,
+    };
+
+    pub fn plan(self: *const Self, algo_value: api.Algo, seed_value: [32]u8, has_seed: bool) Change {
+        if (self.wrapped == null or self.algo == null) return .engine;
+        if (self.algo.? != algo_value) return .engine;
+
+        return if (self.needsSeed(seed_value, has_seed)) .seed else .none;
+    }
+
+    /// Creates the engine for `algo`. A pool can switch us between RandomX
+    /// forks at any time and each fork has its own cache/dataset
+    /// configuration; `switchTo` is what decides whether an existing engine
+    /// can be reused first.
+    pub fn create(self: *Self, algo: api.Algo) !void {
         var flags = self.flags;
         const wrapped = api.Wrapped.create(algo, flags) catch |e| blk: {
             if (flags.full_memory) {
@@ -319,10 +564,21 @@ pub const Engine = struct {
         // Say what the kernel actually gave us. "huge pages 2336 MB" while
         // running on 4 KiB pages is worse than no report at all: it hides a
         // measured 24% hashrate loss on the validation host.
+        // A 1 GiB mapping and a 2 MiB mapping both report "explicit", and they
+        // are not the same thing: 2080 MB of dataset is 1 040 TLB entries at
+        // 2 MiB and one at 1 GiB. The page size is the useful half of the line.
+        const page_kb = wrapped.hugePageKb();
+        const huge_kind = if (page_kb >= 1024 * 1024)
+            "explicit, 1 GiB pages"
+        else if (page_kb != 0)
+            "explicit, 2 MiB pages"
+        else
+            "explicit";
+
         const huge_text = if (huge_total == 0)
             std.fmt.bufPrint(&huge_buf, "off", .{}) catch "off"
         else if (huge_explicit == huge_total)
-            std.fmt.bufPrint(&huge_buf, "{d} MB (explicit)", .{huge_explicit / (1024 * 1024)}) catch "?"
+            std.fmt.bufPrint(&huge_buf, "{d} MB ({s})", .{ huge_explicit / (1024 * 1024), huge_kind }) catch "?"
         else if (huge_explicit == 0)
             std.fmt.bufPrint(&huge_buf, "0 MB (THP fallback)", .{}) catch "?"
         else
@@ -340,14 +596,17 @@ pub const Engine = struct {
             // huge pages are off as well. With THP in `madvise` (or `always`)
             // the mapping still comes back in 2 MiB pages, and the difference
             // between that and the reserved pool is small; the difference
-            // between a 2 MiB page and a 4 KiB page is not - 800.6 H/s against
-            // 614.8 H/s on the validation host, measured by switching the
-            // MADV_HUGEPAGE hint off rather than by believing the manual.
+            // between a 2 MiB page and a 4 KiB page is not - 1088-1095 H/s
+            // against 892-900 H/s on the validation host, measured 2026-11-07
+            // by alternating THP on and off in one session, because that box
+            // moves by 20 % between hours and a back-to-back pair is worth
+            // nothing. An earlier back-to-back pair read 800.6 against 614.8
+            // and put this warning at 28 %.
             switch (hugepages_mod.thp()) {
                 .never, .unknown => {
                     const need_pages = (huge_total + (2 * 1024 * 1024) - 1) / (2 * 1024 * 1024);
 
-                    self.logger.warn("transparent huge pages are {s} and no huge pages are reserved: RandomX will read 4 KiB pages, ~28% slower (measured 614.8 H/s against 800.6 H/s on 2 vCPU)", .{hugepages_mod.thp().label()});
+                    self.logger.warn("transparent huge pages are {s} and no huge pages are reserved: RandomX will read 4 KiB pages, ~18% slower (measured 892-900 H/s against 1088-1095 H/s, alternating, on 2 vCPU; and 771 against 936 on the CI sandbox)", .{hugepages_mod.thp().label()});
                     self.logger.warn("fix it once as root: echo {d} > /proc/sys/vm/nr_hugepages, or boot with transparent_hugepage=madvise (sudo zmrig-tune does both)", .{need_pages});
                 },
                 .always, .madvise => {},
@@ -359,6 +618,13 @@ pub const Engine = struct {
         self.has_seed = false;
     }
 
+    /// Creates the engine if there is none. Used at startup, before any job.
+    pub fn ensure(self: *Self, algo: api.Algo) !void {
+        if (self.wrapped != null and self.algo != null and self.algo.? == algo) return;
+
+        try self.switchTo(algo, [_]u8{0} ** 32, false, 1);
+    }
+
     /// True when `algo` would need a different engine (not created yet, or a
     /// different RandomX variant). Rebuilding while workers hold VMs from the
     /// old engine is a use-after-free, so callers stop the threads first.
@@ -368,7 +634,7 @@ pub const Engine = struct {
         return self.algo.? != algo_value;
     }
 
-    pub fn needsSeed(self: *Self, seed_value: [32]u8, has_seed: bool) bool {
+    pub fn needsSeed(self: *const Self, seed_value: [32]u8, has_seed: bool) bool {
         if (!has_seed) return false;
         if (!self.has_seed) return true;
 
@@ -380,10 +646,15 @@ pub const Engine = struct {
             const started = nowMs();
 
             self.logger.info("initialising the dataset ({d} threads)", .{threads});
+            self.building.store(true, .release);
+            defer self.building.store(false, .release);
+
             try wrapped.seed(&seed_value, threads);
 
             self.seed = seed_value;
             self.has_seed = true;
+            self.last_seed_ms = @intCast(@max(nowMs() - started, 0));
+            self.total_init_ms += self.last_seed_ms;
 
             self.logger.info("dataset ready in {d} ms", .{nowMs() - started});
 
@@ -425,6 +696,14 @@ pub const Engine = struct {
             share,
             total / (1024 * 1024),
         });
+    }
+
+    /// Re-asserts this engine's algorithm as the process-wide RandomX
+    /// configuration. Required before the workers start, because an engine that
+    /// was retained across a switch is not the one that was created last - and
+    /// the configuration is global, not per engine.
+    pub fn activate(self: *Self) void {
+        if (self.wrapped) |*wrapped| wrapped.activate();
     }
 
     pub fn createVm(self: *Self) !*api.Vm {
@@ -500,6 +779,137 @@ pub const Stats = struct {
     }
 };
 
+/// Where the wall clock went.
+///
+/// The hashrate line answers "how fast am I hashing" and says nothing about
+/// "how much of the last hour was I hashing at all". Those are different
+/// numbers, and the second one decides the payout: a rig that hashes at
+/// 1 000 H/s for 60 % of the day earns 60 % of what the same rig earns at
+/// 100 %, and a healthy-looking speed line hides it perfectly.
+///
+/// The monitor thread already samples the hash counter once a second. This adds
+/// one question to that sample - did the number move, and if not, why not - and
+/// keeps the answer for both the exit summary and the "this rig is only hashing
+/// half the time" warning.
+pub const Duty = struct {
+    /// One sample per second, most recent last. 120 s covers the minute a
+    /// person looks at, with enough margin to survive a couple of missed ticks.
+    const window = 120;
+
+    pub const Sample = enum(u2) {
+        /// Nothing was hashing and nothing explains it: no job yet, the pool is
+        /// gone, a reconnect is in flight.
+        idle = 0,
+        hashing = 1,
+        /// The engine was building a dataset: 16.5 s for Monero, measured, and
+        /// unavoidable on a seed change.
+        building = 2,
+        /// The thermal governor had parked a thread on purpose.
+        throttled = 3,
+    };
+
+    flags: [window]Sample = [_]Sample{.idle} ** window,
+    next: usize = 0,
+
+    last_ms: i64 = 0,
+    last_hashes: u64 = 0,
+
+    /// Wall clock since the first tick, and the part of it that produced hashes.
+    total_ms: i64 = 0,
+    hashing_ms: i64 = 0,
+    /// Parked by the governor. A decision, not a fault, and reported as its own
+    /// thing rather than as time the rig was idle.
+    throttled_ms: i64 = 0,
+
+    pub fn init(now_ms: i64) Duty {
+        return .{ .last_ms = now_ms };
+    }
+
+    /// One second of evidence. `elapsed` is real time, not the nominal second:
+    /// a monitor thread starved for 3 s (a fork, a stall) must not turn into
+    /// three seconds of hashing it did not do.
+    ///
+    /// `building` and `parked` come from the sampler, which knows what the
+    /// engine and the governor were doing at that instant. They only matter
+    /// when nothing hashed.
+    pub fn tick(self: *Duty, now_ms: i64, hashes: u64, building: bool, parked: bool) void {
+        if (self.last_ms == 0) {
+            self.last_ms = now_ms;
+            self.last_hashes = hashes;
+
+            return;
+        }
+
+        const elapsed = now_ms - self.last_ms;
+        if (elapsed <= 0) return;
+
+        const sample: Sample = if (hashes > self.last_hashes)
+            .hashing
+        else if (building)
+            .building
+        else if (parked)
+            .throttled
+        else
+            .idle;
+
+        self.total_ms += elapsed;
+        switch (sample) {
+            .hashing => self.hashing_ms += elapsed,
+            .throttled => self.throttled_ms += elapsed,
+            else => {},
+        }
+
+        self.flags[self.next % window] = sample;
+        self.next += 1;
+
+        self.last_ms = now_ms;
+        self.last_hashes = hashes;
+    }
+
+    fn countRecent(self: *const Duty, seconds: usize, sample: Sample) usize {
+        const have = @min(@min(seconds, window), self.next);
+        if (have == 0) return 0;
+
+        var n: usize = 0;
+        var i: usize = 0;
+        while (i < have) : (i += 1) {
+            const index = (self.next + window - 1 - i) % window;
+            if (self.flags[index] == sample) n += 1;
+        }
+
+        return n;
+    }
+
+    /// Fraction of the last `seconds` that was hashing, 0..1. The denominator
+    /// is how many samples exist, not `seconds`: at startup there are none, and
+    /// "0 % of the last minute" for a process that is 4 s old would be a lie in
+    /// the direction that makes people worry.
+    pub fn recent(self: *const Duty, seconds: usize) f64 {
+        const have = @min(@min(seconds, window), self.next);
+        if (have == 0) return 0;
+
+        return @as(f64, @floatFromInt(self.countRecent(seconds, .hashing))) / @as(f64, @floatFromInt(have));
+    }
+
+    pub fn recentBuilding(self: *const Duty, seconds: usize) usize {
+        return self.countRecent(seconds, .building);
+    }
+
+    pub fn recentIdle(self: *const Duty, seconds: usize) usize {
+        return self.countRecent(seconds, .idle);
+    }
+
+    pub fn recentThrottled(self: *const Duty, seconds: usize) usize {
+        return self.countRecent(seconds, .throttled);
+    }
+
+    pub fn overall(self: *const Duty) f64 {
+        if (self.total_ms <= 0) return 0;
+
+        return @as(f64, @floatFromInt(self.hashing_ms)) / @as(f64, @floatFromInt(self.total_ms));
+    }
+};
+
 pub const Worker = struct {
     shared: *Shared,
     engine: *Engine,
@@ -516,6 +926,8 @@ pub const Miner = struct {
     engine: Engine,
     submitter: Submitter = .{},
     stats: Stats = .{},
+    /// Where the session's wall clock went. Sampled by the monitor thread.
+    duty: Duty = .{},
     workers: [max_threads]Worker = undefined,
     hw_threads: usize = 1,
     affinity: bool = true,
@@ -561,9 +973,16 @@ pub const Miner = struct {
             // dataset anyway, which is how a rig ends up OOM-killed (or in the
             // 10x slower light mode after the allocation is refused) instead
             // of being told, at startup, that it does not fit.
-            const usable = @min(totalMemory(), memoryForDataset());
+            const usable = usableMemory();
             flags.full_memory = memory_mod.fullMemory(sizes, .auto, usable);
             if (!flags.full_memory) {
+                if (memoryBudget()) |budget| {
+                    // Naming the limit is the difference between "my rig is
+                    // broken" and "someone gave this container 1 GB".
+                    logger.warn("this container is limited to {d} MB of memory by its cgroup ({d} MB left), which is less than the dataset needs", .{
+                        budget.limit / (1024 * 1024), budget.available / (1024 * 1024),
+                    });
+                }
                 logger.warn("{s} needs {d} MB and this machine has {d} MB usable, starting in light mode: {d} MB cache, no dataset", .{
                     algo.label(),
                     need / (1024 * 1024),
@@ -585,6 +1004,12 @@ pub const Miner = struct {
             .logger = logger,
             .engine = blk: {
                 var engine = Engine.init(logger, flags);
+                // `--dataset-cache=0` disables it; anything else is the cap in
+                // MB; unset is "whatever the kernel allows at the moment the
+                // switch happens", which is the only number that is still true
+                // by then. Light mode keeps nothing: there is no dataset to keep.
+                engine.cache_enabled = (opts.dataset_cache_mb orelse 1) != 0 and flags.full_memory;
+                engine.cache_limit_bytes = (opts.dataset_cache_mb orelse 0) * 1024 * 1024;
                 // The reservation itself happens in main.zig, before the engine
                 // exists (autoReserveHugePages). This flag only gates the
                 // warning the engine prints when the mapping came back small,
@@ -626,6 +1051,14 @@ pub const Miner = struct {
 
     pub fn threadCount(self: *const Self) usize {
         return self.shared.thread_count;
+    }
+
+    /// Threads the governor is letting hash right now. Equal to `threadCount`
+    /// unless a thermal policy parked some of them, which is why the report
+    /// carries both: "8 threads, 5 allowed" is a different machine from
+    /// "8 threads".
+    pub fn activeCount(self: *const Self) usize {
+        return self.shared.activeCount();
     }
 
     /// Huge page usage as [allocated, total] in 2 MiB pages, for the API.
@@ -683,6 +1116,11 @@ pub const Miner = struct {
     pub fn start(self: *Self) !void {
         if (self.started) return;
 
+        // Nothing is hashing right now (threads are joined by the caller), so
+        // this is the one place where the process-wide RandomX configuration
+        // can be pointed at the engine that is about to run.
+        self.engine.activate();
+
         self.shared.running.store(true, .release);
         self.started = true;
 
@@ -729,18 +1167,21 @@ pub const Miner = struct {
     /// and re-initialising underneath is a use-after-free (it segfaulted on the
     /// first rx/0 -> rx/wow switch during the soak test).
     pub fn applyJob(self: *Self, new_job: *job_mod.Job) !void {
-        const needs_algo = self.engine.needsAlgo(new_job.algo);
-        const needs_seed = new_job.has_seed and self.engine.needsSeed(new_job.seed, new_job.has_seed);
-
-        if (needs_algo or needs_seed) {
-            self.stop();
-
-            if (needs_algo) try self.engine.ensure(new_job.algo);
-            if (needs_seed) try self.engine.seedNow(new_job.seed, self.shared.initThreads());
-
-            try self.start();
-
-            return self.publishJob(new_job);
+        switch (self.engine.plan(new_job.algo, new_job.seed, new_job.has_seed)) {
+            .none => {},
+            .seed => {
+                self.stop();
+                try self.engine.seedNow(new_job.seed, self.shared.initThreads());
+                try self.start();
+            },
+            .engine => {
+                self.stop();
+                // `switchTo` may find a retained engine that already holds this
+                // algorithm and seed, in which case this costs a pointer swap
+                // instead of the 20 s a Monero dataset takes to build.
+                try self.engine.switchTo(new_job.algo, new_job.seed, new_job.has_seed, self.shared.initThreads());
+                try self.start();
+            },
         }
 
         if (!self.started) try self.start();
@@ -756,8 +1197,77 @@ pub const Miner = struct {
         self.shared.publish(new_job);
     }
 
+    /// One sample of `Duty`. Called from the monitor thread once a second, next
+    /// to the hash-counter sample it already takes.
+    pub fn tickDuty(self: *Self, now_ms: i64) void {
+        if (self.duty.last_ms == 0) {
+            self.duty = Duty.init(now_ms);
+
+            return;
+        }
+
+        // `active_threads == 0` means "all of them"; anything smaller is the
+        // thermal governor holding threads back on purpose.
+        const active = self.shared.active_threads.load(.acquire);
+        const parked = active != 0 and active < self.shared.thread_count;
+
+        self.duty.tick(now_ms, self.shared.totalHashes(), self.engine.building.load(.acquire), parked);
+    }
+
     pub fn hashrate(self: *Self, window_seconds: u64) f64 {
         return self.stats.rate(window_seconds);
+    }
+
+    /// What the session's clock was spent on, in one line. Writes into `buf`
+    /// and returns the slice: the caller owns the storage, this owns the words.
+    ///
+    /// "hashing 282 s of 300 s (94.0 %): 16 s building a dataset, 2 s without a
+    /// job" - the breakdown is only as long as it has something to say, so a
+    /// perfect run reads "100.0 %: nothing was lost".
+    pub fn describeDuty(self: *const Self, buf: []u8) []const u8 {
+        var tail: [192]u8 = undefined;
+        var tail_stream = std.io.fixedBufferStream(&tail);
+        const tw = tail_stream.writer();
+
+        const total_ms = self.duty.total_ms;
+        const hashing_s = @divTrunc(self.duty.hashing_ms, 1000);
+        const building_s = @divTrunc(@as(i64, @intCast(self.engine.total_init_ms)), 1000);
+        const throttled_s = @divTrunc(self.duty.throttled_ms, 1000);
+        // Everything that was neither hashing, nor a dataset build, nor the
+        // governor: no job, a lost pool, a reconnect in flight. Floored, because
+        // the two sources are sampled at different moments.
+        const quiet_s = @max(@divTrunc(total_ms, 1000) - hashing_s - building_s - throttled_s, 0);
+
+        var any = false;
+        if (building_s > 0) {
+            tw.print("{d} s building a dataset", .{building_s}) catch {};
+            any = true;
+        }
+        if (throttled_s > 0) {
+            if (any) tw.writeAll(", ") catch {};
+            tw.print("{d} s throttled (--max-temp)", .{throttled_s}) catch {};
+            any = true;
+        }
+        if (quiet_s > 0) {
+            if (any) tw.writeAll(", ") catch {};
+            tw.print("{d} s without a job or reconnecting", .{quiet_s}) catch {};
+            any = true;
+        }
+
+        var stream = std.io.fixedBufferStream(buf);
+        const w = stream.writer();
+
+        if (!any) {
+            w.print("hashing {d} s of {d} s ({d:.1} %): nothing was lost", .{
+                hashing_s, @divTrunc(total_ms, 1000), self.duty.overall() * 100.0,
+            }) catch {};
+        } else {
+            w.print("hashing {d} s of {d} s ({d:.1} %): {s}", .{
+                hashing_s, @divTrunc(total_ms, 1000), self.duty.overall() * 100.0, tail_stream.getWritten(),
+            }) catch {};
+        }
+
+        return stream.getWritten();
     }
 
     /// Prints the periodic hashrate line and, when verbose, per-thread rates.
@@ -816,6 +1326,14 @@ fn workerMain(worker: *Worker) void {
 
         if (shared.paused.load(.acquire)) {
             std.time.sleep(5 * std.time.ns_per_ms);
+            continue;
+        }
+
+        // Thermal gate. Checked once per hash: a RandomX hash is measured in
+        // milliseconds, so this costs nothing measurable and the reaction to a
+        // hot sensor is one hash, not one job.
+        if (shared.activeCount() <= worker.index) {
+            std.time.sleep(20 * std.time.ns_per_ms);
             continue;
         }
 
@@ -941,12 +1459,55 @@ pub fn totalMemory() u64 {
 /// huge pages that are reserved but not yet handed out (the kernel does not
 /// count those as available for ordinary allocations, and the dataset is
 /// allocated from exactly those pages).
+///
+/// In a container this is the *host's* number, so it is capped by the cgroup
+/// memory limit when there is one: `/proc/meminfo` is not namespaced, and
+/// `docker run --memory=1g` on a 32 GB host used to look like 30 GB of headroom
+/// right up to the OOM kill. `usableMemory` is the function to ask.
 pub fn memoryForDataset() u64 {
     const available = meminfoBytes("MemAvailable:");
     const free_pages = meminfoValue("HugePages_Free:");
     const page_size = meminfoValue("Hugepagesize:");   // kB per huge page
 
     return available + free_pages * page_size * 1024;
+}
+
+/// The bytes this process can realistically hand to a dataset: the smaller of
+/// what the machine reports and what its cgroup limit leaves. The limit is
+/// checked first because it is the only one that is still true inside a
+/// container, and a dataset that does not fit is an OOM kill during startup,
+/// not a warning.
+pub fn usableMemory() u64 {
+    const machine = @min(totalMemory(), memoryForDataset());
+    const budget = topology.cgroupMemory() orelse return machine;
+
+    return @min(machine, budget.available);
+}
+
+/// The same question in the other direction: what can be handed out *right
+/// now*. `usableMemory` is capped by the machine's size, which is the right
+/// number for "will this fit", but it counts the reserved huge page pool as
+/// part of the machine - and an ordinary `mmap` cannot use it. A verifier that
+/// asked for 2336 MB of anonymous memory on a host where 2336 MB is reserved as
+/// huge pages was OOM-killed with every check having said yes.
+///
+/// This is `MemAvailable` plus the free huge pages, which is what a mapping can
+/// actually be given, capped by the cgroup's remainder. `use_huge_pages` is
+/// `--no-huge-pages` inverted: a process that has been told not to touch the
+/// page pool cannot count it, or the arithmetic says yes and the kernel says
+/// no.
+pub fn availableMemory(use_huge_pages: bool) u64 {
+    const machine = if (use_huge_pages) memoryForDataset() else meminfoBytes("MemAvailable:");
+    const budget = topology.cgroupMemory() orelse return machine;
+
+    return @min(machine, budget.available);
+}
+
+/// The cgroup limit and what is left of it, for the messages that have to
+/// explain the difference between "this machine has 32 GB" and "this container
+/// may use 1".
+pub fn memoryBudget() ?topology.MemoryBudget {
+    return topology.cgroupMemory();
 }
 
 fn meminfoValue(comptime field: []const u8) u64 {
@@ -1058,4 +1619,168 @@ test "the dataset is built with every CPU, not just the mining threads" {
     shared.hw_threads = 4096;
     shared.thread_count = 1;
     try testing.expectEqual(@as(usize, max_threads), shared.initThreads());
+}
+
+test "a job decides what the engine has to do, and it is the smallest thing" {
+    const testing = std.testing;
+
+    var logger = log.Logger.init(false, false);
+    var engine = Engine.init(&logger, .{});
+
+    const seedA = [_]u8{1} ** 32;
+    const seedB = [_]u8{2} ** 32;
+
+    // No engine at all: something has to be created.
+    try testing.expectEqual(Engine.Change.engine, engine.plan(.rx_0, seedA, true));
+
+    // A fake engine, because what `plan` reads is the algorithm and the seed,
+    // not the dataset behind them. Creating a real one is what the network
+    // tests do, with a real 2 GiB mapping.
+    engine.wrapped = api.Wrapped{ .handle = undefined, .algo = .rx_0, .full_memory = true, .huge_pages = true };
+    engine.algo = .rx_0;
+    engine.seed = seedA;
+    engine.has_seed = true;
+
+    // The common case on a busy pool: a new block, same seed, same coin. It
+    // must not stop the workers - a job every 60 s that rebuilt a dataset for
+    // nothing would be a 20 % tax on hashrate.
+    try testing.expectEqual(Engine.Change.none, engine.plan(.rx_0, seedA, true));
+
+    // Same coin, new seed: the dataset is rebuilt in place, and the mapping is
+    // reused rather than freed and allocated again.
+    try testing.expectEqual(Engine.Change.seed, engine.plan(.rx_0, seedB, true));
+
+    // A different coin: a different engine, which may or may not be a rebuild
+    // (`adopt` decides that, at switch time, from what is still mapped).
+    try testing.expectEqual(Engine.Change.engine, engine.plan(.rx_xla, seedA, true));
+
+    // A job with no seed at all - some pools send one - must not be read as
+    // "the seed changed" and trigger a rebuild.
+    try testing.expectEqual(Engine.Change.none, engine.plan(.rx_0, [_]u8{9} ** 32, false));
+}
+
+test "a retained engine is only kept when the kernel can still hand out the next one" {
+    const testing = std.testing;
+
+    // The arithmetic, without any memory: `bytes` is already mapped and is not
+    // part of what has to be found; `extra_live` is.
+    const slack = memory_mod.slack_bytes;
+
+    // Nothing to keep, or caching turned off.
+    try testing.expect(!retentionFits(0, 0, 8 * 1024 * 1024 * 1024, slack, true, 0, 0));
+    try testing.expect(!retentionFits(1024, 0, 8 * 1024 * 1024 * 1024, slack, false, 0, 0));
+
+    // A 3.9 GB box holding Monero's 2336 MB engine, switching to Panthera's
+    // 192 MB one: 1.4 GB free is plenty for 192 MB + slack. This is the case
+    // that was rejected by the first version of the check, which subtracted
+    // the retained bytes twice and asked for 3 GB of RAM that was already
+    // mapped.
+    try testing.expect(retentionFits(2336 * 1024 * 1024, 192 * 1024 * 1024,
+        1400 * 1024 * 1024, slack, true, 0, 0));
+
+    // The same box switching to Wownero's 2336 MB dataset has nowhere to put
+    // it: the two would not both be mapped, so the retained one goes.
+    try testing.expect(!retentionFits(2336 * 1024 * 1024, 2336 * 1024 * 1024,
+        1400 * 1024 * 1024, slack, true, 0, 0));
+
+    // Adoption maps nothing new, so the only memory question is whether the
+    // process is under pressure at all: below the slack the displaced engine is
+    // dropped, above it, kept.
+    try testing.expect(retentionFits(192 * 1024 * 1024, 0, slack, slack, true, 0, 0));
+    try testing.expect(!retentionFits(192 * 1024 * 1024, 0, 0, slack, true, 0, 0));
+    // 200 MB already retained against a 300 MB cap: another 192 does not fit,
+    // however much RAM the machine has.
+    try testing.expect(!retentionFits(192 * 1024 * 1024, 0, 4 * 1024 * 1024 * 1024,
+        slack, true, 300 * 1024 * 1024, 200 * 1024 * 1024));
+
+    // An explicit cap is an instruction, not a suggestion.
+    try testing.expect(!retentionFits(2336 * 1024 * 1024, 0, 8 * 1024 * 1024 * 1024,
+        slack, true, 1024 * 1024 * 1024, 0));
+}
+
+/// The decision `Engine.mayRetain` makes, as a pure function so it can be
+/// tested on a machine with any amount of RAM and no dataset at all.
+pub fn retentionFits(bytes: u64, extra_live: u64, room: u64, slack: u64, enabled: bool, limit: u64, already: u64) bool {
+    if (!enabled) return false;
+    if (bytes == 0) return false;
+    if (limit != 0 and already + bytes > limit) return false;
+
+    return room >= extra_live + slack;
+}
+
+test "the duty cycle separates a dataset build from a rig with nothing to do" {
+    const testing = std.testing;
+
+    var duty = Duty.init(1000);
+
+    // Six seconds of the dataset being built at startup: the counter has not
+    // moved once, and this is not a fault - it is the price of the first job.
+    var t: i64 = 1000;
+    for (0..6) |_| {
+        t += 1000;
+        duty.tick(t, 0, true, false);
+    }
+    try testing.expectEqual(@as(f64, 0), duty.recent(60));
+    try testing.expectEqual(@as(usize, 6), duty.recentBuilding(60));
+    try testing.expectEqual(@as(usize, 0), duty.recentIdle(60));
+
+    // Then forty seconds of hashing.
+    var hashes: u64 = 0;
+    for (0..40) |_| {
+        t += 1000;
+        hashes += 900;
+        duty.tick(t, hashes, false, false);
+    }
+    try testing.expectEqual(@as(f64, 1), duty.recent(40));
+    try testing.expectEqual(@as(usize, 0), duty.recentBuilding(40));
+    // Over the whole session including the build: 40 of 46 seconds.
+    try testing.expect(duty.overall() > 0.86 and duty.overall() < 0.88);
+
+    // The pool goes away: four seconds where nothing moved and nothing
+    // explains it. That is the number the warning is about.
+    for (0..4) |_| {
+        t += 1000;
+        duty.tick(t, hashes, false, false);
+    }
+    try testing.expectEqual(@as(usize, 4), duty.recentIdle(60));
+    try testing.expectEqual(@as(f64, 0.8), duty.recent(50));
+}
+
+test "a parked worker is throttling, not idling" {
+    const testing = std.testing;
+
+    var duty = Duty.init(0);
+    var t: i64 = 0;
+    var hashes: u64 = 0;
+
+    for (0..10) |_| {
+        t += 1000;
+        hashes += 900;
+        duty.tick(t, hashes, false, false);
+    }
+    for (0..5) |_| {
+        t += 1000;
+        duty.tick(t, hashes, false, true);
+    }
+
+    try testing.expectEqual(@as(usize, 5), duty.recentThrottled(60));
+    try testing.expectEqual(@as(usize, 0), duty.recentIdle(60));
+    // The governor did what it was told, so this is not time "without a job".
+    try testing.expectEqual(@as(i64, 5000), duty.throttled_ms);
+}
+
+test "the duty clock measures the second it was given, not a nominal one" {
+    const testing = std.testing;
+
+    var duty = Duty.init(0);
+
+    // A monitor thread that was starved for 3.5 s must not be credited with
+    // 3.5 s of hashing from a single sample.
+    duty.tick(3500, 0, false, false);
+    try testing.expectEqual(@as(i64, 0), duty.total_ms);
+
+    duty.tick(7000, 4000, false, false);
+    try testing.expectEqual(@as(i64, 3500), duty.total_ms);
+    try testing.expectEqual(@as(i64, 3500), duty.hashing_ms);
+    try testing.expectEqual(@as(f64, 1), duty.overall());
 }

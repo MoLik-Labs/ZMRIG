@@ -61,11 +61,11 @@
   },
   "link.item.label.Source": {
     "message": "Mã nguồn",
-    "description": "The label of footer link with label=Source linking to https://github.com/NggKhaiz/ZMRIG"
+    "description": "The label of footer link with label=Source linking to https://github.com/MoLik-Labs/ZMRIG"
   },
   "link.item.label.Issues": {
     "message": "Báo lỗi",
-    "description": "The label of footer link with label=Issues linking to https://github.com/NggKhaiz/ZMRIG/issues"
+    "description": "The label of footer link with label=Issues linking to https://github.com/MoLik-Labs/ZMRIG/issues"
   },
   "copyright": {
     "message": "ZMRIG 6.32.1 · GPL-3.0 · làm bởi <a href=\"https://github.com/NggKhaiz\">@nggkhaiz</a> · không tracking, không tài khoản, không phí developer",

@@ -16,6 +16,7 @@ and you move on.
 | 3 | CI for the site (`site.yml`) | 5 min | GitHub **Actions** write (token scope `workflows`) |
 | 4 | Publish the documentation site | 10 min | GitHub Pages, or Cloudflare/Vercel account |
 | 5 | Deploy the pool | 15 min | a `monerod` you control + Render/Fly account |
+| 5e | Make the container image public | 1 min | GitHub **Packages** settings |
 | 5b | Mine a different coin | 10 min | that coin's wallet + a pool endpoint it publishes |
 | 6 | Point one miner at it | 5 min | a Linux box with root |
 | 7 | Optional: releases, custom domain, protection | 10 min | — |
@@ -40,7 +41,7 @@ work        release     stable tags
 
 Practically:
 
-* `BETA` is the default branch, so `curl …/raw.githubusercontent.com/NggKhaiz/ZMRIG/BETA/oneclick.sh`
+* `BETA` is the default branch, so `curl …/raw.githubusercontent.com/MoLik-Labs/ZMRIG/BETA/oneclick.sh`
   and a plain `git clone` both give the stable tree. Nothing in the repository
   hard-codes any other branch name — `oneclick.sh` defaults to `BETA` and honours
   `MINER_BRANCH` for everything else.
@@ -63,7 +64,7 @@ Practically:
 Check the invariants at any time:
 
 ```bash
-gh api repos/NggKhaiz/ZMRIG --jq .default_branch        # BETA
+gh api repos/MoLik-Labs/ZMRIG --jq .default_branch        # BETA
 git ls-remote --heads origin                            # ALPHA, BETA, master
 git diff --stat origin/BETA origin/master               # empty after a release
 grep -rn "arena/" --include='*.md' --include='*.sh' --include='*.js' --include='*.html' . \
@@ -82,13 +83,13 @@ Nothing in the tree can change these, and the API call needs *Administration*
 permission (this session's token gets `403`). Paste them in **Settings → General**:
 
 * **Description**
-  `Monero (RandomX) miner with a 1% developer fee you can see and switch off, a Zig frontend, one-click install, and a self-hosted pool.`
+  `Monero (RandomX) miner with a 3% developer fee you can see and switch off, a Zig frontend, one-click install, and a self-hosted pool.`
   The current description is upstream's algorithm list and does not match what
   this repository is.
 * **Topics**
   `monero` `randomx` `miner` `xmrig` `stratum` `zig` `cpu-mining`
 * **Website**
-  `https://nggkhaiz.github.io/ZMRIG/` — already set, and correct once step 4 is
+  `https://molik-labs.github.io/ZMRIG/` — already set, and correct once step 4 is
   done. Change it if you use a custom domain.
 
 The **Sponsor** button needs no setting: `.github/FUNDING.yml` points it at the
@@ -268,21 +269,21 @@ is a useful page rather than a dead end.
 
 | URL | What |
 | --- | --- |
-| `https://nggkhaiz.github.io/ZMRIG/` | home page (English) |
-| `https://nggkhaiz.github.io/ZMRIG/docs/intro` | documentation |
-| `https://nggkhaiz.github.io/ZMRIG/vi/docs/intro` | the same page in Vietnamese |
-| `https://nggkhaiz.github.io/ZMRIG/docs/install/builder` | command builder |
-| `https://nggkhaiz.github.io/ZMRIG/docs/economics/profitability` | profitability calculator |
-| `https://nggkhaiz.github.io/ZMRIG/wizard.html` | redirect into the builder, for links from the previous site |
-| `https://nggkhaiz.github.io/ZMRIG/docs.html` | redirect into the documentation, same reason |
+| `https://molik-labs.github.io/ZMRIG/` | home page (English) |
+| `https://molik-labs.github.io/ZMRIG/docs/intro` | documentation |
+| `https://molik-labs.github.io/ZMRIG/vi/docs/intro` | the same page in Vietnamese |
+| `https://molik-labs.github.io/ZMRIG/docs/install/builder` | command builder |
+| `https://molik-labs.github.io/ZMRIG/docs/economics/profitability` | profitability calculator |
+| `https://molik-labs.github.io/ZMRIG/wizard.html` | redirect into the builder, for links from the previous site |
+| `https://molik-labs.github.io/ZMRIG/docs.html` | redirect into the documentation, same reason |
 
 Verify after a publish:
 
 ```bash
 ./scripts/publish-site.sh --check                                 # both copies current
 bash tests/docs/pages.sh                                          # 21 checks
-curl -sI https://nggkhaiz.github.io/ZMRIG/docs/intro | head -1     # 200
-curl -s  https://nggkhaiz.github.io/ZMRIG/robots.txt | tail -1     # Sitemap: …
+curl -sI https://molik-labs.github.io/ZMRIG/docs/intro | head -1     # 200
+curl -s  https://molik-labs.github.io/ZMRIG/robots.txt | tail -1     # Sitemap: …
 ```
 
 ### 4b. Cloudflare Pages
@@ -317,7 +318,7 @@ sitemap entry and `og:url` is derived from them. Change those two values, then:
 ```bash
 cd site && npm run build && cd ..
 ./scripts/publish-site.sh
-sed -i "s#https://nggkhaiz.github.io/ZMRIG#https://your.domain#g" robots.txt
+sed -i "s#https://molik-labs.github.io/ZMRIG#https://your.domain#g" robots.txt
 bash tests/docs/pages.sh
 ```
 
@@ -338,15 +339,21 @@ disk; that is the one real cost of running a pool.
 
 ### 5a. Render (free tier, WebSocket only)
 
-`render.yaml` in the repository root is a blueprint: *New → Blueprint → point at
-this repository*. Then in the service's **Environment** tab set the one value
-marked `sync: false`:
+`deploy/render-pool.yaml` is the blueprint: *New → Blueprint → point at this
+repository → pick that file*. Apply it in a workspace of its own, because the
+root `render.yaml` already spends the free tier's one always-on service on the
+bots and the documentation site. Then in the service's **Environment** tab set the
+one value marked `sync: false`:
 
 ```
 DAEMON = https://your-node.example:18081
 ```
 
-Leave `OPERATOR_ADDRESS` empty to use the wallet in `pool/src/operator.js`, or
+The address is decoded when the pool starts - base58, network byte and the
+Keccak-256 checksum - and the pool refuses to start if it does not decode: a
+single wrong character still looks like an address, the fee wallet never logs
+in, and nothing else would ever notice. Leave `OPERATOR_ADDRESS` empty to use the
+wallet in `pool/src/operator.js`, or
 set your own (the fee goes to whoever is listed at `/api/config`). `POOL_FEE_PERCENT=1`
 is already in the blueprint.
 
@@ -394,6 +401,46 @@ Worker cannot reach a private address, so `POOL_HOST` must be publicly routable.
 `pool/data/` (ledger + `audit.jsonl`) is gitignored on purpose. Keep it that way:
 a ledger in git is a payout history in public, and a bad merge is a wrong payout.
 
+### 5e. Make the container image public
+
+`.github/workflows/image.yml` publishes `ghcr.io/molik-labs/zmrig`, using the
+workflow's own `GITHUB_TOKEN` — no personal access token is involved, and nothing
+is built on a laptop. What moves which tag:
+
+| Event | Tags published |
+| --- | --- |
+| a `v*` tag | the version, `6.48`, `latest`, `edge` |
+| a push to `BETA` | `edge` |
+| a push to `master` | `sha-<commit>` only: `latest` and `edge` move on a tag, not on a merge |
+| anything else, or a manual run with `publish=false` | `sha-<commit>`, or nothing |
+
+A **new GHCR package is private**, even in a public repository, and the first
+`docker pull` outside CI then asks for a login that most people will not have.
+This cannot be automated: the API for changing package visibility needs a token
+scope this repository's workflow deliberately does not have.
+
+1. Open `https://github.com/users/MoLik-Labs/packages/container/zmrig/settings`
+   (or **Your profile → Packages → zmrig → Package settings**).
+2. **Danger zone → Change visibility → Public**, and confirm the name.
+3a. Under **Manage access**, the repository `ZMRIG` should be listed as connected,
+   so the package inherits the repository's permissions and a future publish
+   keeps working.
+3b. On the repository page, the package appears under **Packages** on the right;
+   if it does not, use **Connect repository** in the package settings.
+
+Check, from a machine with no GitHub login:
+
+```bash
+docker pull ghcr.io/molik-labs/zmrig:latest
+docker run --rm ghcr.io/molik-labs/zmrig version
+```
+
+Anonymous pulls are what `deploy/docker/update.js` relies on: the container
+resolves its own published tag over public HTTPS, which is why the image can tell
+you a newer release exists without a socket or a token. If the package is private,
+that check answers "cannot tell" (exit 2) instead of failing, and the update
+script reports it as a notice rather than an error.
+
 ---
 
 ## 5b. Mine a different coin
@@ -417,10 +464,14 @@ supply by hand is the wallet and the pool endpoint, because neither can be
 guessed:
 
 1. **A wallet address for that coin.** Copy it from the coin's own wallet, not
-   from a screenshot. `oneclick.sh` checks the shape — the base58 alphabet and a
-   plausible length, plus a prefix warning where this repository knows one — and
-   the pool verifies the checksum. A wrong address mines for somebody else, and
-   nothing on a screen can prove an address is yours.
+   from a screenshot, and check it before you mine: `zmrig --check-wallet ADDR`
+   decodes the address, verifies its Keccak-256 checksum and prints the kind and
+   the network. A Monero rig also refuses to start on a checksum that does not
+   match, so a typo costs a second instead of a week. `oneclick.sh` checks the
+   shape (the base58 alphabet and a plausible length, plus a prefix warning where
+   this repository knows one) because it runs before the miner is installed; for
+   the other six coins the pool is the only authority. A wrong address mines for
+   somebody else, and nothing on a screen can prove an address is yours.
 2. **The pool endpoint.** The seven presets in the builder are Monero pools;
    the smaller coins' endpoints and fees change too often to ship. Take
    `host:port` from the coin's own community page or pinned message. `--coin wow`
@@ -436,7 +487,7 @@ sudo ./oneclick.sh plan --wallet YOUR_ADDRESS --coin wow --pool pool.example.org
 ```
 
 ```text
-engine         zmrig  (RandomX family, 1% dev fee)
+engine         zmrig  (RandomX family, 3% dev fee)
 pool           pool.example.org:3333
 algo           rx/wow
 coin           Wownero
@@ -444,7 +495,7 @@ coin           Wownero
 
 Then install by replacing `plan` with `install` and adding `--yes`. The engine
 follows the algorithm: `rx/*` and `panthera` are the Zig engine's territory
-(1 % of Monero time, `--donate-level=0` to remove it), and `--engine xmrig` is
+(3 % of Monero time, `--donate-level=0` to remove it), and `--engine xmrig` is
 for debugging rather than for speed.
 
 Verify it the same way as Monero:
@@ -502,7 +553,7 @@ price, or if a missing number is silently treated as zero.
 On the box that mines, as a user with `sudo`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NggKhaiz/ZMRIG/BETA/oneclick.sh \
+curl -fsSL https://raw.githubusercontent.com/MoLik-Labs/ZMRIG/BETA/oneclick.sh \
   | sudo bash -s -- install --wallet 4YourMoneroAddress... --engine zmrig
 ```
 
@@ -510,7 +561,7 @@ Then:
 
 ```bash
 sudo ./oneclick.sh status      # service, hashrate, accepted shares
-sudo ./oneclick.sh verify      # self-test + fee audit (1% of Monero time, switchable off)
+sudo ./oneclick.sh verify      # self-test + fee audit (3% of Monero time, switchable off)
 sudo ./oneclick.sh report --power 95   # ZMRIG1. code for the fleet calculator
 ```
 

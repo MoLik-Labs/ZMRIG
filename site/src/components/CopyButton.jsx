@@ -9,6 +9,11 @@ export default function CopyButton({
   copiedLabel,
   manualLabel,
   className,
+  // Set when the command on the page is not one anybody should run: a wallet
+  // whose checksum does not match, a pool that is not host:port. The button
+  // stays visible so the layout does not jump, and does nothing - copying an
+  // invalid command is the one action this page must not make easy.
+  disabled = false,
 }) {
   const [state, setState] = useState("idle");
 
@@ -44,6 +49,7 @@ export default function CopyButton({
       type="button"
       className={className || "zm-btn"}
       onClick={copy}
+      disabled={disabled}
       data-state={state}
       aria-live="polite"
     >

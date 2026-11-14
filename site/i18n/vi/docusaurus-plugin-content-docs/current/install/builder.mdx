@@ -1,7 +1,7 @@
 ---
 title: Bộ dựng lệnh
 description: Dựng đúng lệnh oneclick.sh cho máy của bạn. Mỗi công tắc ứng với một cờ, và lệnh xem trước không thay đổi gì trên máy.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
+image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 ---
 
 import InstallBuilder from '@site/src/components/InstallBuilder';
@@ -20,7 +20,7 @@ import InstallBuilder from '@site/src/components/InstallBuilder';
 | Pool | `--pool <host:port>` hoặc `--pool tls://<host:port>` |
 | Pool dự phòng | `--failover <host:port>,<host:port>` |
 | Ép engine | `--engine zmrig` hoặc `--engine xmrig` (không đặt = tự động) |
-| Ép profile | `--profile free` hoặc `--profile watt` (không đặt = tự động) |
+| Profile | Mặc định `--profile free` (hashrate tối đa); chỉ chọn `--profile watt` nếu muốn ưu tiên hiệu suất điện |
 | Mạng chỉ mở 443 | `--cloudflare --ws-path <path>` |
 | Proxy | `--proxy <url>` |
 | Tên pool bị lọc DNS | `--connect-to <host:port>` |
@@ -38,12 +38,25 @@ Hai quy tắc đáng biết vì chúng đổi cả lệnh, không chỉ thêm m�
 - Pool TLS trở thành một phần của giá trị `--pool` (`tls://host:port`), vì đó là
   dạng mà `oneclick.sh` phân tích.
 
-Địa chỉ bạn gõ được kiểm tra trước khi nút sao chép mở: với Monero là 95 ký tự,
-106 cho integrated, chỉ dùng bảng chữ base58. Với sáu đồng còn lại, kiểm tra là
-bảng chữ và độ dài hợp lý, kèm cảnh báo khi prefix không phải cái trang này biết —
-nó không giả vờ xác minh checksum mà nó không tính. Host pool được kiểm tra dạng
-`host:port`, và URL đầy đủ `stratum+tcp://…` dán từ trang nhà cung cấp vẫn được
-chấp nhận.
+Địa chỉ bạn gõ được kiểm tra trước khi nút sao chép mở. Với Monero, trang **giải
+mã** địa chỉ: 95 ký tự (106 cho integrated), bảng chữ base58, byte mạng, và
+checksum Keccak-256 bốn byte mà mọi địa chỉ đều mang. Một ký tự bị đổi sang ký tự
+base58 hợp lệ khác sẽ bị từ chối — đúng kiểu gõ nhầm mà phép đếm ký tự không thấy,
+và là kiểu làm mất một tuần đào. Đây là cùng bộ giải mã mà pool và bot dùng
+(`lib/address.js`), được biên dịch vào trang này, nên ba nơi không thể nói khác
+nhau.
+
+```console
+builder.wallet.checksum   Sai một ký tự: checksum không khớp.
+```
+
+Địa chỉ stagenet hay testnet là địa chỉ hợp lệ nhưng pool mainnet không trả được,
+và trang nói đúng như vậy thay vì gọi đó là gõ nhầm.
+
+Với sáu đồng còn lại, kiểm tra là bảng chữ và độ dài hợp lý, kèm cảnh báo khi
+prefix không phải cái trang này biết — nó không giả vờ xác minh checksum mà nó
+không tính. Host pool được kiểm tra dạng `host:port`, và URL đầy đủ
+`stratum+tcp://…` dán từ trang nhà cung cấp vẫn được chấp nhận.
 
 Đồng coin quyết định hai việc. Nó ghim thuật toán (`--algo rx/wow` và tương tự) —
 trừ Monero, vì thêm cờ đó sẽ chặn pool chuyển thuật toán đổi rig sang đồng

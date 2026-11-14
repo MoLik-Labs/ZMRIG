@@ -15,7 +15,8 @@ It is not a toy port. It does everything a miner has to do on a pool:
 * live hashrate windows (10 s / 60 s / 15 min), session maximum, share
   counters, dataset and huge-page telemetry;
 * `--version`, `--check`, `--self-test[=light]`, `--bench=N`;
-* 0% developer fee — there is no donation code to audit, only `grep -c donat`.
+* 3% developer fee on the Zig engine — one wallet, printed in `--check`, `--donate-level=0`
+  removes it, and `scripts/verify-fee.sh` fails the build if any document disagrees.
 
 ## Why Zig and not Rust/Go
 
@@ -68,6 +69,8 @@ real archive paths with `c++ -print-file-name=`.
 ./zmrig/out/zmrig --self-test    # full: vectors + pipelining + 2 GiB dataset match
 ./zmrig/out/zmrig --self-test=light   # vectors + pipelining only (runs beside a miner)
 ./zmrig/out/zmrig --bench=100000 -t 2 # offline hashrate, no pool
+./zmrig/tests/profile.sh         # where the cycles in a hash go, and what a
+                                 # random dataset read costs on this machine
 ```
 
 `--self-test` prints `PASS`/`FAIL` per check and exits 0 on success; it is what

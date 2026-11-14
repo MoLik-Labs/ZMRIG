@@ -1,7 +1,7 @@
 ---
 title: Monitoring
 description: The read-only HTTP API, the health watchdog, and ZMRIG1. report codes — what each one gives you and when to use it.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-en.png
+image: https://molik-labs.github.io/ZMRIG/img/og-en.png
 ---
 
 # Monitoring

@@ -1,0 +1,54 @@
+# Render blueprint for Ocean Pool — the optional half.
+#
+# The root render.yaml deploys one service that answers for the bots, the rigs
+# and the documentation, because a free workspace gets 750 instance hours a month
+# and one always-on service already uses ~744 of them. This file exists for the
+# case where the pool is what you want on Render: apply it to a *different*
+# workspace. Applying it to the same one as the root blueprint spends two
+# services' worth of hours and Render suspends the free services until the next
+# month.
+#
+# There is no site service in here any more. The documentation, the download page
+# and the /iso/* links are part of the root blueprint, which already runs the only
+# always-on instance a free workspace can afford; a second copy of the site would
+# be a second copy of the same bytes.
+#
+# Free web services get one HTTPS port and no raw TCP, so the pool runs in
+# WebSocket-only mode: miners connect with
+#   zmrig -o wss://<service>.onrender.com/stratum -u <address>
+#
+# A free instance sleeps after 15 minutes without traffic, and its filesystem is
+# ephemeral. Attach a disk (paid plans) or the ledger is lost on every restart --
+# acceptable while testing, not once real miners are pointed at it.
+
+services:
+  - type: web
+    name: ocean-pool
+    runtime: docker
+    dockerfilePath: ./deploy/Dockerfile
+    dockerContext: .
+    plan: free
+    region: frankfurt
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: 8080
+      - key: HTTP_PORT
+        value: 8080
+      - key: POOL_FEE_PERCENT
+        value: 1
+      - key: POOL_NAME
+        value: Ocean Pool
+      - key: VERIFY_SHARES
+        value: true
+      # Point this at a node you run: a public node will rate-limit you.
+      - key: DAEMON
+        sync: false
+      # Leave empty to use the address compiled into pool/src/operator.js.
+      - key: OPERATOR_ADDRESS
+        value: ""
+      - key: PAYOUT_MODE
+        value: ledger
+      - key: LOG_LEVEL
+        value: info

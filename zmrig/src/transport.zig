@@ -121,6 +121,7 @@ pub const Conn = struct {
     ws_mask_pos: usize = 0,
     ws_remaining: u64 = 0, // payload bytes left in the current frame
     ws_opcode: u8 = 0,
+    ws_fragmented: bool = false,
     ws_message_last_byte: u8 = 0,
     ws_message_bytes: u64 = 0,
     ws_pending_newline: bool = false,
@@ -223,6 +224,11 @@ pub const Conn = struct {
 
     /// Reads up to out.len bytes of *payload* (WebSocket aware).
     pub fn read(self: *Self, out: []u8) Error!usize {
+        // Like std.net.Stream.read, an empty destination is a successful empty
+        // read. In particular, do not consume the pending newline: indexing
+        // out[0] below would be out of bounds in a ReleaseSafe build and UB in
+        // the ReleaseFast binary.
+        if (out.len == 0) return 0;
         if (!self.kind.usesWs()) return self.readRaw(out);
 
         while (true) {
@@ -441,39 +447,93 @@ pub const Conn = struct {
         return error.HandshakeFailed;
     }
 
+    /// RFC 6455 §5.2: lengths use the smallest representation, and the most
+    /// significant bit of the 64-bit representation is reserved. Keep this
+    /// separate so the boundary cases are directly testable without a socket.
+    fn checkLengthEncoding(code: u7, length: u64) Error!void {
+        if (code <= 125) {
+            if (length != code) return error.WsProtocol;
+        } else if (code == 126) {
+            if (length < 126 or length > 0xFFFF) return error.WsProtocol;
+        } else {
+            if ((length & (1 << 63)) != 0 or length <= 0xFFFF) return error.WsProtocol;
+        }
+    }
+
+    /// Validate a server-to-client frame before consuming its payload.
+    ///
+    /// RFC 6455 makes every failure here a protocol error. The checks are not
+    /// cosmetic: a fragmented/oversized ping must not be half-read (that
+    /// desynchronises the stream); a continuation without an open fragmented
+    /// message cannot be stitched into JSON; and a new data frame before the
+    /// old fragmented message finishes loses bytes. We negotiate no extensions,
+    /// so RSV bits are always zero. Clients MUST close on masked server frames.
+    fn checkFrame(fin: bool, opcode: u8, length: u64, masked: bool, rsv: u8, fragmented: bool) Error!void {
+        if (rsv != 0 or masked) return error.WsProtocol;
+
+        switch (opcode) {
+            0x0 => if (!fragmented) return error.WsProtocol,
+            0x1, 0x2 => if (fragmented) return error.WsProtocol,
+            0x8, 0x9, 0xA => {
+                // RFC 6455 5.5: a control frame is never fragmented and never
+                // carries more than 125 bytes. A close frame's body is either
+                // empty or begins with a two-byte status code.
+                if (!fin or length > 125 or (opcode == 0x8 and length == 1)) {
+                    return error.WsProtocol;
+                }
+            },
+            else => return error.WsProtocol,
+        }
+    }
+
     fn readFrameHeader(self: *Self) Error!void {
         var header: [2]u8 = undefined;
         try self.readExact(&header);
 
         const fin = (header[0] & 0x80) != 0;
         const opcode = header[0] & 0x0F;
+        const rsv = header[0] & 0x70;
         const masked = (header[1] & 0x80) != 0;
-        var length: u64 = header[1] & 0x7F;
+        const length_code = header[1] & 0x7F;
+        var length: u64 = length_code;
 
-        if (length == 126) {
+        if (length_code == 126) {
             var ext: [2]u8 = undefined;
             try self.readExact(&ext);
             length = std.mem.readInt(u16, &ext, .big);
-        } else if (length == 127) {
+        } else if (length_code == 127) {
             var ext: [8]u8 = undefined;
             try self.readExact(&ext);
             length = std.mem.readInt(u64, &ext, .big);
         }
 
-        if (masked) {
-            try self.readExact(&self.ws_mask);
-            self.ws_mask_pos = 0;
-        }
-        self.ws_masked = masked;
+        try checkLengthEncoding(@intCast(length_code), length);
+        try checkFrame(fin, opcode, length, masked, rsv, self.ws_fragmented);
+
+        self.ws_masked = false;
+        self.ws_mask_pos = 0;
         self.ws_remaining = length;
 
         switch (opcode) {
             0x0, 0x1, 0x2 => {
-                // Data frame (continuation, text, binary).
+                // Track the message boundary, not just the current frame: control
+                // frames may be interleaved while a message is fragmented.
+                if (opcode == 0x0) {
+                    if (fin) self.ws_fragmented = false;
+                } else {
+                    self.ws_fragmented = !fin;
+                }
+
                 self.ws_opcode = opcode | (if (fin) @as(u8, 0x80) else 0);
 
                 if (length == 0 and fin) {
-                    // Empty final frame: nothing to hand out, keep reading.
+                    // An empty final continuation still closes the message that
+                    // came in earlier fragments. Give Stratum its newline now;
+                    // otherwise it waits for another frame that may never come.
+                    if (self.ws_message_bytes != 0 and self.ws_message_last_byte != '\n') {
+                        self.ws_pending_newline = true;
+                    }
+                    self.ws_message_bytes = 0;
                     self.ws_opcode = 0;
                 }
             },
@@ -483,10 +543,6 @@ pub const Conn = struct {
                 var payload: [125]u8 = undefined;
                 const n: usize = @intCast(@min(length, payload.len));
                 try self.readExact(payload[0..n]);
-                if (masked) {
-                    var i: usize = 0;
-                    while (i < n) : (i += 1) payload[i] ^= self.ws_mask[i & 3];
-                }
                 self.ws_remaining = 0;
                 try self.writeFrame(0xA, payload[0..n]);
             },
@@ -913,4 +969,67 @@ test "a proxy URL keeps kind, host and credentials apart" {
     try testing.expectEqual(@as(u16, 1080), p.port);
     const empty = Proxy{};
     try testing.expect(!empty.isSet());
+}
+
+test "WebSocket payload lengths use their shortest RFC 6455 encoding" {
+    const testing = std.testing;
+    const check = Conn.checkLengthEncoding;
+
+    try check(125, 125);
+    try check(126, 126);
+    try check(126, 0xFFFF);
+    try check(127, 0x1_0000);
+    try check(127, 0x7FFF_FFFF_FFFF_FFFF);
+
+    try testing.expectError(error.WsProtocol, check(126, 125));
+    try testing.expectError(error.WsProtocol, check(126, 0x1_0000));
+    try testing.expectError(error.WsProtocol, check(127, 0xFFFF));
+    try testing.expectError(error.WsProtocol, check(127, 1 << 63));
+    try testing.expectError(error.WsProtocol, check(10, 11));
+}
+
+test "server WebSocket frames obey RFC 6455 before payload is consumed" {
+    const testing = std.testing;
+    const check = Conn.checkFrame;
+
+    // Valid control frames (the maximum legal size is 125 bytes).
+    try check(true, 0x9, 0, false, 0, false);
+    try check(true, 0x9, 125, false, 0, true); // controls can interleave a fragmented message
+    try check(true, 0xA, 125, false, 0, false);
+    try check(true, 0x8, 0, false, 0, false);
+    try check(true, 0x8, 125, false, 0, false);
+
+    // An oversized or fragmented control frame must not leave bytes behind to
+    // be mistaken for the next header. A close body cannot be exactly one byte.
+    try testing.expectError(error.WsProtocol, check(true, 0x9, 126, false, 0, false));
+    try testing.expectError(error.WsProtocol, check(true, 0xA, 1 << 40, false, 0, false));
+    try testing.expectError(error.WsProtocol, check(false, 0x9, 10, false, 0, false));
+    try testing.expectError(error.WsProtocol, check(true, 0x8, 1, false, 0, false));
+
+    // Fragmentation has to be a sequence: a continuation needs an open message,
+    // and a second text/binary frame cannot silently discard the first one's tail.
+    try check(false, 0x1, 100, false, 0, false);
+    try check(false, 0x0, 100, false, 0, true);
+    try check(true, 0x0, 20, false, 0, true);
+    try testing.expectError(error.WsProtocol, check(true, 0x0, 20, false, 0, false));
+    try testing.expectError(error.WsProtocol, check(false, 0x1, 10, false, 0, true));
+
+    // The client negotiated no extensions, and a server must not mask frames.
+    try testing.expectError(error.WsProtocol, check(true, 0x1, 10, false, 0x40, false));
+    try testing.expectError(error.WsProtocol, check(true, 0x1, 10, true, 0, false));
+    try testing.expectError(error.WsProtocol, check(true, 0x3, 10, false, 0, false));
+}
+
+test "an empty read does not consume a pending WebSocket newline" {
+    const testing = std.testing;
+    var conn = Conn{
+        .allocator = testing.allocator,
+        .stream = undefined,
+        .kind = .ws,
+        .ws_pending_newline = true,
+    };
+    var empty: [0]u8 = .{};
+
+    try testing.expectEqual(@as(usize, 0), try conn.read(&empty));
+    try testing.expect(conn.ws_pending_newline);
 }

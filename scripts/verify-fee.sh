@@ -27,7 +27,7 @@ BINARY="${ROOT}/zmrig/out/zmrig"
 SOURCE_ONLY=0
 FAILED=0
 
-EXPECTED_PERCENT=1
+EXPECTED_PERCENT=3
 EXPECTED_WALLET="46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ"
 
 color() { if [ -t 1 ]; then printf '\033[%sm%s\033[0m' "$1" "$2"; else printf '%s' "$2"; fi; }
@@ -54,6 +54,148 @@ if [ "${percent:-x}" = "${EXPECTED_PERCENT}" ]; then
     pass "default_percent = ${percent} (as documented)"
 else
     fail "default_percent = ${percent:-?} (documented: ${EXPECTED_PERCENT})"
+fi
+
+# 1b. The prose says the same number as the code. A fee change that updates the
+#     constant and forgets the page is exactly how a published rate and a shipped
+#     rate drift apart, so it is a build failure rather than a review note.
+prose_mismatch=0
+for page in \
+    "${ROOT}/doc/FEE.md" \
+    "${ROOT}/site/docs/reference/fee.md" \
+    "${ROOT}/site/i18n/vi/docusaurus-plugin-content-docs/current/reference/fee.md" \
+    "${ROOT}/README.md"; do
+    [ -f "$page" ] || continue
+    if ! grep -qE "(\*\*)?${EXPECTED_PERCENT}( ?|,)(%|%)" "$page"; then
+        fail "$(basename "$page") never states ${EXPECTED_PERCENT} %"
+        prose_mismatch=1
+    fi
+done
+[ "$prose_mismatch" = "0" ] && pass "the pages state the same rate as the constant"
+
+# 1b1. Every percentage attached to the developer fee, anywhere in the tree.
+#
+#      Steps 1b and 1b2 only look at four files, and that is exactly how the
+#      landing page kept "1 % developer fee" for a release after the constant
+#      moved to 3: the pages that were checked were correct and the pages that
+#      were not checked were not. This sweep is the general case. The patterns
+#      are narrow on purpose - a pool's 0.6 % and a `--donate-level=1` example
+#      are not the developer fee - and the prunes are the generated trees plus
+#      the files whose subject is somebody else's fee.
+if command -v python3 >/dev/null 2>&1; then
+    sweep=$(python3 - "${ROOT}" "${EXPECTED_PERCENT}" <<'PY'
+import os, re, sys
+
+root, expected = sys.argv[1], sys.argv[2]
+# Never walked, at any depth.
+PRUNE = {"node_modules", "build", "dist", "out", "target", "legacy",
+         ".docusaurus", ".git", "iso"}
+# The published copies of the site, which `scripts/publish-site.sh` generates
+# from site/ and never from a human. They are only copies at the repository
+# root - `site/docs/` and `site/i18n/vi/` are the sources and must be swept.
+ROOT_COPIES = {"web", "docs", "vi", "assets", "img"}
+# Files whose subject is a different fee, or which are the guard itself.
+SKIP = {"CHANGELOG.md", "CHANGELOG_OLD.md", "doc/ZERO_FEE.md", "doc/PROXY.md",
+        "doc/POOLS.md", "search-index.json", "site/src/lib/pools.mjs",
+        "scripts/verify-fee-free.sh", "scripts/verify-fee.sh"}
+EXTS = {".md", ".mdx", ".sh", ".js", ".jsx", ".mjs", ".yml", ".json", ".zig"}
+# (pattern, exclusion): the exclusion is read from the same sentence and means
+# "this percentage is somebody else's fee, not the miner's".
+PATTERNS = [
+    (re.compile(r"(\d+(?:[.,]\d+)?)\s?%\s?(?:of\s)?(?:Monero|thời\s?gian)", re.I), None),
+    (re.compile(r"(\d+)\s?%\s?(?:developer|dev)\s?fee", re.I), None),
+    (re.compile(r"(?:developer|dev)\s?fee[^0-9%\n]{0,14}(\d+)\s?%", re.I), None),
+    # "phí 3 %" is the Vietnamese phrase for both fees; a pool's share is the
+    # one that talks about a block or a payout.
+    (re.compile(r"phí\s?(\d+)\s?%", re.I),
+     re.compile(r"pool|block|payout|hoa hồng", re.I)),
+]
+claims, bad = [], []
+for base, dirs, files in os.walk(root):
+    at_root = os.path.abspath(base) == os.path.abspath(root)
+    dirs[:] = [d for d in dirs
+               if d not in PRUNE and not (at_root and d in ROOT_COPIES)]
+    for name in files:
+        path = os.path.join(base, name)
+        rel = os.path.relpath(path, root)
+        if os.path.splitext(name)[1] not in EXTS:
+            continue
+        if rel in SKIP or rel.startswith("tests/") or "fleet/pool.md" in rel:
+            continue
+        try:
+            text = open(path, encoding="utf-8", errors="replace").read()
+        except OSError:
+            continue
+        for pattern, excluded in PATTERNS:
+            for match in pattern.finditer(text):
+                number = next((g for g in match.groups()
+                               if g and re.fullmatch(r"\d+(?:[.,]\d+)?", g)), None)
+                if number is None:
+                    continue
+                if excluded is not None:
+                    sentence = text[max(0, match.start() - 80):match.end() + 80]
+                    if excluded.search(sentence):
+                        continue
+                claims.append((rel, number))
+                if number.replace(",", ".") not in (expected, expected + ".0"):
+                    line = text.count("\n", 0, match.start()) + 1
+                    bad.append("%s:%d says %s %%" % (rel, line, number))
+for entry in bad:
+    print("FAIL " + entry)
+print("CLAIMS %d" % len(claims))
+print("FILES %d" % len({rel for rel, _ in claims}))
+PY
+)
+    while IFS= read -r line; do
+        case "$line" in
+            FAIL*)   fail "${line#FAIL }" ;;
+            CLAIMS*) claims=${line#CLAIMS } ;;
+            FILES*)  sweep_files=${line#FILES } ;;
+        esac
+    done <<< "$sweep"
+    if [ -z "${claims:-}" ]; then
+        fail "the fee sweep produced no output"
+    elif ! printf '%s' "$sweep" | grep -q '^FAIL'; then
+        pass "every fee statement in the tree says ${EXPECTED_PERCENT} % (${claims} claims in ${sweep_files} files)"
+    fi
+else
+    info "the tree-wide fee sweep needs python3; skipped"
+fi
+
+# 1b1b. And no page may describe the Zig engine as fee-free. The C++ engine has
+#       no developer fee, so the word "free" belongs to it and nowhere else; a
+#       sentence that gives it to the Zig engine is a claim the binary refutes.
+free_hits=$(grep -rniE '(zmrig|zig) (engine|miner)[^.;|]{0,40}(no (developer )?fee|takes nothing|fee-free|miễn phí|không (lấy )?phí)' \
+    "${ROOT}/doc" "${ROOT}/README.md" "${ROOT}/site/docs" \
+    "${ROOT}/site/i18n/vi/docusaurus-plugin-content-docs/current" 2>/dev/null |
+    grep -v 'ZERO_FEE.md' | head -3)
+if [ -n "$free_hits" ]; then
+    fail "a page calls the Zig engine fee-free: $(printf '%s' "$free_hits" | head -1)"
+else
+    pass "no page calls the Zig engine fee-free"
+fi
+
+# 1b2. The site's own title and footer, which are not pages and have no prose to
+#      review: the tab title said "1 % developer fee" for a whole release after the
+#      constant moved to 3, because nothing was looking at the config.
+cfg="${ROOT}/site/docusaurus.config.js"
+if [ -f "$cfg" ]; then
+    stale=$(grep -oE '[0-9]+([.][0-9]+)? ?% (developer )?fee' "$cfg" |
+            grep -vE "^${EXPECTED_PERCENT}([.]0+)? ?%" | head -3)
+    if [ -n "$stale" ]; then
+        fail "site/docusaurus.config.js still advertises: ${stale}"
+    else
+        pass "the site title and footer advertise ${EXPECTED_PERCENT} %"
+    fi
+fi
+
+# 1c. The appliance ships the same default, so an image and a binary from the
+#     same commit cannot disagree about what a fresh rig pays.
+tool_percent=$(grep -E '^DONATE_DEFAULT=' "${ROOT}/os/overlay/usr/local/bin/zmrig-os" | sed 's/.*="//; s/".*//')
+if [ "${tool_percent:-x}" = "${EXPECTED_PERCENT}" ]; then
+    pass "os.conf default DONATE = ${tool_percent} (same as the binary)"
+else
+    fail "os.conf default DONATE = ${tool_percent:-?} (binary: ${EXPECTED_PERCENT})"
 fi
 
 # 2. One wallet, in one file.
@@ -110,8 +252,8 @@ else
     printf '%s\n' "$check_out" | grep -i donate | head -2
 fi
 
-if printf '%s' "$check_out" | grep -qE "^ *donate +.*60 s every 100 min"; then
-    pass "--check prints the cadence (60 s every 100 min at 1%)"
+if printf '%s' "$check_out" | grep -qE "^ *donate +.*60 s every 33 min"; then
+    pass "--check prints the cadence (60 s every 33 min at 3%)"
 else
     fail "--check does not print the cadence"
 fi

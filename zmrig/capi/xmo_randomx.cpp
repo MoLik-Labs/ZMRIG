@@ -11,12 +11,14 @@
 #include "backend/cpu/Cpu.h"
 #include "base/crypto/Algorithm.h"
 #include "crypto/common/Assembly.h"
+#include "crypto/randomx/aes_hash.hpp"
 #include "crypto/randomx/configuration.h"
 #include "crypto/randomx/randomx.h"
 #include "crypto/rx/RxAlgo.h"
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <thread>
 #include <vector>
@@ -29,6 +31,18 @@
 namespace {
 
 constexpr size_t kHugePageSize = 2 * 1024 * 1024;
+#ifndef _WIN32
+/* x86-64's gigantic page, and the encoding that asks for it. MAP_HUGE_SHIFT is
+ * 26 on Linux for every architecture that has MAP_HUGETLB; the size given to
+ * mmap must be a multiple of 1 GiB or the call is EINVAL. Guarded because the
+ * Windows build has neither mmap nor these names, and an unused constant there
+ * is a warning at best. */
+constexpr size_t kGiganticPageSize = 1024ULL * 1024 * 1024;
+#ifndef MAP_HUGE_SHIFT
+#define MAP_HUGE_SHIFT 26
+#endif
+constexpr int kGiganticShift = 30;
+#endif
 constexpr size_t kScratchpad   = RANDOMX_SCRATCHPAD_L3_MAX_SIZE;
 
 /* One mapping. `mmap` returns zeroed pages for free, so the 2 GiB fallback no
@@ -38,12 +52,25 @@ struct Mapping {
     size_t   bytes = 0;
     bool     explicit_huge = false;
     bool     via_mmap = false;
+    /* The page size that backed it: 2 MiB, 1 GiB, or 0 for ordinary pages.
+     * Two mappings of the same byte count do not perform the same, so the
+     * number is worth carrying to the log. */
+    size_t   page_kb = 0;
 };
 
 
-/* 2 MiB aligned, backed by explicit huge pages when the kernel reserved some.
- * Falls back to anonymous memory with a THP hint, which is what a normal build
- * of XMRig ends up with on a host without reserved pages. */
+/* Backed by reserved huge pages when the kernel has them, 1 GiB ones first.
+ *
+ * A 2 GiB RandomX dataset is 1 024 four-KiB TLB entries' worth of random reads
+ * per hash, and 2 MiB pages turn that into 1 024 lookups spread over a TLB that
+ * typically holds that many: a 1 GiB page turns it into two. But gigantic pages
+ * cannot be reserved after the machine has been up for a while — the pool has to
+ * exist before memory fragments — so this only *uses* them: when the operator
+ * reserved a pool (`nr_hugepages` under `hugepages-1048576kB`) and it is big
+ * enough, the mapping comes from it, and when it is not, the next attempt is the
+ * 2 MiB pool, then anonymous memory with a THP hint, which is what a stock
+ * XMRig build ends up with on a host without reserved pages. Every step down is
+ * silent to the caller and visible in the page size this records. */
 Mapping mapPages(size_t bytes, bool huge, size_t *mapped)
 {
     const size_t aligned = (bytes + kHugePageSize - 1) & ~(kHugePageSize - 1);
@@ -62,6 +89,25 @@ Mapping mapPages(size_t bytes, bool huge, size_t *mapped)
 
     return out;
 #else
+    if (huge && aligned >= kGiganticPageSize) {
+        const size_t gigantic = (aligned + kGiganticPageSize - 1) & ~(kGiganticPageSize - 1);
+        void *p = mmap(nullptr, gigantic, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | (kGiganticShift << MAP_HUGE_SHIFT), -1, 0);
+        if (p != MAP_FAILED) {
+            out.ptr = static_cast<uint8_t *>(p);
+            out.bytes = gigantic;
+            out.explicit_huge = true;
+            out.via_mmap = true;
+            out.page_kb = kGiganticPageSize / 1024;
+            *mapped = gigantic;
+
+            return out;
+        }
+
+        /* ENOMEM: no 1 GiB pool, or not enough pages left in it. Nothing to
+         * report — the 2 MiB pool is the next thing tried. */
+    }
+
     if (huge) {
         void *p = mmap(nullptr, aligned, PROT_READ | PROT_WRITE,
                        MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
@@ -70,6 +116,7 @@ Mapping mapPages(size_t bytes, bool huge, size_t *mapped)
             out.bytes = aligned;
             out.explicit_huge = true;
             out.via_mmap = true;
+            out.page_kb = kHugePageSize / 1024;
             *mapped = aligned;
 
             return out;
@@ -163,8 +210,13 @@ struct xmo_engine {
      * ends up claiming "huge pages 2336 MB" while running on 4 KiB pages. */
     size_t huge_explicit = 0;
     size_t huge_requested = 0;
+    /* 0 when the mapping is on ordinary pages, else 2048 or 1048576. */
+    size_t huge_page_kb = 0;
     bool  full_mem      = true;
     bool  jit           = true;
+    /* `randomx_set_huge_pages_jit` is a process-wide switch, so an engine that
+     * is activated later has to be able to restore its own value. */
+    bool  huge_pages_jit = true;
     /* The mapping and the size the algorithm really needs. They differ per
      * coin: Monero's cache is 256 MiB, Panthera's is 128. */
     Mapping cache{};
@@ -184,6 +236,31 @@ struct xmo_vm {
 };
 
 
+/* Which RandomX configuration is active is process-wide state
+ * (`RandomX_CurrentConfig`), not per-engine: cache initialisation, the JIT
+ * program and even `randomx_calculate_hash_next` (it reads ProgramCount) all
+ * take it from there. One process used to have exactly one engine, so
+ * `xmo_engine_new` applying it once was enough. Now that a miner can keep the
+ * previous algorithm's dataset mapped and switch back to it, "the last engine
+ * that was created" and "the engine that is hashing" can be different
+ * configurations - and hashing Monero's dataset under Panthera's parameters
+ * produces wrong hashes rather than slow ones.
+ *
+ * So every transition that changes which engine is live calls this, with the
+ * workers stopped. It is a constant-size copy of a configuration, not a
+ * dataset build. */
+void xmo_engine_activate(xmo_engine *engine)
+{
+    if (!engine) {
+        return;
+    }
+
+    xmrig::RxAlgo::apply(engine->algorithm.id());
+    randomx_set_optimized_dataset_init(engine->algo_id == XMO_RX_XLA ? 0 : -1);
+    randomx_set_huge_pages_jit(engine->huge_pages_jit ? 1 : 0);
+}
+
+
 xmo_engine *xmo_engine_new(int algo, int flags, char *err, size_t errlen)
 {
     auto *engine = new xmo_engine();
@@ -195,9 +272,8 @@ xmo_engine *xmo_engine_new(int algo, int flags, char *err, size_t errlen)
     engine->jit      = (flags & 8) != 0;
 
     // Select the per-coin RandomX configuration before touching any sizes.
-    xmrig::RxAlgo::apply(engine->algorithm.id());
-    randomx_set_optimized_dataset_init(algo == XMO_RX_XLA ? 0 : -1);
-    randomx_set_huge_pages_jit((flags & 2) != 0);
+    engine->huge_pages_jit = (flags & 2) != 0;
+    xmo_engine_activate(engine);
 
     const int cache_flags = engine->jit ? RANDOMX_FLAG_JIT : RANDOMX_FLAG_DEFAULT;
 
@@ -215,7 +291,10 @@ xmo_engine *xmo_engine_new(int algo, int flags, char *err, size_t errlen)
     }
     if (engine->huge) {
         engine->huge_requested += engine->cache.bytes;
-        if (engine->cache.explicit_huge) engine->huge_explicit += engine->cache.bytes;
+        if (engine->cache.explicit_huge) {
+            engine->huge_explicit += engine->cache.bytes;
+            engine->huge_page_kb = engine->cache.page_kb;
+        }
     }
 
     engine->cache_handle = randomx_create_cache(static_cast<randomx_flags>(cache_flags), engine->cache.ptr);
@@ -244,7 +323,10 @@ xmo_engine *xmo_engine_new(int algo, int flags, char *err, size_t errlen)
         }
         if (engine->huge) {
             engine->huge_requested += engine->data.bytes;
-            if (engine->data.explicit_huge) engine->huge_explicit += engine->data.bytes;
+            if (engine->data.explicit_huge) {
+                engine->huge_explicit += engine->data.bytes;
+                engine->huge_page_kb = engine->data.page_kb;
+            }
         }
 
         engine->dataset = randomx_create_dataset(engine->data.ptr);
@@ -323,6 +405,12 @@ size_t xmo_engine_huge_pages_total(const xmo_engine *engine)
 }
 
 
+size_t xmo_engine_huge_page_kb(const xmo_engine *engine)
+{
+    return engine ? engine->huge_page_kb : 0;
+}
+
+
 size_t xmo_engine_total_memory(const xmo_engine *engine)
 {
     if (!engine) {
@@ -341,6 +429,11 @@ int xmo_engine_seed(xmo_engine *engine, const uint8_t *seed, size_t seed_len,
 
         return -1;
     }
+
+    /* The dataset size, the cache parameters and the AES keys all come from
+     * the active configuration, so this cannot be left to whichever engine was
+     * created last. */
+    xmo_engine_activate(engine);
 
     randomx_init_cache(engine->cache_handle, seed, seed_len);
 
@@ -389,6 +482,12 @@ xmo_vm *xmo_vm_new(xmo_engine *engine, int flags, uint32_t numa_node,
 
         return nullptr;
     }
+
+    /* `randomx_create_vm` compiles the JIT program against the active
+     * configuration, so a VM for the engine that is about to hash has to be
+     * created under that engine's parameters - not under those of whichever
+     * engine was built most recently. */
+    xmo_engine_activate(engine);
 
     auto *result = new xmo_vm();
     result->algorithm = engine->algorithm;
@@ -505,6 +604,87 @@ void xmo_hash_next(xmo_vm *vm, uint64_t *temp, const uint8_t *blob, size_t len, 
 void xmo_commitment(const uint8_t *blob, size_t len, const uint8_t *hash_in, uint8_t *out)
 {
     randomx_calculate_commitment(blob, len, hash_in, out);
+}
+
+
+/*
+ * The wide (AVX-512 + VAES) implementation of the per-hash scratchpad pass is
+ * built into this library and selected on Zen 5 only. It is an ordinary AES
+ * schedule done four lanes at a time, so it must produce byte-identical state
+ * to the 128-bit one - and it did not exist as far as the test suite was
+ * concerned, because the dispatch is a CPU check nobody could reach from a
+ * machine that is not Zen 5.
+ *
+ * These two calls make it reachable on any CPU that has the instructions, with
+ * the buffers deliberately 8 bytes past a 64-byte boundary: a vmovdqa64 against
+ * a `uint64_t[8]` on the stack is a general-protection fault, i.e. a crash on
+ * exactly the CPUs this path exists for.
+ */
+#ifdef XMRIG_VAES
+void hashAndFillAes1Rx4_VAES512(void *scratchpad, size_t scratchpadSize, void *hash, void *fill_state);
+#endif
+
+int xmo_wide_scratchpad_available(void)
+{
+#ifdef XMRIG_VAES
+    return (xmrig::Cpu::info()->hasVAES() && xmrig::Cpu::info()->has(xmrig::ICpuInfo::FLAG_AVX512F)) ? 1 : 0;
+#else
+    return 0;
+#endif
+}
+
+
+int xmo_wide_scratchpad_agrees(char *report, size_t report_len)
+{
+    if (report && report_len) report[0] = '\0';
+
+#ifdef XMRIG_VAES
+    if (!xmo_wide_scratchpad_available()) return 0;
+
+    constexpr size_t kPad = 2u * 1024u * 1024u;   // RANDOMX_SCRATCHPAD_L3_SIZE
+    uint8_t *pad_a = static_cast<uint8_t *>(aligned_alloc(64, kPad));
+    uint8_t *pad_b = static_cast<uint8_t *>(aligned_alloc(64, kPad));
+    /* One 128-byte block, both halves used 8 bytes in: `fill` overlaps `hash`'s
+     * neighbour, which is what a stack frame looks like. */
+    uint8_t *state_a = static_cast<uint8_t *>(aligned_alloc(64, 160));
+    uint8_t *state_b = static_cast<uint8_t *>(aligned_alloc(64, 160));
+    if (!pad_a || !pad_b || !state_a || !state_b) {
+        free(pad_a); free(pad_b); free(state_a); free(state_b);
+        if (report && report_len) snprintf(report, report_len, "out of memory");
+        return -1;
+    }
+
+    std::memset(pad_a, 0x5a, kPad);
+    std::memset(pad_b, 0x5a, kPad);
+    for (int i = 0; i < 8; ++i) {
+        reinterpret_cast<uint64_t *>(state_a + 8)[i] = static_cast<uint64_t>(i + 1);
+        reinterpret_cast<uint64_t *>(state_b + 8)[i] = static_cast<uint64_t>(i + 1);
+    }
+    std::memset(state_a + 72, 0, 32);
+    std::memset(state_b + 72, 0, 32);
+
+    hashAndFillAes1Rx4_x86(pad_a, kPad, state_a + 72, state_a + 8);
+    hashAndFillAes1Rx4_VAES512(pad_b, kPad, state_b + 72, state_b + 8);
+
+    const bool pad_same = std::memcmp(pad_a, pad_b, kPad) == 0;
+    const bool state_same = std::memcmp(state_a + 8, state_b + 8, 96) == 0;
+
+    free(pad_a); free(pad_b); free(state_a); free(state_b);
+
+    if (!pad_same || !state_same) {
+        if (report && report_len) {
+            snprintf(report, report_len, "scratchpad %s, state %s",
+                     pad_same ? "identical" : "DIFFERS", state_same ? "identical" : "DIFFERS");
+        }
+        return -1;
+    }
+
+    if (report && report_len) snprintf(report, report_len, "both ran on unaligned buffers, output identical");
+    return 1;
+#else
+    (void)report; (void)report_len;
+    return 0;
+#endif
 }
 
 

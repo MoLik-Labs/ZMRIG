@@ -2,7 +2,7 @@
 #
 # oneclick.sh - build, tune, install and supervise this miner with one command.
 #
-#   curl -fsSL https://raw.githubusercontent.com/NggKhaiz/ZMRIG/BETA/oneclick.sh | sudo bash -s -- --wallet 4...
+#   curl -fsSL https://raw.githubusercontent.com/MoLik-Labs/ZMRIG/BETA/oneclick.sh | sudo bash -s -- --wallet 4...
 #
 #   sudo ./oneclick.sh                     # full install, asks for the wallet
 #   sudo ./oneclick.sh --wallet 4... --yes  # fully unattended
@@ -22,6 +22,7 @@
 #
 # Subcommands
 #   install (default)  deps + build + tune + config + service + self-check
+#   plan               every automatic decision and the reason for it (no root)
 #   build              compile only
 #   tune               huge pages, THP, governor, MSR (root)
 #   config             (re)generate the config file
@@ -31,12 +32,13 @@
 #   verify             self-test + developer-fee audit
 #   update             git pull + rebuild + restart
 #   uninstall          stop, remove service, binary and (optionally) the config
+#   purge              remove everything this tool ever put on the machine
 #
 # Everything is idempotent: re-running does not duplicate services, does not
 # overwrite an existing config unless --force is passed, and skips a rebuild
 # when the binary is newer than the sources.
 #
-# ZMRIG installer, by @nggkhaiz - https://github.com/NggKhaiz/ZMRIG
+# ZMRIG installer, by @nggkhaiz - https://github.com/MoLik-Labs/ZMRIG
 # Licensed under GPL-3.0.
 #
 set -euo pipefail
@@ -45,7 +47,7 @@ ONECLICK_VERSION="1.3"
 ZIG_VERSION="${MINER_ZIG_VERSION:-0.13.0}"
 
 SELF="${BASH_SOURCE[0]:-}"
-REPO_URL="${MINER_REPO_URL:-https://github.com/NggKhaiz/ZMRIG.git}"
+REPO_URL="${MINER_REPO_URL:-https://github.com/MoLik-Labs/ZMRIG.git}"
 REPO_BRANCH="${MINER_BRANCH:-BETA}"
 
 PREFIX="${MINER_PREFIX:-/usr/local}"
@@ -94,10 +96,16 @@ NET_KEEPALIVE_INTERVAL=""
 # MSR / NiceHash / affinity for the zmrig engine. "auto" keeps the XMRig
 # default (write the preset, restore on exit); "off" leaves the registers be.
 MSR_MODE="auto"
-# --profile: what this machine is for. "auto" reads the hardware (a laptop on
-# battery becomes "watt", everything else "free"), so a plain install needs no
-# flags at all.
-PROFILE="${MINER_PROFILE:-auto}"
+# --profile: gross hashrate is the default regardless of mains/battery state.
+# `watt` is an explicit lower-throughput choice; `auto` is an alias for free.
+PROFILE="${MINER_PROFILE:-free}"
+# Keep sustained CPU temperature in a conservative range by default. The
+# explicit --no-thermal opt-out is available for externally managed systems.
+MAX_TEMP="${MAX_TEMP:-80}"
+# The developer fee this install will run with. Three percent by default, and a
+# flag because the fee is documented as switchable: "edit donate-level in
+# config.json" is not a switch, it is homework.
+DONATE_LEVEL="${DONATE_LEVEL:-3}"
 CPU_AFFINITY=""
 NICEHASH=0
 # Machine report for the web dashboard (zmrig only): a small file the miner
@@ -160,7 +168,10 @@ confirm() {
 }
 
 usage() {
-    sed -n '3,40p' "$0" | sed 's/^# \{0,1\}//'
+    # The header is the help. Printing a fixed line range means the range goes
+    # stale the day someone adds a subcommand (it did: `plan` and `purge` were
+    # missing from --help), so stop at the first non-comment line instead.
+    sed -n '3,/^[^#]/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
     cat <<'EOF'
 
 Options
@@ -172,9 +183,11 @@ Options
                          is unreachable, bans this IP, or refuses the wallet
   --pass VALUE           pool password            (default: x)
   --rig-id NAME          rig identifier shown on the pool dashboard
-  --profile NAME         auto | free | watt. Default auto: free (max hashrate,
-                         electricity is free) everywhere except a laptop on
-                         battery, which gets watt (max hashrate per watt).
+  --profile NAME         free (default, maximum hashrate) | watt (opt-in,
+                         maximum hashrate per watt) | auto (same as free).
+  --max-temp C           safe hottest-CPU target (default 80 C); threads step
+                         down as the box warms, mining pauses at C+15
+  --no-thermal           explicitly disable the thermal governor
   --autotune[=SEC]       search for the best thread count after install
                          (default: on for zmrig, 8 s per candidate)
   --no-autotune          keep the built-in thread heuristic
@@ -185,7 +198,7 @@ Options
   --algo NAME            force one algorithm instead of pool auto-selection
   --engine NAME          auto (default) | xmrig (all algorithms) | zmrig (Zig, rx/*).
                          auto reads the pool: switching pools need every algorithm,
-                         RandomX-only pools are faster on zmrig (1% dev fee)
+                         RandomX-only pools are faster on zmrig (3% dev fee)
   --tls                  use TLS for the pool connection
   --cloudflare[=HOST[:PORT]]  WebSocket+TLS on 443 (works through CDNs and
                          firewalls that only allow HTTPS). Switches to the
@@ -209,6 +222,8 @@ Options
   --cpu-affinity MASK    mine only on these CPUs, XMRig bitmask (e.g. 0x3)
   --msr                  write the RandomX MSR preset (root, bare metal)
   --no-msr               never touch the MSR registers (containers, some VMs)
+  --donate-level N       developer fee in percent, 0..10 (default: 3; 0 turns it
+                         off). Written into config.json, and printed by --check
   --nicehash             mask the nonce for a NiceHash/rental pool
   --build-dir DIR        where to compile        (default: PREFIX/src/zmrig-build)
   --all-backends         also build OpenCL/CUDA support
@@ -259,6 +274,9 @@ while [ $# -gt 0 ]; do
         --no-autotune)   AUTOTUNE=0 ;;
         --profile)       PROFILE="${2:?}"; shift ;;
         --profile=*)     PROFILE="${1#*=}" ;;
+        --max-temp)      MAX_TEMP="${2:?}"; shift ;;
+        --max-temp=*)    MAX_TEMP="${1#*=}" ;;
+        --no-thermal)    MAX_TEMP="0" ;;
         --engine)        ENGINE="${2:?}"; ENGINE_EXPLICIT=1; shift ;;
         --engine=*)      ENGINE="${1#*=}"; ENGINE_EXPLICIT=1 ;;
         --tls)           TLS="true" ;;
@@ -300,6 +318,9 @@ while [ $# -gt 0 ]; do
         --cpu-affinity=*) CPU_AFFINITY="${1#*=}" ;;
         --msr)           MSR_MODE="on" ;;
         --no-msr)        MSR_MODE="off" ;;
+        --donate-level|--donate-level=*)
+            DONATE_LEVEL="${1#*=}"
+            if [ "$DONATE_LEVEL" = "$1" ]; then DONATE_LEVEL="${2:?--donate-level needs a number}"; shift; fi ;;
         --nicehash)      NICEHASH=1 ;;
         --build-dir)     BUILD_DIR_DEFAULT="${2:?}"; shift ;;
         --build-dir=*)   BUILD_DIR_DEFAULT="${1#*=}" ;;
@@ -319,6 +340,27 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$COMMAND" ] || COMMAND="install"
+
+# The thermal policy is checked here, not where it is written: `plan` never
+# writes a config, and a typo should fail before the user believes it worked.
+if [ -n "$MAX_TEMP" ]; then
+    case "$MAX_TEMP" in
+        0) ;;
+        *[!0-9]*) die "--max-temp must be a whole number of degrees Celsius (45..95), got '${MAX_TEMP}'" ;;
+    esac
+    if [ "$MAX_TEMP" != 0 ] && { [ "$MAX_TEMP" -lt 45 ] || [ "$MAX_TEMP" -gt 95 ]; }; then
+        die "--max-temp must be 45..95 degrees Celsius, got ${MAX_TEMP}: below 45 the rig would never mine, above 95 nothing is protected"
+    fi
+fi
+
+# Same reasoning for the fee: a typo has to fail here, in the plan, rather than
+# produce a config.json the miner refuses to start with at boot.
+case "${DONATE_LEVEL}" in
+    ''|*[!0-9]*) die "--donate-level must be a whole number 0..10, got '${DONATE_LEVEL}'" ;;
+esac
+if [ "${DONATE_LEVEL}" -gt 10 ]; then
+    die "--donate-level takes 0..10 (the miner's own ceiling), got ${DONATE_LEVEL}"
+fi
 
 # ---------------------------------------------------------------------------
 # pool names
@@ -494,12 +536,11 @@ has_systemd() {
 }
 
 detect_os() {
-    OS_ID="unknown"; OS_LIKE=""; OS_VER=""
+    OS_ID="unknown"; OS_VER=""
     if [ -r /etc/os-release ]; then
         # shellcheck disable=SC1091
         . /etc/os-release
         OS_ID="${ID:-unknown}"
-        OS_LIKE="${ID_LIKE:-}"
         OS_VER="${VERSION_ID:-}"
     elif have sw_vers; then
         OS_ID="macos"
@@ -726,10 +767,10 @@ resolve_engine() {
             # the whole RandomX family, the pool picks the best-paying variant,
             # and the rig keeps the faster engine.
             ENGINE="zmrig"
-            info "auto: ${POOL%%:*} pays for several algorithms; zmrig advertises the RandomX family (1% dev fee)"
+            info "auto: ${POOL%%:*} pays for several algorithms; zmrig advertises the RandomX family (3% dev fee)"
         else
             ENGINE="zmrig"
-            info "auto: ${POOL%%:*} mines RandomX only, using the zmrig engine (1% dev fee)"
+            info "auto: ${POOL%%:*} mines RandomX only, using the zmrig engine (3% dev fee)"
         fi
     fi
 
@@ -871,7 +912,11 @@ build_zmrig() {
     local jobs
     jobs=$(nproc 2>/dev/null || echo 2)
 
-    ZIG="$ZIG_BIN" "${CONFIGURED_ROOT}/zmrig/build.sh" --jobs "$jobs" --output "${BUILD_DIR}"
+    # --strip: the installed binary is the artefact, not a debugging session.
+    # It is 1.8 MB instead of 8.7 MB, all of which is DWARF that nothing on a
+    # rig reads, and the install copies it into /usr/local/bin and keeps the
+    # previous one next to it for a rollback.
+    ZIG="$ZIG_BIN" "${CONFIGURED_ROOT}/zmrig/build.sh" --jobs "$jobs" --strip --output "${BUILD_DIR}"
 
     [ -x "${BUILD_DIR}/zmrig" ] || die "build did not produce ${BUILD_DIR}/zmrig"
     ok "built $( "${BUILD_DIR}/zmrig" --version 2>/dev/null | head -1 )"
@@ -1007,9 +1052,13 @@ write_config() {
     local http_token="null"
     [ -n "$NET_HTTP_TOKEN" ] && http_token="\"${NET_HTTP_TOKEN}\""
 
-    # zmrig keys (the C++ engine ignores them). MSR is on by default here: the
-    # service runs as root and the miner restores the old values on exit.
-    local msr_flag="true"
+    # zmrig keys (the C++ engine ignores them). The MSR preset is worth 5-15 % on
+    # bare metal and nothing in a container, so the default is the string
+    # "auto": the miner probes this machine and decides, and the old register
+    # values are restored on exit either way. `--msr` writes true (try anyway),
+    # `--no-msr` writes false.
+    local msr_flag='"auto"'
+    [ "$MSR_MODE" = "on" ] && msr_flag="true"
     [ "$MSR_MODE" = "off" ] && msr_flag="false"
 
     local nicehash_flag="false"
@@ -1095,17 +1144,28 @@ write_config() {
     \"power\": ${NET_POWER}"
     fi
 
-    # zmrig-only keys. `profile` is read by the miner itself (so a laptop that
-    # gets unplugged switches to the watt profile on its next start), and
-    # `threads` is the winner of the install-time search. Both are values this
-    # script generated, never user text.
+    # zmrig-only keys. `profile` is throughput-first unless watt was explicitly
+    # requested; `threads` is the install-time search winner. Both are generated
+    # here, never pasted user text.
     local profile_json=""
     local cpu_threads_json=""
     local health_json=""
+    local thermal_json=""
     if [ "${ENGINE:-xmrig}" = "zmrig" ]; then
         resolve_profile_effective
         profile_json="
     \"profile\": \"${PROFILE_EFFECTIVE}\","
+        # The thermal policy is written as a number. Zero is the explicit
+        # --no-thermal opt-out; otherwise the default is an 80 C safe target.
+        case "${MAX_TEMP}" in
+            ''|*[!0-9.]*)
+                [ -n "$MAX_TEMP" ] && die "--max-temp must be a number of degrees Celsius (45..95)"
+                ;;
+            *)
+                thermal_json="
+    \"max-temp\": ${MAX_TEMP},"
+                ;;
+        esac
         if [ "$HEALTH_RESTART" != 1 ]; then
             # profile_json already ends with a comma, so this block only has
             # to supply its own trailing one.
@@ -1135,7 +1195,7 @@ write_config() {
         "access-token": ${http_token},
         "restricted": true
     },
-    "autosave": true,${profile_json}${health_json}
+    "autosave": true,${profile_json}${thermal_json}${health_json}
     "background": false,
     "colors": false,
     "title": true,
@@ -1144,7 +1204,7 @@ write_config() {
         "init-avx2": -1,
         "mode": "auto",
         "rdmsr": true,
-        "wrmsr": ${msr_flag},
+        "msr": ${msr_flag},
         "cache_qos": false,
         "numa": true,
         "scratchpad_prefetch_mode": 1
@@ -1177,7 +1237,7 @@ ${cpu_threads_json}
         "loader": null,
         "nvml": true
     },
-    "donate-level": 1,
+    "donate-level": ${DONATE_LEVEL},
     "log-file": null,
     "pools": [
         {
@@ -1524,11 +1584,13 @@ current_hashrate() {
     # line: that is the miner's.
     stamp=$(printf '%s' "$raw" | grep -oE '[0-9]{2}:[0-9]{2}:[0-9]{2}' | tail -1) || true
     if [ -n "$stamp" ]; then
-        local then now delta
-        then=$(date -d "today ${stamp}" +%s 2>/dev/null || echo 0)
+        # `then` is a keyword: naming a variable after it works, but only until
+        # somebody reads the block quickly.
+        local stamp_at now delta
+        stamp_at=$(date -d "today ${stamp}" +%s 2>/dev/null || echo 0)
         now=$(date +%s)
-        if [ "$then" -gt 0 ]; then
-            delta=$((now - then))
+        if [ "$stamp_at" -gt 0 ]; then
+            delta=$((now - stamp_at))
             [ "$delta" -lt 0 ] && delta=$((delta + 86400))
             [ "$delta" -le 90 ] || return 1
         fi
@@ -1740,12 +1802,12 @@ self_check() {
         fi
         rm -f /tmp/zmrig-selftest.$$
 
-        # The shipped binary takes 1 % of Monero time. Print what it says about
+        # The shipped binary takes 3 % of Monero time. Print what it says about
         # itself, and fail loudly if it says something else than the docs.
         local donate_line
         donate_line=$("$BINARY" -o pool.example.com:3333 -u TEST --check 2>/dev/null | sed -n 's/^ *donate  //p' | head -1)
         case "$donate_line" in
-            1%*46SQLW7D*) ok "developer fee: ${donate_line}" ;;
+            3%*46SQLW7D*) ok "developer fee: ${donate_line}" ;;
             off*)         warn "the installed config disables the developer fee (${CONFIG_FILE})" ;;
             *)            warn "developer fee line is not the documented one: ${donate_line:-missing}" ;;
         esac
@@ -1794,7 +1856,7 @@ self_check() {
 summary_card() {
     # What the installed binary says about its own fee, so the card cannot drift
     # from the code: `off` means the operator passed --donate-level=0.
-    local fee_line="1% of Monero time (--donate-level=0 turns it off)"
+    local fee_line="3% of Monero time (--donate-level=0 turns it off)"
     if [ -x "$BINARY" ]; then
         case "$("$BINARY" -o pool.example.com:3333 -u TEST --check 2>/dev/null | sed -n 's/^ *donate  //p' | head -1)" in
             off*) fee_line="off (--donate-level=0)" ;;
@@ -2062,47 +2124,21 @@ cmd_purge() {
 #       office machine, a lab PC that is on anyway).
 # watt: one thread per physical core and no SMT-only threads, because the last
 #       few percent of hashrate costs 30-40% more power there.
-# auto: a laptop on battery gets watt, everything else gets free.
-profile_battery_state() {
-    local bat status=""
-    for bat in /sys/class/power_supply/BAT*; do
-        [ -r "${bat}/status" ] || continue
-        status=$(cat "${bat}/status" 2>/dev/null || true)
-        case "$status" in
-            Discharging) printf '%s' "discharging"; return 0 ;;
-            Charging|Full) ;;
-        esac
-    done
-    case "$status" in
-        "") printf '%s' "none" ;;
-        *)  printf '%s' "plugged" ;;
-    esac
-}
-
+# `auto` deliberately has no battery probe: battery state is not permission
+# to lower hashrate. Only an explicit `watt` setting opts into that tradeoff.
 resolve_profile_effective() {
     case "$PROFILE" in
-        free|watt) PROFILE_EFFECTIVE="$PROFILE" ;;
-        auto)
-            case "$(profile_battery_state)" in
-                discharging) PROFILE_EFFECTIVE="watt" ;;
-                *)           PROFILE_EFFECTIVE="free" ;;
-            esac
-            ;;
+        free|auto) PROFILE_EFFECTIVE="free" ;;
+        watt) PROFILE_EFFECTIVE="watt" ;;
         *) die "--profile must be auto, free or watt (got '${PROFILE}')" ;;
     esac
 }
 
 profile_reason() {
     case "$PROFILE" in
-        free) printf '%s' "requested" ;;
-        watt) printf '%s' "requested" ;;
-        auto)
-            case "$(profile_battery_state)" in
-                discharging) printf '%s' "auto: on battery, watts are the limit" ;;
-                none)        printf '%s' "auto: no battery, electricity is treated as free" ;;
-                *)           printf '%s' "auto: on mains power" ;;
-            esac
-            ;;
+        free) printf '%s' "requested: maximum hashrate" ;;
+        watt) printf '%s' "requested: maximum hashes per watt" ;;
+        auto) printf '%s' "auto: maximum hashrate (battery state does not lower performance)" ;;
     esac
 }
 
@@ -2222,7 +2258,7 @@ cmd_plan() {
 
     local engine_note=""
     case "$ENGINE" in
-        zmrig) engine_note="RandomX family, 1% dev fee" ;;
+        zmrig) engine_note="RandomX family, 3% dev fee" ;;
         xmrig) engine_note="all algorithms, pool picks the coin" ;;
     esac
 
@@ -2250,6 +2286,12 @@ cmd_plan() {
     printf '    %-14s %s  (%s)\n' "profile" "${PROFILE_EFFECTIVE}" "$(profile_reason)"
     printf '    %-14s %s\n' "mode" "$( [ "$ENGINE" = zmrig ] && echo "auto (fast when RAM allows)" || echo "pool default")"
     printf '    %-14s %s\n' "huge pages" "$(huge_page_plan)"
+    if [ "$MAX_TEMP" = 0 ]; then
+        thermal_plan="off (--no-thermal explicitly requested)"
+    else
+        thermal_plan="hold ${MAX_TEMP} C: step down at ${MAX_TEMP} C, pause at $((MAX_TEMP + 15)) C"
+    fi
+    printf '    %-14s %s\n' "thermal" "$thermal_plan"
     printf '    %-14s %s\n' "autotune" "$(autotune_plan)"
     printf '    %-14s %s\n' "service" "$( [ "$DO_SERVICE" = 1 ] && echo "${SERVICE_NAME}.service (systemd)" || echo "none, run in the foreground")"
     printf '\n'
@@ -2348,7 +2390,7 @@ case "$COMMAND" in
         if [ "$ENGINE" = "zmrig" ]; then
             step "verifying zmrig"
             zmrig_self_test "$binary" || die "self-test failed"
-            # The fee is 1 % of Monero time, printed by --check and switchable
+            # The fee is 3 % of Monero time, printed by --check and switchable
             # off; the audit below reads the rate, the address and the switch.
             if [ -x "${CONFIGURED_ROOT}/scripts/verify-fee.sh" ]; then
                 "${CONFIGURED_ROOT}/scripts/verify-fee.sh" --binary "$binary" \

@@ -46,6 +46,27 @@ test('config validation refuses settings that would take money for nothing', () 
   assert.deepStrictEqual(bad({ operator_address: 'not-an-address' }), []);
 });
 
+test('the pool refuses a fee address no wallet can spend', () => {
+  const bad = (overrides) => validateConfig(loadConfig(null, { payout_mode: 'ledger', ...overrides }));
+  // One character off, same length, same alphabet: the case a shape check calls
+  // valid and a wallet calls "not mine". The fee address never logs in, so
+  // nothing else in the pool would ever have noticed.
+  const typo = `${OPERATOR.slice(0, -1)}f`;
+  assert.notStrictEqual(typo, OPERATOR);
+
+  const ledger = bad({ operator_address: typo }).join();
+  assert.match(ledger, /operator_address cannot be paid/);
+  assert.match(ledger, /checksum does not match/);
+  // Real money moving or not, a typo is a typo: the address is published and
+  // people send to it by hand.
+  assert.match(bad({ payout_mode: 'wallet', operator_address: typo }).join(), /cannot be paid/);
+
+  // A real address on another chain has a valid checksum and a different
+  // network byte, so it is not address-shaped here and stays a shape problem.
+  const mainnet = loadConfig(null, { payout_mode: 'ledger' });
+  assert.deepStrictEqual(validateConfig(mainnet), []);
+});
+
 test('the environment overrides the file, the way a PaaS injects secrets', () => {
   const before = { ...process.env };
   process.env.OPERATOR_ADDRESS = OPERATOR;
@@ -316,4 +337,41 @@ test('HTTP endpoints answer and never leak the payout destination by accident', 
       setTimeout(() => { child.kill('SIGKILL'); resolve(); }, 3000).unref();
     });
   }
+});
+
+test('a fragmented message cannot grow past the message cap', () => {
+  // The frame cap is not a memory bound: RFC 6455 allows one 1 MB frame with
+  // FIN clear followed by continuation frames for ever, and before this cap
+  // every one of them was kept. One socket, a few seconds, no pool.
+  const closed = [];
+  const connection = new ws.WebSocketConnection(fakeSocket(), () => {});
+  connection.on('close', () => closed.push(true));
+
+  const megabyte = Buffer.alloc(1024 * 1024, 0x41);
+  connection.feed(maskedFrame(0x1, megabyte, { fin: false }));
+  assert.strictEqual(closed.length, 1, 'the first fragment is already over the cap');
+
+  const second = new ws.WebSocketConnection(fakeSocket(), () => {});
+  let secondClosed = false;
+  second.on('close', () => { secondClosed = true; });
+
+  // Small fragments, but enough of them: 300 KB in a 100 KB opening frame
+  // followed by four 50 KB continuations.
+  second.feed(maskedFrame(0x1, Buffer.alloc(100 * 1024, 0x42), { fin: false }));
+  for (let i = 0; i < 4 && !secondClosed; i++) {
+    second.feed(maskedFrame(0x0, Buffer.alloc(50 * 1024, 0x42), { fin: false }));
+  }
+  assert.strictEqual(secondClosed, true, 'continuations stop at the cap');
+});
+
+test('a second data frame inside an open message is a protocol error', () => {
+  const closed = [];
+  const connection = new ws.WebSocketConnection(fakeSocket(), () => {});
+  connection.on('close', () => closed.push(true));
+  connection.on('message', () => { throw new Error('half a message was handed over'); });
+
+  connection.feed(maskedFrame(0x1, '{"id":', { fin: false }));
+  connection.feed(maskedFrame(0x1, '3}', { fin: false }));
+
+  assert.strictEqual(closed.length, 1);
 });

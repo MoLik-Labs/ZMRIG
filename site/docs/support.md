@@ -1,12 +1,12 @@
 ---
 title: Support and donations
 description: Where to send a Monero donation, how to verify the address before sending, what a donation does not buy, and what helps the project more.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-en.png
+image: https://molik-labs.github.io/ZMRIG/img/og-en.png
 ---
 
 # Support and donations
 
-The Zig miner already takes 1 % of Monero time as a fee
+The Zig miner already takes 3 % of Monero time as a fee
 ([what that costs](/docs/reference/fee)); the C++ engine takes nothing. This
 page exists for the people who want to send something on top of that anyway.
 Nothing in the software reads the address below.
@@ -59,6 +59,19 @@ print(len(raw), body[0], "OK" if digest == checksum else "BAD")
 A bad checksum means a typo, a truncated copy, or something that was never a
 Monero address.
 
+The shortest version of that check is the miner itself, once it is installed:
+
+```console
+$ zmrig --check-wallet 46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ
+valid   46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ
+  check checksum verified (Keccak-256)
+  kind  standard
+  net   mainnet
+```
+
+The documentation site's builder checks any Monero address the same way before
+it gives you a command, and so does `zmrig-os setup`.
+
 ## What a donation does not buy
 
 - **No effect on the miner.** Nothing parses this page at build or run time, and
@@ -72,7 +85,7 @@ Monero address.
 
 ## What helps more than a transfer
 
-1. **Mine to the pool.** The 1 % fee is what funds the work, and it only exists
+1. **Mine to the pool.** The 3 % fee is what funds the work, and it only exists
    while somebody is mining.
 2. **Send a measurement.** `zmrig/tests/ab.sh` compares two settings on the same
    machine; a before/after table settles arguments that opinions do not.

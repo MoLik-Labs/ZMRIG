@@ -33,14 +33,25 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential \
-            cmake \
-            git \
-            libhwloc-dev \
-            libssl-dev \
-            libuv1-dev
+          # This step has been failing with exit 100 (apt's code) after ten
+          # minutes on both architectures, on BETA, with no compiler having run:
+          # a mirror, not a change. `Acquire::Retries` makes apt retry by
+          # itself, two passes cover a longer wobble, and both are bounded -
+          # retrying a dead mirror for twenty minutes turns a fast failure into
+          # a job that dies on its timeout.
+          sudo -E apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=15 update || echo "apt update failed"
+          for attempt in 1 2; do
+            if sudo -E apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=15 \
+                install -y --no-install-recommends \
+                build-essential cmake git libhwloc-dev libssl-dev libuv1-dev; then
+              break
+            fi
+            echo "::warning::apt install attempt ${attempt} failed"
+            sleep $((attempt * 10))
+          done
+          for package in cmake g++ ; do
+            command -v "$package" >/dev/null 2>&1 || { echo "missing after apt: $package"; exit 1; }
+          done
 
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -52,6 +63,412 @@ jobs:
         run: node run_tests.js --safe --build-dir build
 
       # Full local suite: node run_tests.js
+
+  # The Zig engine had no CI at all: cli.sh, unit.sh, net.sh, health.sh and
+  # thermal.sh ran only on the machine that wrote them, which is how a suite
+  # that passes locally and a suite that passes nowhere look the same.
+  #
+  # x86-64 only: the static build and the CUDA-free C++ engine are what the
+  # release binaries are, and the arm64 runner is used by the XMRig matrix
+  # above for the same source tree.
+  zmrig:
+    name: zmrig engine build and test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install the toolchain
+        run: |
+          # The runner image already has a C++ compiler and python3-pip; apt is
+          # only here so an older image still works. It is allowed to fail: this
+          # step failed twice on a runner with a bad apt mirror (exit 100, after
+          # four minutes of retries) and took every Zig test in the job with it,
+          # which is a red build for a change that touched no C++ at all.
+          if ! command -v g++ >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
+            sudo apt-get update || echo "apt update failed"
+            sudo apt-get install -y --no-install-recommends build-essential python3-pip || echo "apt install failed"
+          fi
+          command -v g++ >/dev/null 2>&1 || { echo "no C++ compiler on this runner"; exit 1; }
+
+          # zig 0.13, and only 0.13: the runner's own zig is newer and does not
+          # compile this code. scripts/find-zig.sh decides, and says which.
+          for attempt in 1 2 3; do
+            if python3 -m pip install --break-system-packages --quiet ziglang==0.13.0; then
+              break
+            fi
+            echo "pip attempt ${attempt} failed; retrying in $((attempt * 10)) s"
+            sleep $((attempt * 10))
+          done
+
+          # Prove the toolchain is there, so a failure names the download instead
+          # of surfacing later as a compile error in a file nobody touched.
+          python3 -m ziglang version
+
+      - name: Build
+        run: ./zmrig/build.sh --jobs "$(nproc)"
+
+      - name: Report the toolchain
+        run: |
+          echo "zig:      $(./scripts/find-zig.sh) -> $(./scripts/find-zig.sh | xargs -r -I{} {} version)"
+          echo "cpus:     $(nproc)"
+          echo "memory:   $(free -m | awk '/^Mem:/ {print $2 " MiB"}')"
+
+      - name: Unit tests (every module)
+        run: ./zmrig/tests/unit.sh
+
+      # The binary ships ReleaseFast, where an out-of-range cast or a path the
+      # kernel cannot open is undefined behaviour instead of a message. Building
+      # the same sources with the checks back on and running the CLI and the
+      # hostile inputs against *that* is how a crash gets a stack trace - the
+      # NUL byte in a `log-file` path was found this way, and it took the
+      # process down before the first line of the run.
+      - name: The same code with safety checks on
+        run: |
+          OUT_DIR="$RUNNER_TEMP/safe" ZIG_OPT=ReleaseSafe ./zmrig/build.sh --jobs "$(nproc)"
+          ZMRIG_BIN="$RUNNER_TEMP/safe/zmrig" ./zmrig/tests/safety.sh
+
+      - name: Hash engine (C API, reference vectors)
+        run: ./zmrig/tests/run.sh --quick
+
+      - name: CLI
+        run: ./zmrig/tests/cli.sh
+
+      - name: Stratum and transport
+        run: ./zmrig/tests/net.sh
+
+      - name: Watchdog against a real pool
+        run: ./zmrig/tests/health.sh
+
+      # The dataset cache, both halves: that a switch back does not rebuild a
+      # 2 GiB dataset, and that the shares hashed through the reused engine
+      # still recompute to the same digest. The first version of the cache was
+      # fast and wrong, and only the second assertion can see that.
+      - name: Algorithm switch, and the hashes it produces
+        run: ./zmrig/tests/switch.sh --quick
+
+      # How much of the run was actually hashing, and whether the miner can
+      # tell a reconnect (which costs nothing) from a pool that has gone away
+      # (which costs everything).
+      - name: The duty cycle, measured against two hostile pools
+        run: ./zmrig/tests/duty.sh --quick
+
+      # Income per hash, not hashes per second: does the target comparison
+      # submit hashes/difficulty shares, once at an easy target and once at a
+      # hard one?
+      - name: Shares per hash, at two difficulties
+        run: ./zmrig/tests/targets.sh --quick
+
+      # The safe mode, end to end: the governor is driven through
+      # --thermal-file, because a test that needed a genuinely hot CPU would
+      # either never run or cost somebody a machine.
+      - name: Thermal governor against a real process
+        run: ./zmrig/tests/thermal.sh
+
+      # The fee audit, with the binary: the rate, the one wallet inside it, the
+      # switch that turns it off, and the prose that states it. The constants
+      # are checked in the `pool` job as well, without a toolchain - this is the
+      # half that can only run where a miner was built.
+      - name: The developer fee, in the source and in the binary
+        run: ./scripts/verify-fee.sh
+
+  # The installer and the tuner: the two things a person runs on a machine they
+  # own, before any image exists. They were only ever run by hand, which is how
+  # `oneclick.sh update` managed to silently do nothing on a shallow clone for
+  # as long as nobody re-cloned.
+  #
+  # Everything here works on a fake root: a temporary `sys/`, `proc/`, a stub
+  # `nproc`, and `--dry-run`. No root, no reboot, no real CPU.
+  install:
+    name: Installer and tuner (non-root, fake /proc)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      # Warnings fail the job too, and each script is read in the dialect it was
+      # written in: `oneclick.sh` and the setup scripts are bash, `latest-iso.sh`
+      # is POSIX sh because it runs on somebody's busybox.
+      - name: Shellcheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends shellcheck
+          shellcheck -s bash -S warning \
+            oneclick.sh \
+            scripts/tune-linux.sh \
+            scripts/publish-site.sh
+          shellcheck -s sh -S warning scripts/latest-iso.sh
+
+      # plan, config, governor, tuner targets, purge.
+      - name: The installer's decisions
+        run: npm run test:oneclick
+
+      # The one that needs a git remote: a local repository with two branches and
+      # a shallow clone of it, so `update` is exercised without the network.
+      - name: Moving an existing checkout between branches
+        run: bash tests/oneclick/branch-switch.sh
+
+      # The download helper `zmrig-os update` and the site both use, against a
+      # recorded GitHub reply: no network, no rate limit.
+      - name: How an image is found
+        run: bash tests/releases/latest-iso.test.sh
+
+      # Four files carry the release number. Two of them drifted in consecutive
+      # releases and a fourth was wrong for four of them.
+      - name: One version, in every file that carries it
+        run: bash tests/releases/version-consistency.test.sh
+
+  # The control plane. Zero dependencies, so this is `node --test` and nothing
+  # to install; the agent half runs against the same server in os/tests/fleet.sh.
+  fleet:
+    name: fleet (bot and agent)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Node
+        run: node --version
+
+      - name: Bot, store, protocol and handlers
+        run: cd fleet && npm test
+
+      - name: Configuration check (no token needed)
+        run: cd fleet && node src/index.js --check || true
+
+      - name: Rig agent against the real server
+        run: bash os/tests/fleet.sh
+
+      - name: The download helper
+        run: bash tests/releases/latest-iso.test.sh
+
+  # The pool: share accounting, the address decoder that decides who can be paid,
+  # and the stratum protocol. These were the only tests in the repository that CI
+  # did not run, which meant a change to the payout path - the address check,
+  # the ledger, the share verifier - could break one and merge green.
+  pool:
+    name: pool (ledger, protocol, addresses)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Node
+        run: node --version
+
+      - name: Unit, protocol and address tests
+        run: node --test pool/tests/*.test.js
+
+      # --source-only: this job has no Zig toolchain and no miner binary. The
+      # check that matters here is the one that needs no build - the constant,
+      # the prose, the appliance default and the single wallet - and the binary
+      # half runs in the `zmrig engine` job, which does build one.
+      - name: The fee is 3 % and every document agrees
+        run: bash scripts/verify-fee.sh --source-only
+
+  # The one service Render runs: bots, rigs and the documentation on one port.
+  # The two halves are tested in their own jobs; what is tested here is that they
+  # do not shadow each other, because that is the failure this deployment shape
+  # can have and nothing else would catch it.
+  host:
+    name: host (one service, three jobs)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: The committed site is there
+        run: |
+          # `trailingSlash: false` in site/docusaurus.config.js, so a page is
+          # written as docs/intro.html and answered at /docs/intro by the host.
+          # /download is not one of them: that page is rendered by the host from
+          # the release feed, which is why it can list a release published a
+          # minute ago without a rebuild.
+          test -f web/index.html
+          test -f web/docs/intro.html
+          test -f web/vi/index.html
+
+      - name: Routing, health, download, enrolment
+        run: node --test host/tests/*.test.js
+
+      - name: The process boots and answers for real
+        run: |
+          set -euo pipefail
+          FLEET_ADMIN_IDS='tg:1' FLEET_STATE=/tmp/host-ci.json PORT=8098 \
+            node host/server.js > /tmp/host.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8098/healthz > /tmp/health.json; then break; fi
+            sleep 1
+          done
+          cat /tmp/host.log
+          # One health check that reports all three jobs, so a missing site or a
+          # missing bot is visible from the outside.
+          python3 -c 'import json; d=json.load(open("/tmp/health.json")); assert d["ok"] and d["site"]["files"] > 0, d; print(d)'
+          curl -fsS http://127.0.0.1:8098/ | grep -qi zmrig
+          # The device protocol still owns its path.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8098/v1/hello)
+          test "$code" = "401"
+          kill %1 || true
+
+  # The image Render builds. Without this job the first person to find out that
+  # `deploy/Dockerfile` no longer compiles is whoever deployed it: a Render build
+  # failure shows two lines of a log and one source file name, which is how a
+  # missing libc6-dev header was reported as a broken blake2b_avx2.c.
+  image:
+    name: Pool image (docker build)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Build it the way Render does
+        run: docker build -f deploy/Dockerfile -t ocean-pool:ci .
+
+      # The verifier is the reason the image contains a miner at all: the pool
+      # cannot trust a share it cannot hash.
+      - name: The verifier inside the image runs
+        run: |
+          docker run --rm --entrypoint /usr/local/bin/zmrig ocean-pool:ci --version
+          docker run --rm --entrypoint /usr/local/bin/zmrig ocean-pool:ci --self-test=light
+
+      # Every `require` the pool makes at startup has to resolve *inside the
+      # image*. `pool/src/address.js` re-exports `lib/address.js`, and for a
+      # while the Dockerfile did not copy `lib/`: the image built, started and
+      # answered /api/config, and the first miner to log in crashed it. This
+      # asserts the decoder is there, decodes a real address, and refuses a typo.
+      - name: The address decoder inside the image
+        run: |
+          docker run --rm --entrypoint node ocean-pool:ci -e '
+            const { check } = require("./pool/src/address");
+            const good = "46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ";
+            const typo = good.slice(0, -1) + "f";
+            const ok = check(good);
+            if (!ok.ok || ok.net !== "mainnet") { console.error("the image cannot decode a real address", ok); process.exit(1); }
+            const bad = check(typo);
+            if (bad.ok) { console.error("the image accepted a typo"); process.exit(1); }
+            console.log("decoder in the image: %s ok, typo refused (%s)", ok.net, bad.reason);
+          '
+
+      - name: The pool answers, with nothing mounted
+        run: |
+          docker run -d --name pool -p 18080:8080 \
+            -e DAEMON= -e POOL_NAME=ci ocean-pool:ci
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/config || echo 000)
+            if [ "$code" = "200" ]; then break; fi
+            sleep 1
+          done
+
+          # /api/config needs nothing but the process: it is the real proof that
+          # the image starts, reads its config and serves HTTP with no volume.
+          curl -fsS http://127.0.0.1:18080/api/config | tee /dev/stderr | grep -q '"fee_percent"'
+
+          # /healthz reports the job the pool has, and with `DAEMON=` there is no
+          # daemon and therefore no job: 503 and `"ok": false` is the correct,
+          # honest answer. Asserting 200 here would only prove that a health
+          # check can lie. The pattern tolerates the spacing a JSON serialiser
+          # chooses; asserting the pair, not the formatting.
+          code=$(curl -s -o /tmp/health.json -w '%{http_code}' http://127.0.0.1:18080/healthz)
+          echo "healthz -> $code $(cat /tmp/health.json)"
+          [ "$code" = "503" ]
+          grep -Eq '"ok" *: *false' /tmp/health.json
+
+          docker logs pool | tail -20
+          docker rm -f pool
+
+  # The environment shim, the registry checker and the host updater. None of
+  # them need a Docker daemon - that is the point of splitting them out of the
+  # image - so the interesting failures (a mode that is not one of the four, a
+  # registry challenge that throws, a pull that recreates a container anyway)
+  # are found in seconds instead of in a fifteen-minute image build.
+  container-shim:
+    name: Container shim (no daemon)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: The environment -> the miner command line, the update checker, the host script
+        run: node --test 'deploy/docker/tests/*.test.js'
+
+      # `zmrig-docker-update` is POSIX sh and runs on machines with no bash; the
+      # suite already parses it with both shells, and this catches the case where
+      # a later edit uses a bashism in a file whose shebang says sh.
+      - name: The host script is shell, not bash
+        run: |
+          sh -n deploy/docker/zmrig-docker-update
+          command -v shellcheck >/dev/null && shellcheck -s sh deploy/docker/zmrig-docker-update || true
+
+  # The image people pull. `deploy/Dockerfile` (the Render pool service) has its
+  # own job below; this one is the two-job package, so a pull request that breaks
+  # its entrypoint or its labels fails here rather than in a release.
+  published-image:
+    name: Published image (docker build)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Build it the way the release does
+        run: |
+          version=$(sed -n 's/^pub const version = "\(.*\)";/\1/p' zmrig/src/main.zig | head -1)
+          docker build -f deploy/docker/Dockerfile \
+            --build-arg "ZMRIG_VERSION=$version" \
+            --build-arg "ZMRIG_REVISION=$GITHUB_SHA" \
+            --build-arg "ZMRIG_TAG=edge" \
+            --build-arg "ZMRIG_JOBS=$(nproc)" \
+            -t zmrig:ci .
+
+      - name: The miner in it runs
+        run: |
+          docker run --rm zmrig:ci version
+          docker run --rm --entrypoint sh zmrig:ci -c 'zmrig --self-test=light'
+          docker run --rm --entrypoint sh zmrig:ci -c 'zmrig --version | grep -q "$ZMRIG_VERSION"'
+
+      - name: The shim refuses, and shows the fee
+        run: |
+          code=0
+          docker run --rm zmrig:ci mine >/tmp/out 2>/tmp/err || code=$?
+          test "$code" = "2" || { echo "expected 2 without a wallet, got $code"; cat /tmp/err; exit 1; }
+          grep -q 'no wallet' /tmp/err
+
+          wallet=46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ
+          docker run --rm -e WALLET="$wallet" -e POOL=p.example:3333 zmrig:ci args | tee /tmp/args
+          grep -q -- '--donate-level 3' /tmp/args
+
+          # The wallet verdict is the binary's own, and a typo is refused. The
+          # words are the binary's ("valid", "checksum does not match"), not a
+          # summary written here: a summary is a second source of truth that goes
+          # stale, which is how the page quoted the wrong command's output once.
+          docker run --rm -e WALLET="$wallet" zmrig:ci check | tee /tmp/check
+          grep -q '^valid' /tmp/check
+          grep -q 'checksum verified' /tmp/check
+          code=0
+          docker run --rm -e "WALLET=${wallet%?}f" zmrig:ci check >/tmp/bad 2>&1 || code=$?
+          test "$code" != "0" || { echo "a typo'd address was accepted"; cat /tmp/bad; exit 1; }
+          grep -q 'checksum does not match' /tmp/bad
+
+      - name: It says which commit it is
+        run: |
+          got=$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' zmrig:ci)
+          test -n "$got" && test "$got" != "0.0.0-dev"
+          docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' zmrig:ci | grep -q "$GITHUB_SHA"
 
   macos:
     name: macOS ${{ matrix.arch }} build and hash tests

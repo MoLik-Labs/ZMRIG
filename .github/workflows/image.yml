@@ -1,0 +1,282 @@
+# The container image: build it, test it, publish it to GitHub's registry.
+#
+#   ghcr.io/molik-labs/zmrig:6.48.0    one release, immutable
+#   ghcr.io/molik-labs/zmrig:latest    the newest release
+#   ghcr.io/molik-labs/zmrig:edge      the tip of BETA
+#
+# Publishing from CI and not from a laptop is the point: the labels on the image
+# say which commit built it, the attestation says which workflow did, and the
+# pull request that changed the Dockerfile is the review that approved it.
+#
+# Every step below is a shell command rather than a marketplace action, so the
+# log says exactly what ran. What it does not do is build on every pull request:
+# a two-stage release build is minutes of runner time per push, and the PR path
+# already builds the pool image (test.yml) and the engine from the same sources.
+
+name: Container image
+
+on:
+  push:
+    branches: [BETA, master]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Push the image to ghcr.io'
+        type: boolean
+        default: false
+      tag:
+        description: 'Extra tag to publish (default: edge)'
+        type: string
+        required: false
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ${{ github.repository }}
+
+jobs:
+  build:
+    name: Build the image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      # The package name has to be lower case: Docker rejects an upper-case
+      # repository in a tag, and this repository is MoLik-Labs/ZMRIG. Getting
+      # this wrong is a failure on the first push of the first release, so it is
+      # normalised once, here, and every later step reads the output.
+      - name: Name the image
+        id: name
+        run: |
+          image="${REGISTRY}/$(printf '%s' "$IMAGE" | tr '[:upper:]' '[:lower:]')"
+          version=$(sed -n 's/^pub const version = "\(.*\)";/\1/p' zmrig/src/main.zig | head -1)
+          test -n "$version" || { echo "::error title=No version::zmrig/src/main.zig has no version constant"; exit 1; }
+          short=$(printf '%s' "$GITHUB_SHA" | cut -c1-8)
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "short=$short" >> "$GITHUB_OUTPUT"
+          printf 'image    %s\nversion  %s\ncommit   %s\n' "$image" "$version" "$short"
+
+      # -------- should this build publish anything?
+      #
+      # A release tag publishes the version, `latest` and `edge`. A push to BETA
+      # publishes `edge` only: the tip of the development branch is useful to
+      # test against and must never be what `latest` means. A manual run
+      # publishes only when asked, so the workflow can be used to prove the
+      # build works without touching the package.
+      - name: Decide the tags
+        id: tags
+        run: |
+          set -eu
+          image="${{ steps.name.outputs.image }}"
+          version="${{ steps.name.outputs.version }}"
+          short="${{ steps.name.outputs.short }}"
+          event="${{ github.event_name }}"
+          extra="${{ inputs.tag }}"
+          tags=""
+          publish=""
+
+          case "$GITHUB_REF" in
+            # A release tag is the only thing that moves `latest`. `edge` moves
+            # with it because a tag is cut from BETA, so at that moment they are
+            # the same build.
+            refs/tags/v*)
+              tags="${image}:${version} ${image}:latest ${image}:${version%.*}"
+              tags="$tags ${image}:edge"
+              ;;
+            # The tip of the development branch. This is what `edge` means.
+            refs/heads/BETA)
+              tags="${image}:edge"
+              ;;
+            # master is where a release tag is cut from, and a push to it is
+            # usually a merge that precedes one. It publishes nothing under a
+            # name: publishing `edge` here would point it at a tree older than
+            # BETA, and publishing `latest` would promise a version the master
+            # tree does not claim. The commit-addressed tag is always published,
+            # so the build is pullable by sha and nothing else moves.
+            refs/heads/master)
+              tags=""
+              ;;
+          esac
+
+          if [ -n "$extra" ]; then tags="$tags ${image}:${extra}"; fi
+          if [ -z "$tags" ]; then tags="${image}:sha-${short}"; fi
+
+          # Pushing is the default for a branch or tag event, and has to be asked
+          # for on a manual run. The string has to be exactly "true" or the `if:`
+          # on the push step silently skips - which is how a release publishes
+          # nothing and reports success.
+          case "$event" in
+            push) publish=true ;;
+          esac
+          if [ "$event" = "workflow_dispatch" ] && [ "${{ inputs.publish }}" = "true" ]; then
+            publish=true
+          fi
+
+          tags=$(printf '%s\n' $tags | sort -u | tr '\n' ' ' | sed 's/ *$//')
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          printf 'tags   %s\npush   %s\n' "$tags" "${publish:-no}"
+
+      # Buildx and a QEMU-free build: the image is linux/amd64, because the
+      # static Zig engine and the musl target it cross-compiles against are
+      # x86-64 today. An arm64 rig runs the appliance image or a native build;
+      # publishing an arm64 container that has never been booted would be worse
+      # than not publishing one.
+      - name: Set up Buildx
+        run: |
+          docker buildx version
+          docker buildx create --name zmrig --use --driver docker-container || docker buildx use zmrig
+          docker buildx inspect --bootstrap
+
+      - name: Build and test the image
+        run: |
+          set -eu
+          image="${{ steps.name.outputs.image }}"
+          version="${{ steps.name.outputs.version }}"
+          short="${{ steps.name.outputs.short }}"
+
+          docker buildx build \
+            --load \
+            --platform linux/amd64 \
+            --file deploy/docker/Dockerfile \
+            --build-arg "ZMRIG_VERSION=$version" \
+            --build-arg "ZMRIG_REVISION=$GITHUB_SHA" \
+            --build-arg "ZMRIG_TAG=edge" \
+            --build-arg "ZMRIG_IMAGE=$(printf '%s' "$image" | sed 's#^[^/]*/##')" \
+            --build-arg "ZMRIG_JOBS=$(nproc)" \
+            --tag zmrig:ci \
+            .
+
+          docker run --rm zmrig:ci version
+          docker run --rm --entrypoint sh zmrig:ci -c 'zmrig --self-test=light'
+
+      # The image is the product, so the things that make it usable are asserted
+      # here rather than in a document: the shim refuses without a wallet, it
+      # passes the fee explicitly, and it prints the wallet verdict.
+      - name: The shim inside the image
+        run: |
+          set -eu
+          wallet=46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ
+
+          # No wallet: a refusal with the variable named, exit 2.
+          code=0
+          docker run --rm zmrig:ci mine >/tmp/out 2>/tmp/err || code=$?
+          test "$code" = "2" || { echo "expected exit 2 without a wallet, got $code"; cat /tmp/err; exit 1; }
+          grep -q 'no wallet' /tmp/err
+
+          # The command line is printed, and the fee is in it: the number a rig
+          # pays is visible without reading the binary.
+          docker run --rm -e WALLET="$wallet" -e POOL=p.example:3333 -e WORKER=rig-1 zmrig:ci args |
+            tee /tmp/args
+          grep -q -- '--donate-level 3' /tmp/args
+          grep -q -- '-p rig-1' /tmp/args
+
+          # The wallet check is the miner's own, and its words are the ones the
+          # documentation quotes: "valid" for a real address, "checksum does not
+          # match" for a typo.
+          docker run --rm -e WALLET="$wallet" zmrig:ci check | tee /tmp/check
+          grep -q '^valid' /tmp/check
+          grep -q 'checksum verified' /tmp/check
+          code=0
+          docker run --rm -e "WALLET=${wallet%?}f" zmrig:ci check >/tmp/bad 2>&1 || code=$?
+          test "$code" != "0" || { echo "a typo'd address was accepted"; cat /tmp/bad; exit 1; }
+          grep -q 'checksum does not match' /tmp/bad
+
+      - name: The pool job in the same image
+        run: |
+          set -eu
+          docker run -d --name pool -p 18080:8080 -e DAEMON= -e POOL_NAME=ci zmrig:ci pool
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/config || echo 000)
+            [ "$code" = "200" ] && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:18080/api/config | grep -q '"fee_percent"'
+          docker logs pool | tail -5
+          docker rm -f pool
+
+      # The labels are the audit trail: if the version is not in the image, the
+      # update checker cannot work, and "is a newer release published" becomes a
+      # question the running container cannot answer.
+      - name: The image says what it is
+        run: |
+          set -eu
+          version="${{ steps.name.outputs.version }}"
+          revision="${{ github.sha }}"
+          got=$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' zmrig:ci)
+          test "$got" = "$version" || { echo "version label is $got, expected $version"; exit 1; }
+          got=$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' zmrig:ci)
+          test "$got" = "$revision" || { echo "revision label is $got, expected $revision"; exit 1; }
+          docker inspect --format '{{index .Config.Labels "org.opencontainers.image.source"}}' zmrig:ci | grep -q 'github.com'
+          # A registry that cannot be reached is "cannot tell" (2), never
+          # "current" (0): the difference is a timer that does nothing versus a
+          # timer that says the fleet is up to date while it is not.
+          code=0
+          docker run --rm -e ZMRIG_REGISTRY=http://127.0.0.1:1 -e ZMRIG_TIMEOUT=300 \
+            zmrig:ci update --check >/tmp/offline 2>&1 || code=$?
+          test "$code" = "2" || { echo "expected 2 from a dead registry, got $code"; cat /tmp/offline; exit 1; }
+
+      - name: Push
+        if: steps.tags.outputs.publish == 'true'
+        run: |
+          set -eu
+          version="${{ steps.name.outputs.version }}"
+          short="${{ steps.name.outputs.short }}"
+          image="${{ steps.name.outputs.image }}"
+
+          # GITHUB_TOKEN is already scoped to this repository, which is where
+          # the package lands. `ghcr.io` wants the actor as the user.
+          printf '%s' "${{ github.token }}" |
+            docker login "$REGISTRY" --username "${{ github.actor }}" --password-stdin
+
+          args=""
+          for tag in ${{ steps.tags.outputs.tags }}; do args="$args --tag $tag"; done
+
+          # The attestation is what makes "this image is that commit" checkable
+          # with `docker buildx imagetools inspect`. It is the image equivalent of
+          # the signed release checksums.
+          docker buildx build \
+            --push \
+            --platform linux/amd64 \
+            --file deploy/docker/Dockerfile \
+            --build-arg "ZMRIG_VERSION=$version" \
+            --build-arg "ZMRIG_REVISION=$GITHUB_SHA" \
+            --build-arg "ZMRIG_TAG=${short}" \
+            --build-arg "ZMRIG_IMAGE=$(printf '%s' "$image" | sed 's#^[^/]*/##')" \
+            --build-arg "ZMRIG_JOBS=$(nproc)" \
+            --provenance=mode=max \
+            --label "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            $args \
+            .
+
+          printf '\n### Published\n\n' >> "$GITHUB_STEP_SUMMARY"
+          for tag in ${{ steps.tags.outputs.tags }}; do
+            printf '* `%s`\n' "$tag" >> "$GITHUB_STEP_SUMMARY"
+          done
+          printf '\n`docker pull %s:latest`\n' "$image" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: What to do when nothing was published
+        if: steps.tags.outputs.publish != 'true'
+        run: |
+          {
+            printf '### Built, not published\n\n'
+            printf 'The image built and passed every check above, and was not pushed.\n'
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              printf '\nRe-run with `publish` set to true to push it.\n'
+            else
+              printf '\nA `v*` tag publishes the version, `latest` and `edge`; a push to\n'
+              printf '`BETA` moves `edge`; every other push publishes `sha-<commit>`.\n'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

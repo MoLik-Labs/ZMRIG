@@ -1,7 +1,7 @@
 ---
 title: Kiểm thử
 description: Các bộ test trong repo, mỗi bộ chứng minh điều gì, chạy mất bao lâu, và những lỗi thường là do máy chứ không phải do mã.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
+image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 ---
 
 # Kiểm thử
@@ -34,7 +34,11 @@ Cộng bảy unit test cho máy trạng thái (`health.zig`): tạm dừng khôn
 một hai share stale là bình thường, và một cú tụt phải kéo dài mới tính là
 `degraded`.
 
-## Bộ test mạng — 29 case
+## Build kiểm tra an toàn
+
+`./zmrig/tests/safety.sh` build một binary `ReleaseSafe` riêng rồi đưa cấu hình lỗi và dòng lệnh hostile vào thử. Binary cài đặt vẫn là `ReleaseFast`; bản safety làm lỗi undefined hiện ra trong test. `safety.sh` qua bảy kiểm tra trên bản build `ReleaseSafe` riêng: cấu hình sai dạng, đường dẫn NUL, merge config với CLI không rò rỉ cấp phát và dòng lệnh hostile.
+
+## Bộ test mạng — 30 case
 
 Nó dựng pool giả, TLS shim, proxy HTTP và SOCKS5 và server WebSocket ngay trên
 máy, rồi bắt miner nói chuyện với tất cả:
@@ -56,6 +60,7 @@ máy, rồi bắt miner nói chuyện với tất cả:
 | API | `http api`, `http api token`, `http api 404` | summary, ép token, đường dẫn lạ |
 | Lỗi | `login rejected`, `idle watchdog`, `pool failover` | lỗi hiện ra; reconnect và failover chạy |
 | | `hostile pool` | rác không ngăn được việc submit share |
+| | `wsbad` | peer WebSocket gửi ping 512 byte (RFC 6455 chỉ cho 125) thì được nêu tên ra stderr và kết nối lại; nếu cắt bớt thì phần còn lại của frame bị đọc như header kế tiếp |
 | Seed | `seed change` | bốn lần dựng lại dataset, vẫn đào tiếp |
 | Soak | `soak` | 4 phút đổi seed, đổi thuật toán và rớt mạng |
 
@@ -116,6 +121,24 @@ cd site && npm run build # lỗi nếu có link nội bộ hỏng hoặc compone
 Phần kiểm tra link là điểm chính của `npm run build`: `onBrokenLinks` và
 `onBrokenMarkdownLinks` đều đặt `throw`, nên một trang bị đổi tên không thể phát
 hành thành 404.
+
+## Container, không cần daemon
+
+```bash
+node --test 'deploy/docker/tests/*.test.js'
+sh -n deploy/docker/zmrig-docker-update
+```
+
+Mọi quyết định của image đều là hàm thuần của môi trường, nên container được test
+mà không cần Docker: ánh xạ biến môi trường sang cờ (bốn chế độ, mức donate 11 %
+bị từ chối, `EXTRA_ARGS` không bao giờ đi qua shell), hạn mức cgroup chặn số luồng
+ở cả hai phiên bản cgroup, bộ kiểm tra registry chạy với một registry giả đòi
+token, và script cập nhật trên host chạy với `docker` giả — đang mới thì không
+pull, pull hỏng thì không dựng lại.
+
+Bản thân image được CI dựng ở mỗi pull request (`Published image`), vì lỗi ở đó
+chỉ image thật mới lộ ra: thiếu `lib/`, một nhãn không được đặt, entrypoint không
+chuyển tiếp SIGTERM.
 
 ## Chạy test trên máy đang đào
 

@@ -1,7 +1,7 @@
 ---
 title: Kiến trúc
 description: Ba engine, bản đồ module của miner Zig, đường đi của một job từ pool tới CPU và ngược lại, và những thread tồn tại lúc chạy.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
+image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 ---
 
 # Kiến trúc
@@ -97,4 +97,4 @@ sang TCP để pool chạy được trên nền tảng chỉ nói HTTP.
 
 Bản đồ C++ dài hơn — mọi thư mục trong `src/`, danh sách thread và pipeline
 RandomX — nằm ở
-[`doc/ARCHITECTURE.md`](https://github.com/NggKhaiz/ZMRIG/blob/master/doc/ARCHITECTURE.md).
+[`doc/ARCHITECTURE.md`](https://github.com/MoLik-Labs/ZMRIG/blob/master/doc/ARCHITECTURE.md).

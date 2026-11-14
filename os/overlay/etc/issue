@@ -1,7 +1,8 @@
 
 
   ZMRIG OS -- login as root (no password on the console).
-  Configure:  zmrig-os setup      Status:  zmrig-os status
-  Mode:       zmrig-os mode eco   Help:    zmrig-os help
+  Configure:  zmrig-os setup        Status:  zmrig-os status
+  Install:    zmrig-os install --disk /dev/sdX
+  Mode:       zmrig-os mode eco     Help:    zmrig-os help
 
 

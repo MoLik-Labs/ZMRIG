@@ -17,7 +17,12 @@ ROOT=$(cd -- "$(dirname -- "$0")/../.." && pwd)
 SRC="${ROOT}/zmrig/src"
 ZIG="${ZIG:-zig}"
 
-command -v "$ZIG" >/dev/null 2>&1 || { echo "no zig (set ZIG=/path/to/zig)" >&2; exit 1; }
+# Same resolver as the build: a newer Zig on PATH is not a usable Zig, and this
+# suite would otherwise report a compiler error as a broken test.
+if [ "$ZIG" = "zig" ]; then
+    ZIG=$("${ROOT}/scripts/find-zig.sh") || { echo "no zig 0.13 (set ZIG=/path/to/zig)" >&2; exit 1; }
+fi
+command -v "$ZIG" >/dev/null 2>&1 || [ -x "$ZIG" ] || { echo "no zig at $ZIG" >&2; exit 1; }
 
 MODULES=()
 if [ "$#" -gt 0 ]; then

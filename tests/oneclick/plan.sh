@@ -115,13 +115,13 @@ else
     fail "an invalid profile was not rejected"
 fi
 
-# On this test machine (a container or a desktop) auto must resolve to free;
-# a laptop on battery would resolve to watt, which is also a pass.
-auto_profile=$(field_of "$(plan)" "profile")
-case "$auto_profile" in
-    free|watt) pass "auto resolves to a concrete profile (${auto_profile})" ;;
-    *)         fail "auto did not resolve, got '${auto_profile}'" ;;
-esac
+# Battery state must never lower the automatic/default hashrate profile.
+auto_profile=$(field_of "$(plan --profile=auto)" "profile")
+if [ "$auto_profile" = free ]; then
+    pass "auto stays throughput-first (free), independent of battery state"
+else
+    fail "auto did not resolve to free, got '${auto_profile}'"
+fi
 
 # --- autotune is planned only where it applies -------------------------
 out=$(plan --pool=supportxmr.com:3333)
@@ -143,6 +143,47 @@ if printf '%s' "$out" | grep -q "off, keeping the built-in heuristic"; then
     pass "--no-autotune is respected"
 else
     fail "--no-autotune was ignored"
+fi
+
+# --- the thermal policy is planned, and a typo fails before it applies ---
+out=$(plan --pool=supportxmr.com:3333 --max-temp=70)
+if printf '%s' "$out" | grep -q "hold 70 C"; then
+    pass "--max-temp is planned"
+else
+    fail "--max-temp was not planned"
+fi
+if printf '%s' "$out" | grep -q "pause at 85 C"; then
+    pass "the pause limit is target + 15"
+else
+    fail "the pause limit is not target + 15"
+fi
+
+out=$(plan --pool=supportxmr.com:3333)
+if printf '%s' "$out" | grep -q "thermal        hold 80 C"; then
+    pass "default plan includes a safe thermal target"
+else
+    fail "the default plan omitted the thermal safety governor"
+fi
+
+out=$(plan --pool=supportxmr.com:3333 --no-thermal)
+if printf '%s' "$out" | grep -q "thermal        off (--no-thermal explicitly requested)"; then
+    pass "thermal governor can only be disabled explicitly"
+else
+    fail "--no-thermal was not reported as an explicit opt-out"
+fi
+
+out=$(plan --pool=supportxmr.com:3333 --max-temp=warm)
+if [ "$(printf '%s' "$out" | grep -c 'must be a whole number')" -eq 1 ]; then
+    pass "a non-numeric --max-temp is refused"
+else
+    fail "a non-numeric --max-temp was accepted"
+fi
+
+out=$(plan --pool=supportxmr.com:3333 --max-temp=20)
+if [ "$(printf '%s' "$out" | grep -c 'must be 45..95')" -eq 1 ]; then
+    pass "a --max-temp that would park the rig for ever is refused"
+else
+    fail "an unusable --max-temp was accepted"
 fi
 
 # --- pool names and failover -------------------------------------------

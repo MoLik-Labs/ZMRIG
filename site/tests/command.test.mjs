@@ -53,17 +53,27 @@ test("hostState takes host:port and full pool URLs, rejects junk", () => {
 test("the default answer produces a runnable one-click command", () => {
   const result = build({ wallet: WALLET, pool: "moneroocean" });
   assert.equal(result.blocked, null);
-  assert.match(result.install, /^curl -fsSL https:\/\/raw\.githubusercontent\.com\/NggKhaiz\/ZMRIG\/BETA\/oneclick\.sh/);
+  // The owner is not asserted here: it moved once already, and this test is
+  // about the shape of the command. tests/docs/identity.sh is what holds the
+  // owner to the git remote.
+  assert.match(result.install, /^curl -fsSL https:\/\/raw\.githubusercontent\.com\/[^/]+\/ZMRIG\/BETA\/oneclick\.sh/);
   assert.match(result.install, /install --wallet 46SQLW7D/);
   assert.match(result.install, /--pool gulf\.moneroocean\.stream:10001/);
+  assert.ok(result.args.includes("--profile"), result.args.join(" "));
+  assert.ok(result.args.includes("free"), result.args.join(" "));
   // --yes is last so nothing after it can be read as an answer to a prompt.
   assert.ok(result.install.endsWith("--yes"), result.install);
 });
 
-test("automatic engine and profile emit no flag at all", () => {
-  const result = build({ wallet: WALLET, engine: "auto", profile: "auto" });
-  assert.ok(!result.args.includes("--engine"), result.args.join(" "));
-  assert.ok(!result.args.includes("--profile"), result.args.join(" "));
+test("auto profile is throughput-first and the wizard defaults to free", () => {
+  const automatic = build({ wallet: WALLET, engine: "auto", profile: "auto" });
+  assert.ok(!automatic.args.includes("--engine"), automatic.args.join(" "));
+  assert.ok(automatic.args.includes("--profile"), automatic.args.join(" "));
+  assert.ok(automatic.args.includes("auto"), automatic.args.join(" "));
+
+  const defaulted = build({ wallet: WALLET });
+  assert.ok(defaulted.args.includes("--profile"), defaulted.args.join(" "));
+  assert.ok(defaulted.args.includes("free"), defaulted.args.join(" "));
 });
 
 test("a fixed engine and profile do emit their flags", () => {
@@ -167,4 +177,26 @@ test("plan uses the same resolution as install and changes nothing", () => {
 test("a rig name is quoted, never trusted", () => {
   const result = build({ wallet: WALLET, rig: "rig 1; reboot" });
   assert.match(result.install, /--rig-id 'rig 1; reboot'/);
+});
+
+test("a wallet with one wrong character is refused by the page, not by the miner", () => {
+  // The page is where the address is pasted, and it used to accept this: every
+  // character base58, the right length, one of them wrong. What it produced was
+  // a valid-looking command that mines for a week and pays nobody.
+  const typo = WALLET.slice(0, 20) + (WALLET[20] === "a" ? "b" : "a") + WALLET.slice(21);
+  const state = walletState(typo, "xmr");
+
+  assert.equal(state.status, "checksum");
+  assert.equal(state.ok, false);
+  assert.match(state.reason, /checksum does not match/);
+
+  // `blocked` is what the page renders as a refusal and what disables the copy
+  // button: the command stays visible so the fields it came from can be read,
+  // but it cannot be copied with one click.
+  const built = build({ wallet: typo, coin: "xmr" });
+  assert.equal(built.blocked, "wallet-invalid");
+
+  // The good one still builds, and the page says what was checked.
+  assert.equal(build({ wallet: WALLET, coin: "xmr" }).blocked, null);
+  assert.match(walletState(WALLET, "xmr").status, /valid/);
 });

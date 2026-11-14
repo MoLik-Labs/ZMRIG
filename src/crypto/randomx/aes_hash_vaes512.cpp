@@ -62,6 +62,16 @@ alignas(64) static const uint32_t AES_HASH_1R_XKEY1[] = {
 	REVERSE_4(0xed18f99b, 0xee1043c6, 0x51f4e03c, 0x61b263d1)
 };
 
+/*
+ * Alignment. `scratchpad` is 64-byte aligned by construction (the VM maps it),
+ * and the four constants are declared `alignas(64)`. `hash` and `fill_state`
+ * are the caller's: the VM hands over `&reg.a` inside a heap-allocated object
+ * and a `uint64_t[8]` on a stack, and neither is guaranteed 64-byte aligned -
+ * `new` promises 16. A vmovdqa64 against one of those is a #GP, i.e. a SIGSEGV
+ * on exactly the CPUs this path exists for. The two accesses cost one
+ * instruction per hash either way, so they are unaligned and the contract
+ * disappears.
+ */
 void hashAndFillAes1Rx4_VAES512(void *scratchpad, size_t scratchpadSize, void *hash, void* fill_state)
 {
 	uint8_t* scratchpadPtr = (uint8_t*)scratchpad;
@@ -70,7 +80,7 @@ void hashAndFillAes1Rx4_VAES512(void *scratchpad, size_t scratchpadSize, void *h
 	const __m512i fill_key = _mm512_load_si512(AES_GEN_1R_KEY);
 
 	const __m512i initial_hash_state = _mm512_load_si512(AES_HASH_1R_STATE);
-	const __m512i initial_fill_state = _mm512_load_si512(fill_state);
+	const __m512i initial_fill_state = _mm512_loadu_si512(fill_state);
 
 	constexpr uint8_t mask = 0b11001100;
 
@@ -129,7 +139,7 @@ void hashAndFillAes1Rx4_VAES512(void *scratchpad, size_t scratchpadSize, void *h
 		scratchpadEnd += PREFETCH_DISTANCE;
 	}
 
-	_mm512_store_si512(fill_state, _mm512_mask_blend_epi64(mask, dec_data, enc_data));
+	_mm512_storeu_si512(fill_state, _mm512_mask_blend_epi64(mask, dec_data, enc_data));
 
 	//two extra rounds to achieve full diffusion
 	const __m512i xkey0 = _mm512_load_si512(AES_HASH_1R_XKEY0);
@@ -141,7 +151,7 @@ void hashAndFillAes1Rx4_VAES512(void *scratchpad, size_t scratchpadSize, void *h
 	dec_data = _mm512_aesdec_epi128(dec_data, xkey1);
 
 	//output hash
-	_mm512_store_si512(hash, _mm512_mask_blend_epi64(mask, enc_data, dec_data));
+	_mm512_storeu_si512(hash, _mm512_mask_blend_epi64(mask, enc_data, dec_data));
 
 	// Just in case
 	_mm256_zeroupper();

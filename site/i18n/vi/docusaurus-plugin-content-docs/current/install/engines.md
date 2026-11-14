@@ -1,7 +1,7 @@
 ---
 title: Chọn engine
 description: zmrig (Zig) và xmrig (C++) dùng chung engine RandomX. Khác biệt nằm ở transport, thuật toán, và những gì mỗi bên tự nói được về mình.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
+image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 ---
 
 # Chọn engine
@@ -34,7 +34,7 @@ engine Zig là đã kiểm chứng chứ không phải lời quảng cáo.
   thuật toán ngoài RandomX mà các pool đó cũng trả tiền, nên pool coi trọng độ
   rộng hơn độ sâu thì `xmrig` hợp hơn. Chế độ `auto` của installer chọn `xmrig`
   cho pool đổi thuật toán vì lý do này; `zmrig` vẫn là mặc định trong mọi
-  trường hợp (1 % thời gian Monero, tắt được).
+  trường hợp (3 % thời gian Monero, tắt được).
 - **Thuật toán khác (cn/heavy, ghostrider, KawPow):** `xmrig`. `zmrig` từ chối
   ngay lúc phân tích tham số, thay vì khởi động rồi không kết nối được.
 - **Mạng chỉ mở 443, hoặc đi qua proxy:** `zmrig`. Xem

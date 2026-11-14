@@ -1,0 +1,49 @@
+{
+  "generated_at": "2026-11-02T10:00:00.000Z",
+  "fetched_at": "2026-11-02T09:59:00.000Z",
+  "error": null,
+  "stable": {
+    "tag": "v6.38.0",
+    "name": "ZMRIG OS 6.38.0",
+    "prerelease": false,
+    "published_at": "2026-10-30T10:00:00Z",
+    "assets": [
+      {
+        "name": "zmrig-os-6.38.0-x86-64-v3.iso",
+        "url": "https://github.com/MoLik-Labs/ZMRIG/releases/download/v6.38.0/zmrig-os-6.38.0-x86-64-v3.iso",
+        "size": 165000000,
+        "downloads": 41,
+        "sha256": "3f2a1c9d8b7e6f5041322305f1e2d3c4b5a69788796a5b4c3d2e1f0091827364"
+      },
+      {
+        "name": "zmrig-os-6.38.0-x86-64-v2.iso",
+        "url": "https://github.com/MoLik-Labs/ZMRIG/releases/download/v6.38.0/zmrig-os-6.38.0-x86-64-v2.iso",
+        "size": 164000000,
+        "downloads": 12,
+        "sha256": "aa11bb22cc33dd44ee55ff6600778899aabbccddeeff00112233445566778899"
+      },
+      {
+        "name": "zmrig-os-6.38.0-x86-64-v3.iso.sha256",
+        "url": "https://github.com/MoLik-Labs/ZMRIG/releases/download/v6.38.0/zmrig-os-6.38.0-x86-64-v3.iso.sha256",
+        "size": 96,
+        "downloads": 3,
+        "sha256": null
+      }
+    ]
+  },
+  "beta": {
+    "tag": "os-beta",
+    "name": "ZMRIG OS beta",
+    "prerelease": true,
+    "published_at": "2026-11-01T10:00:00Z",
+    "assets": [
+      {
+        "name": "zmrig-os-beta-x86-64-v3.iso",
+        "url": "https://github.com/MoLik-Labs/ZMRIG/releases/download/os-beta/zmrig-os-beta-x86-64-v3.iso",
+        "size": 166000000,
+        "downloads": 2,
+        "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      }
+    ]
+  }
+}

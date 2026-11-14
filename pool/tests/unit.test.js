@@ -141,6 +141,108 @@ test('PPLNS splits the reward by difficulty, not by share count', () => {
   assert.ok(diff <= 1n && diff >= -1n, `a=${a.pending} b=${b.pending}`);
 });
 
+test('many rigs on one wallet are one balance, one weight and one payout', () => {
+  // The fleet case: forty machines, one address, two separators, one bucket.
+  const ledger = tempLedger();
+  const now = Math.floor(Date.now() / 1000);
+
+  ledger.addShare(`${MINER}.rig-01`, 100, now - 60);
+  ledger.addShare(`${MINER}/rig-02`, 100, now - 50);
+  ledger.addShare(`${MINER}.rig-03`, 100, now - 40);
+  ledger.addShare(`${MINER}.rig-01`, 100, now - 30);
+  ledger.addShare(`${MINER_B}.rig-01`, 200, now - 20);
+
+  assert.strictEqual(ledger.workers.size, 2, 'one bucket per wallet, not per rig');
+
+  const summary = ledger.walletSummary(MINER, now);
+  assert.strictEqual(summary.rigCount, 3);
+  assert.strictEqual(summary.shares, 4, 'the wallet shares four, not one rig');
+  // Every rig name is listed, dot and slash separated alike.
+  assert.deepStrictEqual(summary.rigs.map((r) => r.name).sort(), ['rig-01', 'rig-02', 'rig-03']);
+  // The wallet rate is the sum of its rigs.
+  const rigSum = summary.rigs.reduce((sum, rig) => sum + rig.hashrate, 0);
+  assert.ok(Math.abs(rigSum - summary.hashrate) < 1e-6, `${rigSum} vs ${summary.hashrate}`);
+
+  // A block pays the wallet once, with the weight of all four shares.
+  const record = ledger.distributeBlock({ height: 3, hash: 'cc', rewardAtomic: '1000000000000', ts: now });
+  assert.strictEqual(record.distributed.length, 2, 'two wallets, two payments');
+  const paid = record.distributed.find((entry) => entry.address === MINER);
+  assert.ok(paid, 'the wallet is paid');
+  assert.strictEqual(
+    BigInt(paid.amount),
+    (1000000000000n - 10000000000n) * 400n / 600n,
+    'the wallet is paid for 400 weight out of 600',
+  );
+});
+
+test('asking about one rig answers with its wallet', () => {
+  const ledger = tempLedger();
+  const now = Math.floor(Date.now() / 1000);
+
+  ledger.addShare(`${MINER}.rack-1`, 100, now - 5);
+  ledger.addShare(`${MINER}.rack-2`, 300, now - 4);
+
+  for (const question of [MINER, `${MINER}.rack-1`, `${MINER}/rack-2`]) {
+    const summary = ledger.walletSummary(question, now);
+    assert.ok(summary, `${question} resolves`);
+    assert.strictEqual(summary.address, MINER);
+    assert.strictEqual(summary.rigCount, 2);
+  }
+
+  assert.strictEqual(ledger.walletSummary(MINER_B, now), null, 'an unknown wallet is unknown');
+  // The rate of the wallet is 400 units of difficulty over the window span,
+  // split between a 100 and a 300 rig: the quiet rig is not hidden by the loud one.
+  const summary = ledger.walletSummary(MINER, now);
+  const ratio = summary.rigs[0].hashrate / summary.rigs[1].hashrate;
+  assert.ok(Math.abs(ratio - 3) < 1e-6, `rig rates should be 3:1, got ${ratio}`);
+});
+
+test('a rig that goes quiet is still listed, with a zero rate', () => {
+  const ledger = tempLedger();
+  const now = Math.floor(Date.now() / 1000);
+
+  // The default window is one hour: a rig last seen 4000 s ago is outside it.
+  ledger.addShare(`${MINER}.old`, 500, now - 4000);
+  ledger.addShare(`${MINER}.new`, 100, now - 5);
+
+  const summary = ledger.walletSummary(MINER, now);
+  const names = summary.rigs.map((rig) => rig.name);
+  assert.deepStrictEqual(names.sort(), ['new', 'old']);
+  const old = summary.rigs.find((rig) => rig.name === 'old');
+  assert.strictEqual(old.shares, 0, 'no shares inside the window');
+  assert.ok(old.lastSeen > 0, 'but it is still known, and its last sighting is kept');
+});
+
+test('a rig name cannot grow the ledger without limit', () => {
+  const ledger = tempLedger({ maxRigs: 4 });
+  const now = Math.floor(Date.now() / 1000);
+
+  for (let i = 0; i < 20; i += 1) ledger.addShare(`${MINER}.rig-${i}`, 10, now - (20 - i));
+
+  const entry = ledger.workers.get(MINER);
+  assert.strictEqual(Object.keys(entry.rigs).length, 4, 'the map is capped');
+  // The four that survive are the four seen most recently.
+  assert.deepStrictEqual(Object.keys(entry.rigs).sort(), ['rig-16', 'rig-17', 'rig-18', 'rig-19']);
+  assert.strictEqual(entry.shares, 20, 'the wallet still counts every share it was given');
+});
+
+test('the rig map survives a restart', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zmrig-ledger-'));
+  const now = Math.floor(Date.now() / 1000);
+  const options = { stateFile: path.join(dir, 'state.json'), minPayout: '10000000000' };
+
+  const first = new Ledger(options);
+  first.addShare(`${MINER}.rig-1`, 100, now - 10);
+  first.addShare(`${MINER}.rig-2`, 200, now - 5);
+  first.save();
+
+  const second = new Ledger(options);
+  const summary = second.walletSummary(MINER, now);
+  assert.strictEqual(summary.rigCount, 2);
+  assert.deepStrictEqual(summary.rigs.map((rig) => rig.name).sort(), ['rig-1', 'rig-2']);
+  assert.strictEqual(second.workers.get(MINER).shares, 2);
+});
+
 test('the fee is exactly the published percentage, rounded down', () => {
   const ledger = tempLedger({ feePercent: 1.5 });
   const now = Math.floor(Date.now() / 1000);
@@ -242,4 +344,49 @@ test('the ledger survives a restart', () => {
   const second = new Ledger({ feePercent: 1, operatorAddress: OPERATOR, stateFile, windowSeconds: 3600 });
   assert.strictEqual(second.balanceOf(MINER).pending, before);
   assert.strictEqual(second.stats().blocks, 1);
+});
+
+// --- packaging ------------------------------------------------------------
+//
+// The image is the only place where "it works on my machine" is a deployment
+// bug: `deploy/Dockerfile` copies a subset of the repository, and a file that
+// is missing from that subset only fails when the code path that reads it runs
+// for the first time. `pool/src/address.js` re-exports `lib/address.js`, was
+// required lazily on login, and shipped missing: the image built, started, and
+// answered /api/config, and the first rig to connect crashed it. This walks the
+// requires in `pool/src` and asserts the image copies what they reach.
+test('the image copies every file the pool requires from outside pool/', () => {
+  const root = path.join(__dirname, '..', '..');
+  const dockerfile = fs.readFileSync(path.join(root, 'deploy', 'Dockerfile'), 'utf8');
+
+  // `COPY <src>... <dest>` only; the builder stage copies the miner's sources.
+  const copied = [];
+  for (const line of dockerfile.split('\n')) {
+    const match = line.match(/^\s*COPY\s+(?:--\S+\s+)?(.+)$/);
+    if (!match) continue;
+    const parts = match[1].trim().split(/\s+/);
+    copied.push(...parts.slice(0, -1));
+  }
+
+  const escapes = new Set();
+  for (const file of fs.readdirSync(path.join(root, 'pool', 'src'))) {
+    if (!file.endsWith('.js')) continue;
+    const source = fs.readFileSync(path.join(root, 'pool', 'src', file), 'utf8');
+    for (const match of source.matchAll(/require\(['"]\.\.\/\.\.\/([^'"]+)['"]\)/g)) {
+      escapes.add(match[1]);
+    }
+  }
+
+  assert.ok(escapes.size > 0, 'expected the pool to share code with the rest of the repository');
+  for (const target of escapes) {
+    const top = target.split('/')[0];
+    assert.ok(
+      copied.some((entry) => entry === top || entry === `./${top}` || entry.startsWith(`${top}/`)),
+      `deploy/Dockerfile does not copy ${top}/, which pool/src requires (${target})`
+    );
+  }
+
+  // The decoder itself, so the assertion above cannot pass on a Copy of the
+  // directory that happens to be empty in the image.
+  assert.match(dockerfile, /^COPY lib \.\/lib$/m);
 });

@@ -1,7 +1,7 @@
 ---
 title: Các coin khác
 description: Bảy thuật toán zmrig băm được, cách đào Wownero, ArQmA, Graft, Safex Cash, YadaCoin hay Scala bằng cùng một installer, và cách trang này xếp hạng theo số tiền thật.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
+image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 ---
 
 import CoinMatrix from '@site/src/components/CoinMatrix';
@@ -34,7 +34,7 @@ khi có gì được ghi lên máy.
 ## Một lệnh, mọi đồng
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NggKhaiz/ZMRIG/BETA/oneclick.sh \
+curl -fsSL https://raw.githubusercontent.com/MoLik-Labs/ZMRIG/BETA/oneclick.sh \
   | sudo bash -s -- install --wallet YOUR_ADDRESS --coin wow \
       --pool pool.example.org:3333 --yes
 ```
@@ -47,14 +47,14 @@ sudo ./oneclick.sh plan --wallet YOUR_ADDRESS --coin wow --pool pool.example.org
 ```
 
 ```text
-engine         zmrig  (RandomX family, 1% dev fee)
+engine         zmrig  (RandomX family, 3% dev fee)
 pool           pool.example.org:3333
 algo           rx/wow
 coin           Wownero
-profile        free  (auto: no battery, electricity is treated as free)
+profile        free  (default: maximum hashrate, regardless of battery state)
 ```
 
-Engine tự chọn: `rx/*` và `panthera` thuộc về engine Zig (1 % thời gian
+Engine tự chọn: `rx/*` và `panthera` thuộc về engine Zig (3 % thời gian
 Monero, `--donate-level=0` để bỏ). Ép engine C++ bằng `--engine xmrig` chỉ khi
 cần debug, không phải vì nó nhanh hơn — nó không nhanh hơn.
 
@@ -71,10 +71,11 @@ TLS trên engine Zig.
 
 ## Cái gì được kiểm, cái gì không
 
-Bộ dựng lệnh kiểm địa chỉ Monero chính xác: 95 ký tự, 106 với địa chỉ tích hợp,
-chỉ bảng chữ base58. Với sáu đồng còn lại nó kiểm bảng chữ và độ dài hợp lý, cảnh
-báo khi prefix không phải cái nó biết — nó không nhận là đã kiểm checksum mà nó
-không tính. Pool làm việc đó, và chỉ pool mới làm được.
+Bộ dựng lệnh **giải mã** địa chỉ Monero: 95 ký tự, 106 với địa chỉ tích hợp, bảng
+chữ base58, byte mạng, và checksum Keccak-256. Chỉ một ký tự sai là bị từ chối,
+kèm lý do. Với sáu đồng còn lại nó kiểm bảng chữ và độ dài hợp lý, cảnh báo khi
+prefix không phải cái nó biết — nó không nhận là đã kiểm checksum mà nó không
+tính.
 
 Sai địa chỉ là đào cho người khác, và không trang web nào chứng minh được địa chỉ
 là của bạn. Sao chép từ ví của bạn, dán vào, rồi đối chiếu sáu ký tự đầu và cuối

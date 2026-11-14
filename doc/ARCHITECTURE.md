@@ -215,7 +215,7 @@ Key knobs (`randomx` object, `src/crypto/rx/RxConfig.h`):
 | `init` | threads used for dataset init (`-1` = auto) | `-1` |
 | `init-avx2` | AVX2/JIT optimised dataset init (`-1` = auto) | `-1` |
 | `1gb-pages` | use 1 GiB pages (**auto-detected** here) | `auto` |
-| `rdmsr` / `wrmsr` | MSR mod (fix prefetcher/commit unit) | `true` / `true` |
+| `rdmsr` / `msr` | restore the old MSR values on exit / apply the preset at all: `"auto"`, `true` or `false` | `true` / `"auto"` |
 | `cache_qos` | Intel CAT: isolate L3 per thread | `false` |
 | `numa` | one dataset per NUMA node | `true` |
 | `scratchpad_prefetch_mode` | `0`off `1`T0 `2`NTA `3`movntdqa | `1` |
@@ -286,7 +286,7 @@ profitable algorithm for the hardware.
 
 | Area | Change | Where |
 |---|---|---|
-| Fee | C++ engine: donation strategy deleted, levels forced to 0, no dev wallet/host in the tree. Zig engine: 1 % of Monero time, printed and switchable off | `donate.h`, `net/Network.*`, `base/net/stratum/Pools.*`, `CMakeLists.txt`, `zmrig/src/fee.zig` |
+| Fee | C++ engine: donation strategy deleted, levels forced to 0, no dev wallet/host in the tree. Zig engine: 3 % of Monero time, printed and switchable off | `donate.h`, `net/Network.*`, `base/net/stratum/Pools.*`, `CMakeLists.txt`, `zmrig/src/fee.zig` |
 | Build | `-march=native`, `-fno-plt`, alignment, optional LTO/PGO (LTO off by default: it breaks CryptoNight) | `cmake/tuning.cmake`, `CMakeLists.txt` |
 | Defaults | huge pages keep JIT code, no `yield`, scratchpad memory pool, 1 GiB page auto-detection | `backend/cpu/CpuConfig.h`, `crypto/rx/RxConfig.*`, `crypto/common/VirtualMemory_unix.cpp` |
 | Linux | `--cpu-priority` actually applies `setpriority()` for the process | `base/kernel/Platform_unix.cpp` |

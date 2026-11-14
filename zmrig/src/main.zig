@@ -1,5 +1,5 @@
 //! zmrig - a RandomX miner written in Zig on top of the RandomX engine shipped
-//! in this repository. 1% of Monero mining time goes to the developer wallet
+//! in this repository. 3% of Monero mining time goes to the developer wallet
 //! (`zmrig/src/fee.zig`), stated in the banner, in `--check` and in the log
 //! whenever a fee session opens; `--donate-level=0` turns it off.
 
@@ -18,10 +18,12 @@ const report = @import("report.zig");
 const stratum = @import("stratum.zig");
 const topology = @import("topology.zig");
 const health = @import("health.zig");
+const thermal = @import("thermal.zig");
 const verify = @import("verify.zig");
+const wallet = @import("wallet.zig");
 const util = @import("util.zig");
 
-pub const version = "6.34.0";
+pub const version = "6.48.0";
 
 var running = std.atomic.Value(bool).init(true);
 
@@ -36,7 +38,10 @@ fn onSignal(_: c_int) callconv(.C) void {
 /// and a rejected config. One string, so the author line cannot go stale.
 pub const banner =
     "ZMRIG " ++ version ++ " - RandomX miner by @nggkhaiz\n" ++
-    "1% of Monero mining time goes to the developer (--donate-level=0 turns it off), GPL-3.0, https://github.com/NggKhaiz/ZMRIG\n";
+    // The rate comes from the constant, so a banner that disagrees with the
+    // code cannot be compiled. The number this prints is the number
+    // `scripts/verify-fee.sh` audits and the number the documentation states.
+    std.fmt.comptimePrint("{d}% of Monero mining time goes to the developer (--donate-level=0 turns it off), GPL-3.0, https://github.com/MoLik-Labs/ZMRIG\n", .{@import("fee.zig").default_percent});
 
 fn installSignalHandlers() void {
     const act = std.posix.Sigaction{
@@ -90,8 +95,8 @@ pub fn main() !void {
         };
 
         var cli = try options.parseArgs(allocator, args[1..]);
-        mergeOptions(allocator, &file_opts, &cli);
-        allocator.free(cli.pools.items); // strings were moved, the array goes away
+        options.mergeInto(allocator, &file_opts, &cli);
+        cli.deinit(allocator); // moved strings/pools were cleared; free what was not merged
         opts.deinit(allocator);
         opts = file_opts;
     }
@@ -113,7 +118,59 @@ pub fn main() !void {
         return;
     }
 
+    // Before anything reads a value, and before `--check` can bless it: these
+    // are the settings that used to be accepted here and then refused - or
+    // ignored - by the code that used them. `--version` describes the binary,
+    // not this configuration, so it is the one action that skips the check.
+    if (!opts.version) options.validateValues(&opts) catch |e| {
+        var stderr = std.io.getStdErr().writer();
+
+        switch (e) {
+            error.InvalidThreads => stderr.print(
+                "zmrig: {d} is not a thread count this miner can run: -t takes 1..{d}\n",
+                .{ opts.threads orelse 0, options.max_threads },
+            ) catch {},
+            error.InvalidPrefetch => stderr.print(
+                "zmrig: --scratchpad-prefetch={d} is not a mode: 0 = no prefetch, 1 = prefetcht0 (default), 2 = prefetchnta, 3 = a plain load\n",
+                .{opts.scratchpad_prefetch},
+            ) catch {},
+            error.InvalidPriority => stderr.print(
+                "zmrig: --priority={d} is not a priority: 1..5 on XMRig's scale, -20..19 as a raw nice value, or -1 to leave the scheduler alone\n",
+                .{opts.priority},
+            ) catch {},
+            error.InvalidPoolPort => stderr.print(
+                "zmrig: a pool port of 0 is not a port: write host:3333\n",
+                .{},
+            ) catch {},
+            error.InvalidPath => stderr.print(
+                "zmrig: a path in the configuration contains a NUL byte, which no file system can open; fix log-file / tls-ca\n",
+                .{},
+            ) catch {},
+            error.UnreadableTlsCa => stderr.print(
+                "zmrig: --tls-ca {s} cannot be read, so the pool's certificate cannot be verified\n",
+                .{opts.tls_ca orelse (blk: {
+                    for (opts.pools.items) |pool| {
+                        if (pool.tls_ca) |path| break :blk path;
+                    }
+                    break :blk "";
+                })},
+            ) catch {},
+            else => stderr.print("zmrig: {s}\n", .{@errorName(e)}) catch {},
+        }
+
+        std.process.exit(1);
+    };
+
     log.global = log.Logger.init(opts.colors, opts.verbose);
+    // `--verify-share` writes a protocol on stdout: one JSON line per share,
+    // nothing else. The sink has to be set here rather than just before
+    // `verify.run`, because the fee banner below is printed first - and a pool
+    // that reads that banner as a share reply drops the share that was in
+    // flight. Everything from this point on belongs on stderr.
+    if (opts.verify_share) log.global.stderr_sink = true;
+    // `--check-wallet` prints one verdict on stdout and exits; its log has no
+    // business in the middle of that.
+    if (opts.check_wallet != null) log.global.stderr_sink = true;
     stratum.user_agent = opts.user_agent;
     for (opts.pools.items) |pool| {
         if (!pool.tls_insecure) continue;
@@ -125,11 +182,43 @@ pub fn main() !void {
         break;
     }
 
+    // A wallet with one wrong character mines perfectly and is never paid. The
+    // pool refuses it too, but a rig that keeps reconnecting against a refusal
+    // that reads like a network problem can spend a week doing it, and nothing
+    // on the machine ever says why. So the address is decoded here, before the
+    // first share: a Monero rig whose address fails its checksum does not start.
+    //
+    // `--allow-bad-wallet` exists because a login can be address shaped without
+    // being a Monero address (another CryptoNote coin, a pool account name that
+    // happens to be 95 characters). For every algorithm except rx/0 the check is
+    // advisory, because this repository only claims to know Monero's format.
+    const wallet_fatal = firstAlgo(&opts) == .rx_0 and !opts.allow_bad_wallet;
+    for (opts.pools.items) |pool| {
+        const login = pool.user;
+        const cut = std.mem.indexOfAny(u8, login, "./") orelse login.len;
+        const address = login[0..cut];
+        if (address.len != 95 and address.len != 106) continue;
+
+        const verdict = wallet.check(address);
+        if (!verdict.ok) {
+            if (wallet_fatal) {
+                log.global.err("{s} is not a valid Monero address: {s}", .{ address, verdict.reason });
+                log.global.err("this rig would mine and never be paid; check it with `zmrig --check-wallet {s}`", .{address});
+                log.global.err("if that login is not a Monero address, pass --allow-bad-wallet", .{});
+                std.process.exit(1);
+            }
+            log.global.warn("{s} is not a valid Monero address: {s}", .{ address, verdict.reason });
+            log.global.warn("check it with: zmrig --check-wallet {s}", .{address});
+        } else if (verdict.net != .mainnet) {
+            log.global.warn("{s} is a {s} address: a mainnet pool cannot pay it", .{ address, wallet.netLabel(verdict.net) });
+        }
+    }
+
     // The fee is a policy decision, so it is stated before anything else runs:
     // what it costs, which coin it applies to, where it goes, how to stop it.
     if (opts.donate_percent == 0) {
         log.global.info("developer fee: off (--donate-level=0); nothing is mined for anyone but your wallet", .{});
-    } else if (opts.version or opts.benchmark or opts.report or opts.self_test or opts.check) {
+    } else if (opts.version or opts.benchmark or opts.report or opts.self_test or opts.check or opts.verify_share or opts.check_wallet != null) {
         // These paths never mine to a pool, and main prints the fee line in
         // --check. Saying it twice in a 3-second benchmark is noise.
     } else {
@@ -162,6 +251,35 @@ pub fn main() !void {
         return;
     }
 
+    if (opts.check_wallet) |address| {
+        // Prints and exits: this is what `zmrig-os doctor`, the fleet and a
+        // person pasting an address into a shell all need.
+        const verdict = wallet.check(address);
+        const out = std.io.getStdOut().writer();
+
+        if (verdict.ok) {
+            out.print("valid   {s}\n", .{address}) catch {};
+            // The property that was actually checked, said out loud: "valid" is
+            // the shape, "checksum verified" is why a pool can pay it.
+            out.print("  check checksum verified (Keccak-256)\n", .{}) catch {};
+            out.print("  kind  {s}\n", .{wallet.kindLabel(verdict.kind)}) catch {};
+            out.print("  net   {s}\n", .{wallet.netLabel(verdict.net)}) catch {};
+            out.print("  spend {s}\n  view  {s}\n", .{ verdict.spend, verdict.view }) catch {};
+            if (verdict.kind == .integrated or verdict.kind == .integrated_subaddress) {
+                out.print("  payment id {s}\n", .{verdict.payment_id}) catch {};
+            }
+            if (verdict.net != .mainnet) {
+                out.print("warning: a mainnet pool cannot pay this address\n", .{}) catch {};
+                std.process.exit(1);
+            }
+        } else {
+            out.print("invalid {s}\n  {s}\n", .{ address, verdict.reason }) catch {};
+            std.process.exit(1);
+        }
+
+        return;
+    }
+
     if (opts.self_test) {
         const ok = try selfTest(allocator, firstAlgo(&opts), opts.self_test_light);
         std.process.exit(if (ok) 0 else 1);
@@ -179,6 +297,15 @@ pub fn main() !void {
 
         break :blk memoryMb(algo, mode, miner_mod.totalMemory()) + scratch_mb + 64;
     };
+
+    // `--profile` decides the thread count, so it is resolved before anything
+    // reads `opts.threads` (`--check` included: the summary must not lie).
+    //
+    // Before the benchmark, too: `--bench` used to fall through to the L3
+    // heuristic, so on a rig with a cgroup quota it measured a machine that was
+    // throttled and reported the result as this machine's best. A benchmark is
+    // the number somebody writes down in doc/BENCHMARKS.md.
+    const profile = resolveProfile(&opts, &log.global);
 
     if (opts.benchmark) {
         try requireMemory(dataset_mb);
@@ -223,6 +350,7 @@ pub fn main() !void {
             .power_watts = power.watts,
             .power_source = power.source,
             .pool = "benchmark",
+            .temp_limit_c = opts.max_temp,
             .timestamp = std.time.timestamp(),
         }) catch |e| {
             log.global.err("cannot build the report: {s}", .{@errorName(e)});
@@ -254,9 +382,6 @@ pub fn main() !void {
         std.process.exit(1);
     };
 
-    // `--profile` decides the thread count, so it is resolved before anything
-    // reads `opts.threads` (`--check` included: the summary must not lie).
-    const profile = resolveProfile(&opts, &log.global);
 
     if (opts.autotune) {
         try runAutotune(allocator, &opts, profile, &log.global);
@@ -273,7 +398,31 @@ pub fn main() !void {
     if (opts.verify_share) {
         // stdout is a protocol here: one JSON line per share, nothing else.
         log.global.stderr_sink = true;
-        try verify.run(allocator, &log.global);
+        // `--mode fast` asks for the 2 GiB dataset, which turns a share from a
+        // dataset rebuild into a single hash. See verify.zig for the numbers and
+        // for why `auto` stays on the light cache.
+        const need_mb = memoryMb(firstAlgo(&opts), .fast, miner_mod.totalMemory());
+        // `availableMemory`, not `usableMemory`: the dataset is mapped from the
+        // free huge pages when there are any (the verifier asks for them and
+        // falls back), and from ordinary RAM when there are not. Both numbers
+        // are in `availableMemory`, neither is in the machine's size.
+        const room_mb = miner_mod.availableMemory(opts.huge_pages) / (1024 * 1024);
+        const wants_fast = opts.mode == .fast;
+        const full = wants_fast and room_mb >= need_mb;
+
+        if (wants_fast and !full) {
+            log.global.warn("--mode fast needs {d} MB for the dataset and only {d} MB can be allocated here: using the light cache (about 9x slower per share)", .{ need_mb, room_mb });
+        }
+        try verify.run(allocator, &log.global, .{
+            .full_memory = full,
+            .init_threads = opts.init_threads,
+            .huge_pages = opts.huge_pages,
+            // `-t` in this mode is hashing threads, not mining threads, and it
+            // is the only place it means that - so it is read from the command
+            // line rather than from the profile's heuristic, which is about
+            // mining and would have quietly given a verifier every core.
+            .threads = if (opts.seen.threads) (opts.threads orelse 1) else 1,
+        });
 
         return;
     }
@@ -326,6 +475,26 @@ pub fn main() !void {
     // below reads `due()` before every connection.
     var fee_clock = fee.Clock.init(opts.donate_percent);
 
+    // The thermal policy, when one was asked for. `--max-temp` with no sensor
+    // to read is not a policy, so say that now instead of at 4 a.m.
+    var governor: ?thermal.Governor = null;
+    if (opts.max_temp) |target| {
+        governor = thermal.Governor.init(thermal.Config.fromTarget(target), miner.threadCount());
+
+        if (readTemperature(&opts)) |reading| {
+            logger.info("thermal: holding {d:.0} C max - {s} reads {d:.1} C now; {d} thread(s), step down at {d:.0} C, pause at {d:.0} C", .{
+                governor.?.config.target_c,
+                reading.label(),
+                reading.celsius,
+                miner.threadCount(),
+                governor.?.config.target_c,
+                governor.?.config.critical_c,
+            });
+        } else {
+            logger.warn("thermal: --max-temp={d:.0} was asked for but no CPU sensor was found in /sys/class/{{hwmon,thermal}}; the governor cannot act without one (pass --thermal-file=PATH to read it elsewhere)", .{target});
+        }
+    }
+
     var monitor = Monitor{
         .miner = &miner,
         .fee_clock = &fee_clock,
@@ -344,6 +513,8 @@ pub fn main() !void {
         .health_restart = opts.health_restart,
         .health_restart_seconds = @intCast(opts.health_restart_seconds),
         .health_tracker = .{ .config = .{ .warmup_seconds = opts.health_warmup_seconds } },
+        .governor = if (governor) |*g| g else null,
+        .thermal_file = opts.thermal_file,
     };
     monitor.thread = try std.Thread.spawn(.{ .stack_size = 256 * 1024 }, Monitor.run, .{&monitor});
     defer {
@@ -484,6 +655,7 @@ pub fn main() !void {
         // for the login reply must not wait for the pool to answer. The handle
         // is cleared as soon as this session ends, so a stale descriptor can
         // never be shut down after it was closed (and possibly reused).
+        monitor.kick_reason.store(.none, .release);
         monitor.socket.store(@intCast(session.conn.handle()), .release);
         defer monitor.socket.store(-1, .release);
 
@@ -502,7 +674,7 @@ pub fn main() !void {
                 continue;
             }
 
-            logger.err("login failed: {s}", .{@errorName(e)});
+            logger.err("login failed: {s}", .{describeLoginError(e)});
 
             const base_ms: i64 = @as(i64, opts.ban_cooldown) * 1000;
             switch (session.last_failure) {
@@ -604,11 +776,17 @@ pub fn main() !void {
                     logger.warn("developer fee: {s} banned the developer login; fee paused for a while", .{pool.host});
                     fee_clock.fail(std.time.milliTimestamp());
                 },
-                .disconnected => |e| logger.warn("developer fee: session ended after {d} s ({s}); {d} s left owed", .{
-                    spent_s,
-                    @errorName(e),
-                    @divTrunc(fee_clock.owed(), 1000),
-                }),
+                .disconnected => |e| if (monitor.kick_reason.load(.acquire) == .fee)
+                    logger.info("developer fee: session finished after {d} s; {d} s left owed", .{
+                        spent_s,
+                        @divTrunc(fee_clock.owed(), 1000),
+                    })
+                else
+                    logger.warn("developer fee: session ended after {d} s ({s}); {d} s left owed", .{
+                        spent_s,
+                        @errorName(e),
+                        @divTrunc(fee_clock.owed(), 1000),
+                    }),
                 else => logger.info("developer fee: session ended after {d} s; {d} s left owed", .{
                     spent_s,
                     @divTrunc(fee_clock.owed(), 1000),
@@ -620,7 +798,20 @@ pub fn main() !void {
         }
 
         switch (result) {
-            .disconnected => |e| logger.warn("connection lost: {s}", .{@errorName(e)}),
+            // A SIGTERM or a fee hand-over wakes the blocking read, which looks
+            // exactly like the pool closing the socket. Neither is: the monitor
+            // records why it shut the socket down, and this reads it. A warning
+            // about a lost connection during a clean shutdown or a wallet swap
+            // is the kind of thing that trains somebody to ignore warnings.
+            .disconnected => |e| switch (monitor.kick_reason.load(.acquire)) {
+                // Both of these were said already, by whoever closed the
+                // socket: the monitor prints "60 s owed, reconnecting to pay
+                // it" before it kicks, and a shutdown prints "shutting down"
+                // two lines later. Repeating it here is how one event becomes
+                // three log lines.
+                .shutdown, .fee => {},
+                .none => logger.warn("connection lost: {s}", .{@errorName(e)}),
+            },
             .shutdown => {},
             .failed => {},
             .banned => {
@@ -651,8 +842,20 @@ pub fn main() !void {
         miner.submitter.rejected.load(.monotonic),
         miner.submitter.failed.load(.monotonic),
     });
+
+    // "hashing 0 s of 0 s" is a line about nothing: a run that lasted less than
+    // five seconds (a `--check`, a bad option, a crash) has no duty cycle worth
+    // reporting and the totals above already say everything.
+    if (miner.duty.total_ms >= 5000) {
+        var duty_buf: [256]u8 = undefined;
+        logger.info("{s}", .{miner.describeDuty(&duty_buf)});
+    }
     _ = &buf;
 }
+
+/// Who closed the socket. `.none` means nobody here did, so a closed read is a
+/// real disconnect.
+const KickReason = enum(u8) { none, shutdown, fee };
 
 const SessionEnd = union(enum) {
     disconnected: anyerror,
@@ -662,6 +865,21 @@ const SessionEnd = union(enum) {
     /// is how a 10-minute ban becomes an hour.
     banned,
 };
+
+/// What a failed login says in the log.
+///
+/// `@errorName` is a name for a programmer; a rig owner reads the log at 2 a.m.
+/// from a phone. The four that have a cause worth naming are spelled out; the
+/// rest keep their name so a bug report still carries it.
+fn describeLoginError(e: anyerror) []const u8 {
+    return switch (e) {
+        error.ConnectionClosed => "the pool closed the connection (check the port and the scheme: TLS pools need tls:// or wss://)",
+        error.WsProtocol => "the endpoint is not speaking WebSocket correctly (check the path and any proxy in front of it)",
+        error.BadResponse => "the endpoint answered the WebSocket upgrade with something that is not HTTP",
+        error.TlsHandshake, error.HandshakeFailed => "the TLS handshake failed (wrong port, a self-signed certificate, or a proxy rewriting the stream)",
+        else => @errorName(e),
+    };
+}
 
 fn runSession(
     allocator: std.mem.Allocator,
@@ -759,6 +977,8 @@ const Monitor = struct {
     report_started_ms: i64 = 0,
     last_report_write: i64 = 0,
     report_error_logged: bool = false,
+    /// `warnIfIdle` is a warning, not a heartbeat: once a minute is enough.
+    last_idle_warn: i64 = 0,
     print_interval: i64,
     idle_timeout_ms: i64 = 300_000,
     keepalive_ms: i64 = 60_000,
@@ -771,11 +991,25 @@ const Monitor = struct {
     health_tracker: health.Tracker = .{},
     health_state: health.State = .warming,
     health_logged: bool = false,
+    /// Armed by `--max-temp`. Null means no governor: this is the only place
+    /// the thermal policy is applied, so nothing else can throttle a machine
+    /// that did not ask to be throttled.
+    governor: ?*thermal.Governor = null,
+    /// `--thermal-file`, owned by Options for the whole run.
+    thermal_file: ?[]const u8 = null,
+    thermal_reading: ?thermal.Reading = null,
+    thermal_missing_logged: bool = false,
     /// Hashrates published to the HTTP API once a second.
     view: api_http.View = .{},
     /// The developer-fee clock, ticked once a second from this thread because
     /// this is the only place that knows how much wall clock actually passed.
     fee_clock: ?*fee.Clock = null,
+    /// Why this thread last shut the socket down, if it did. The mining loop is
+    /// parked in a blocking read when it happens, and from there a deliberate
+    /// close is indistinguishable from the pool dropping the connection - so
+    /// the loop asks instead of guessing, and a hand-over to the developer
+    /// wallet stops looking like a network fault in the log.
+    kick_reason: std.atomic.Value(KickReason) = std.atomic.Value(KickReason).init(.none),
     socket: std.atomic.Value(i32) = std.atomic.Value(i32).init(-1),
     stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     thread: ?std.Thread = null,
@@ -798,6 +1032,7 @@ const Monitor = struct {
 
             const total = self.miner.shared.totalHashes();
             self.miner.stats.add(total);
+            self.miner.tickDuty(std.time.milliTimestamp());
 
             const now = std.time.milliTimestamp();
             if (first_hash_ms == 0 and total > 0) first_hash_ms = now;
@@ -826,7 +1061,9 @@ const Monitor = struct {
                 self.miner.shared.totalHashes(),
             );
 
+            self.warnIfIdle(now);
             self.checkHealth(now);
+            self.checkThermal(now);
 
             if (self.report_file) |path| {
                 if (now - self.last_report_write >= self.report_interval_ms) {
@@ -837,7 +1074,10 @@ const Monitor = struct {
 
             // A SIGTERM must not wait for the pool to say something: the main
             // thread is parked in a blocking read, so nudge it here.
-            if (!running.load(.acquire)) self.kick();
+            if (!running.load(.acquire)) {
+                self.kick_reason.store(.shutdown, .release);
+                self.kick();
+            }
 
             // Developer fee. The debt is accrued here, and a session that has
             // paid it off is ended from here too -- the main thread is parked
@@ -849,6 +1089,7 @@ const Monitor = struct {
 
                 if (clock.expired(now)) {
                     self.logger.info("developer fee: session paid, back to your wallet", .{});
+                    self.kick_reason.store(.fee, .release);
                     self.kick();
                 } else if (!clock.isDonating() and clock.due(now)) {
                     // A pool connection lives for hours; the only way to hand
@@ -857,6 +1098,7 @@ const Monitor = struct {
                     self.logger.info("developer fee: {d} s owed, reconnecting to pay it", .{
                         @divTrunc(clock.owed(), 1000),
                     });
+                    self.kick_reason.store(.fee, .release);
                     self.kick();
                 }
             }
@@ -872,6 +1114,69 @@ const Monitor = struct {
                 self.logger.warn("pool has been silent for {d} s, dropping the connection", .{@divTrunc(now - last, 1000)});
                 std.posix.shutdown(@intCast(fd), .both) catch {};
             }
+        }
+    }
+
+    /// One second of thermal policy: read the hottest sensor, ask the governor
+    /// what to do, apply it, and say so once per change.
+    ///
+    /// Nothing here runs unless `--max-temp` armed a governor, so a machine
+    /// without the flag behaves exactly as it did before this file existed.
+    fn checkThermal(self: *Monitor, now_ms: i64) void {
+        const gov = self.governor orelse return;
+
+        const reading = if (self.thermal_file) |path| blk: {
+            const celsius = thermal.readPlainFile(path) orelse break :blk null;
+            var r = thermal.Reading{ .celsius = celsius };
+            @memcpy(r.name_buf[0..4], "file");
+            r.name_len = 4;
+            break :blk r;
+        } else thermal.readSys("/sys");
+
+        self.thermal_reading = reading;
+
+        if (reading == null and !self.thermal_missing_logged and now_ms - self.report_started_ms > 30_000) {
+            self.thermal_missing_logged = true;
+            self.logger.warn("thermal: no CPU sensor on this machine, so --max-temp cannot act; point --thermal-file at a file that holds the temperature", .{});
+        }
+
+        const celsius: ?f32 = if (reading) |r| r.celsius else null;
+        const sensor = if (reading) |r| r.label() else "no sensor";
+
+        switch (gov.step(now_ms, celsius)) {
+            .none => {},
+            .set_threads => |threads| {
+                self.miner.shared.setActiveThreads(threads);
+                self.logger.info("thermal: {d:.1} C on {s} -> {d} of {d} threads (target {d:.0} C; {d} step-down(s), {d} step-up(s) so far)", .{
+                    celsius orelse 0,
+                    sensor,
+                    threads,
+                    self.miner.threadCount(),
+                    gov.config.target_c,
+                    gov.step_downs,
+                    gov.step_ups,
+                });
+            },
+            .pause => {
+                self.miner.shared.pause();
+                self.miner.shared.setActiveThreads(0);
+                self.logger.warn("thermal: {d:.1} C on {s} and one thread is not enough to stay under {d:.0} C - mining stops until it falls to {d:.0} C. Nothing is lost: the dataset stays in RAM and the pool connection stays up", .{
+                    celsius orelse 0,
+                    sensor,
+                    gov.config.max_c,
+                    gov.config.resume_c,
+                });
+            },
+            .unpause => {
+                self.miner.shared.unpause();
+                self.miner.shared.setActiveThreads(gov.threads);
+                self.logger.info("thermal: back to {d:.1} C on {s}, mining resumes on {d} thread(s) and climbs while it stays under {d:.0} C", .{
+                    celsius orelse 0,
+                    sensor,
+                    gov.threads,
+                    gov.config.target_c - gov.config.hysteresis_c,
+                });
+            },
         }
     }
 
@@ -937,6 +1242,40 @@ const Monitor = struct {
 
     /// Writes `ZMRIG1.<...>` to the report file. A failure is logged once and
     /// never stops the miner: a read-only /run must not kill a good session.
+    /// A rig that hashes at 1 000 H/s for 60 % of the hour earns 60 % of what
+    /// the speed line suggests, and nothing in that line says so. Once a minute
+    /// at most, when the last minute was mostly not hashing, say how much and
+    /// where it went - naming the reason only when this thread knows it.
+    fn warnIfIdle(self: *Monitor, now_ms: i64) void {
+        // Ten samples is the shortest window where a percentage means anything,
+        // and a rig that has not hashed at all yet is warming up: the first
+        // dataset build is expected, already logged, and not this warning.
+        if (self.miner.duty.next < 30) return;
+        if (self.miner.duty.hashing_ms == 0) return;
+        if (self.miner.duty.recent(60) >= 0.85) return;
+        if (now_ms - self.last_idle_warn < 60_000) return;
+
+        self.last_idle_warn = now_ms;
+
+        const percent = self.miner.duty.recent(60) * 100.0;
+        const idle_s = self.miner.duty.recentIdle(60);
+        const throttled_s = self.miner.duty.recentThrottled(60);
+
+        // A dataset build is not a fault and it is already logged, with its
+        // own duration ("dataset ready in 14564 ms"). The warning exists for
+        // time nobody chose: a pool that is gone, or a governor holding
+        // threads back.
+        if (idle_s == 0 and throttled_s == 0) return;
+
+        if (idle_s > 0) {
+            self.logger.warn("hashing {d:.0} % of the last minute: {d} s with no job (the pool is gone, or a reconnect is in flight)", .{ percent, idle_s });
+        } else if (throttled_s > 0) {
+            self.logger.info("hashing {d:.0} % of the last minute: {d} s throttled at --max-temp", .{ percent, throttled_s });
+        } else {
+            self.logger.warn("hashing {d:.0} % of the last minute", .{percent});
+        }
+    }
+
     fn writeReport(self: *Monitor, path: []const u8, now_ms: i64) void {
         if (self.report_file == null) return;
 
@@ -985,6 +1324,9 @@ const Monitor = struct {
             .power_source = self.report_power_source,
             .pool = self.report_pool,
             .health = self.health_state.label(),
+            .temp_limit_c = if (self.governor) |g| g.config.target_c else null,
+            .temp_c = if (self.thermal_reading) |r| r.celsius else null,
+            .active_threads = self.miner.activeCount(),
             .timestamp = std.time.timestamp(),
         }) catch return;
 
@@ -1030,97 +1372,30 @@ const Monitor = struct {
     }
 };
 
-fn mergeOptions(allocator: std.mem.Allocator, base: *options.Options, extra: *options.Options) void {
-    if (extra.algo) |v| base.algo = v;
-    if (extra.threads) |v| base.threads = v;
-    if (extra.pools.items.len > 0) {
-        // Command line pools replace config file pools, like xmrig does. Take
-        // ownership of the CLI buffers instead of copying: `extra` is discarded
-        // right after the merge and a copy would leak on every start.
-        for (base.pools.items) |pool| options.freePool(allocator, pool);
-
-        base.pools.clearRetainingCapacity();
-        base.pools.appendSlice(allocator, extra.pools.items) catch {
-            // Out of memory here means we cannot mine anyway; keep the config
-            // pools rather than dying inside a void function.
-            return;
-        };
-        extra.pools.clearRetainingCapacity();
-    }
-    // Only what the command line set: a plain `-c config.json --verbose` must
-    // not reset mode, threads, retries or huge pages to their defaults.
-    if (extra.seen.mode) base.mode = extra.mode;
-    if (extra.seen.huge_pages) base.huge_pages = extra.huge_pages;
-    if (extra.seen.auto_hugepages) base.auto_hugepages = extra.auto_hugepages;
-    if (extra.seen.huge_pages_jit) base.huge_pages_jit = extra.huge_pages_jit;
-    if (extra.seen.jit) base.jit = extra.jit;
-    if (extra.seen.print_time) base.print_time = extra.print_time;
-    if (extra.seen.retries) base.retries = extra.retries;
-    if (extra.seen.retry_pause) base.retry_pause = extra.retry_pause;
-    if (extra.seen.colors) base.colors = extra.colors;
-    if (extra.seen.verbose) base.verbose = extra.verbose;
-    if (extra.seen.affinity) base.affinity = extra.affinity;
-    if (extra.seen.affinity_mask) base.affinity_mask = extra.affinity_mask;
-    if (extra.seen.user_agent) base.user_agent = extra.user_agent;
-    if (extra.seen.init_threads) base.init_threads = extra.init_threads;
-    // MSR is opt-in, and "opt-in on the command line" has to work too.
-    if (extra.seen.msr) base.msr = extra.msr;
-    if (extra.seen.msr_restore) base.msr_restore = extra.msr_restore;
-    if (extra.seen.priority) base.priority = extra.priority;
-    if (extra.seen.idle_timeout) base.idle_timeout = extra.idle_timeout;
-    if (extra.seen.keepalive_interval) base.keepalive_interval = extra.keepalive_interval;
-    if (extra.seen.scratchpad_prefetch) base.scratchpad_prefetch = extra.scratchpad_prefetch;
-    if (extra.seen.optimized_init) base.optimized_init = extra.optimized_init;
-    if (extra.log_file) |v| base.log_file = v;
-    if (extra.api_port != 0) base.api_port = extra.api_port;
-    if (extra.check) base.check = true;
-    if (extra.self_test) base.self_test = true;
-    if (extra.benchmark) {
-        base.benchmark = true;
-        base.bench_hashes = extra.bench_hashes;
-    }
-
-    // These short-circuit the run, so they must survive the merge: dropping
-    // them turned `zmrig -c config.json --check` into a live miner.
-    if (extra.check) base.check = true;
-    if (extra.self_test) base.self_test = true;
-    if (extra.self_test_light) base.self_test_light = true;
-    if (extra.help) base.help = true;
-    if (extra.version) base.version = true;
-    if (extra.verbose) base.verbose = true;
-    if (extra.seen.background) base.background = extra.background;
-    // The report flags follow the same rule: a config file may already carry a
-    // report file, an interval, an id and a power figure, and a command line
-    // that does not mention them must leave those values alone.
-    if (extra.seen.report) base.report = true;
-    if (extra.seen.report_time) base.report_seconds = extra.report_seconds;
-    if (extra.seen.report_file) {
-        if (base.report_file) |old| allocator.free(old);
-        base.report_file = extra.report_file;
-    }
-    if (extra.seen.report_interval) base.report_interval = extra.report_interval;
-    if (extra.seen.report_id) {
-        if (base.report_id) |old| allocator.free(old);
-        base.report_id = extra.report_id;
-    }
-    if (extra.seen.power) base.power_watts = extra.power_watts;
-    if (extra.http_host.len > 0) base.http_host = extra.http_host;
-
-    if (extra.transport_override) |v| base.transport_override = v;
-    if (extra.ws_path) |v| base.ws_path = v;
-    if (extra.ws_origin) |v| base.ws_origin = v;
-    if (extra.host_header) |v| base.host_header = v;
-    if (extra.connect_to) |v| base.connect_to = v;
-    if (extra.tls_ca) |v| base.tls_ca = v;
-    if (extra.proxy_url) |v| base.proxy_url = v;
-    if (extra.cloudflare) base.cloudflare = true;
-}
 
 /// --check: print what the miner would do, without touching the network.
 /// Applies the RandomX MSR preset when the user asked for it. Returns true when
 /// the values were written (so the caller knows there is something to restore).
 fn applyMsr(opts: *const options.Options, logger: *log.Logger) bool {
-    if (!opts.msr) return false;
+    switch (opts.msr) {
+        .off => return false,
+        .on => {},
+        .auto => {
+            // Nothing to decide unless the machine can actually take it. The
+            // probe reads one register and reports why not, which is the same
+            // sentence a user needs when they ask `--check`; doing it here
+            // means `auto` never logs a scary warning on a container host.
+            var probe_buf: [192]u8 = undefined;
+            @memset(&probe_buf, 0);
+            const probe_rc = api.xmo_msr_probe(&probe_buf, probe_buf.len);
+            const probe_text = probe_buf[0..std.mem.indexOfScalar(u8, &probe_buf, 0) orelse probe_buf.len];
+            if (probe_rc != 0) {
+                logger.info("msr: not applying the preset by itself ({s}); --msr tries anyway", .{probe_text});
+                return false;
+            }
+            logger.info("msr: {s}", .{probe_text});
+        },
+    }
 
     var report_buf: [192]u8 = undefined;
     @memset(&report_buf, 0);
@@ -1214,6 +1489,34 @@ fn printConfigSummary(opts: *const options.Options) !void {
         if (pool.proxy_spec.kind != .none) {
             try out.print("  proxy   {s} {s}:{d}\n", .{ @tagName(pool.proxy_spec.kind), pool.proxy_spec.host, pool.proxy_spec.port });
         }
+
+        // The address is the one field a `--check` can prove wrong without a
+        // network, so it is stated as a fact rather than left to the first
+        // rejected login.
+        const cut = std.mem.indexOfAny(u8, pool.user, "./") orelse pool.user.len;
+        const address = pool.user[0..cut];
+        if (address.len == 95 or address.len == 106) {
+            const verdict = wallet.check(address);
+            if (verdict.ok) {
+                try out.print("  wallet  {s} {s} {s}\n", .{
+                    wallet.kindLabel(verdict.kind),
+                    wallet.netLabel(verdict.net),
+                    if (verdict.net == .mainnet) "checksum verified" else "not payable on mainnet",
+                });
+            } else {
+                try out.print("  wallet  INVALID: {s}\n", .{verdict.reason});
+                // What it means depends on the algorithm, and saying the wrong
+                // one is worse than saying nothing: under rx/0 this rig mines
+                // for nobody and will not start; under another coin's algorithm
+                // the login may simply be that coin's address, which this
+                // repository does not claim to know.
+                if (firstAlgo(opts) == .rx_0) {
+                    try out.print("          this rig would mine and never be paid, so it will not start; zmrig --check-wallet {s}\n", .{address});
+                } else {
+                    try out.print("          not a Monero address: if this is another coin's address, mining is unaffected (--allow-bad-wallet silences the check)\n", .{});
+                }
+            }
+        }
     }
 
     try out.print("  threads {d} (default would be {d})\n", .{ opts.threads orelse miner_mod.defaultThreads(miner_mod.cpuCount()), miner_mod.defaultThreads(miner_mod.cpuCount()) });
@@ -1278,7 +1581,54 @@ fn printConfigSummary(opts: *const options.Options) !void {
         if (opts.jit) "on" else "off",
     });
 
-    // The single most common reason a VPS mines 25% slower than it should is
+    // What the process can actually allocate, and *why* when the two numbers
+    // differ. `/proc/meminfo` is not namespaced, so `docker run --memory=1g` on a
+    // 32 GB host reports the host: `--check` said "32 GB" and the container was
+    // OOM-killed during startup. The cgroup limit is the number that decides
+    // whether fast mode fits, so it is printed next to it.
+    {
+        const budget = miner_mod.usableMemory();
+        var budget_buf: [192]u8 = undefined;
+        if (miner_mod.memoryBudget()) |cgroup| {
+            try out.print("  budget  {s}\n", .{
+                std.fmt.bufPrint(&budget_buf, "{d} MB usable of {d} MB total: the cgroup limit is {d} MB, {d} MB of it already in use", .{
+                    budget / (1024 * 1024), miner_mod.totalMemory() / (1024 * 1024),
+                    cgroup.limit / (1024 * 1024), (cgroup.limit - cgroup.available) / (1024 * 1024),
+                }) catch "cannot describe the memory budget",
+            });
+        } else {
+            try out.print("  budget  {s}\n", .{
+                std.fmt.bufPrint(&budget_buf, "{d} MB usable of {d} MB total (no cgroup limit)", .{
+                    budget / (1024 * 1024), miner_mod.totalMemory() / (1024 * 1024),
+                }) catch "cannot describe the memory budget",
+            });
+        }
+
+        // And the verdict that follows from it, because "mode auto" is not an
+        // answer: what an operator wants to know is whether this box will run
+        // the 2 GiB dataset or rebuild it line by line at a tenth of the speed.
+        {
+            const algo = firstAlgo(opts);
+            const fit_sizes = sizesFor(algo);
+            const fits = memory_mod.fullMemory(fit_sizes, opts.mode, budget);
+            var fit_buf: [192]u8 = undefined;
+            if (fits) {
+                try out.print("  fit     {s}\n", .{
+                    std.fmt.bufPrint(&fit_buf, "fast mode fits: {d} MB needed, {d} MB usable", .{
+                        (fit_sizes.total() + memory_mod.slack_bytes) / (1024 * 1024), budget / (1024 * 1024),
+                    }) catch "cannot describe the fit",
+                });
+            } else {
+                try out.print("  fit     {s}\n", .{
+                    std.fmt.bufPrint(&fit_buf, "light mode: {d} MB needed, {d} MB usable -> no dataset, about 10x slower", .{
+                        (fit_sizes.total() + memory_mod.slack_bytes) / (1024 * 1024), budget / (1024 * 1024),
+                    }) catch "cannot describe the fit",
+                });
+            }
+        }
+    }
+
+    // The single most common reason a VPS mines 18% slower than it should is
     // that nobody reserved huge pages. Say it during --check, before the user
     // spends a night comparing screenshots of hashrate.
     if (opts.huge_pages) {
@@ -1286,14 +1636,22 @@ fn printConfigSummary(opts: *const options.Options) !void {
         // host sized for Panthera (192 MB) a Monero run needs 2336 MB and the
         // number is the only way to find that out before starting.
         const algo = firstAlgo(opts);
-        const need_mb = memoryMb(algo, opts.mode, miner_mod.totalMemory());
+        // Decision-aware: under `mode auto` in a memory-limited container this
+        // is the cache alone, which is what the miner will map.
+        const need_mb = plannedMemoryMb(opts);
         var mem_buf: [160]u8 = undefined;
 
         try out.print("  memory  {s}\n", .{
-            std.fmt.bufPrint(&mem_buf, "{s} maps {d} MB, {d} pages of 2 MiB: {s}", .{
-                algo.label(), need_mb, (need_mb + 1) / 2, hugePageStatus(opts),
+            std.fmt.bufPrint(&mem_buf, "{s} maps {d} MB, {d} pages of 2 MiB (or {d} of 1 GiB): {s}", .{
+                algo.label(), need_mb, (need_mb + 1) / 2, (need_mb + 1023) / 1024, hugePageStatus(opts),
             }) catch "cannot describe the memory this mode needs",
         });
+
+        // 1 GiB pages cannot be reserved after the machine has fragmented, so
+        // the pool either exists at boot or never will. Saying whether the
+        // mapper's first choice is available turns a silent fallback into a
+        // decision the operator can take.
+        try out.print("  1g      {s}\n", .{giganticStatus(need_mb)});
 
         // Reserved pages are one way to get 2 MiB pages; transparent huge pages
         // are the other, and on most hosts it is the only one an unprivileged
@@ -1315,12 +1673,23 @@ fn printConfigSummary(opts: *const options.Options) !void {
         });
     }
 
+    // The thermal policy. Printed even when it is off, because "why did my rig
+    // slow down at night" has two answers and only one of them is the pool.
+    try out.print("  thermal {s}\n", .{thermalSummary(opts)});
+
     // MSR is read-only here: probe the first CPU, never write during --check.
     var msr_buf: [192]u8 = undefined;
-    _ = api.xmo_msr_probe(&msr_buf, msr_buf.len);
+    const msr_rc = api.xmo_msr_probe(&msr_buf, msr_buf.len);
     try out.print("  msr     {s} ({s})\n", .{
         msr_buf[0..std.mem.indexOfScalar(u8, &msr_buf, 0) orelse msr_buf.len],
-        if (opts.msr) "on" else "off: --msr is worth 5-15% on Zen 3/4 (measured elsewhere, not on this host)",
+        switch (opts.msr) {
+            .off => "off: --no-msr, or 'msr: false' in the config",
+            .on => "on: --msr",
+            .auto => if (msr_rc == 0)
+                "auto: this machine can take it, so the preset is applied"
+            else
+                "auto: the preset is skipped here; --msr tries anyway",
+        },
     });
 }
 
@@ -1340,14 +1709,19 @@ fn startMiner(logger: *@import("log.zig").Logger, opts: *const options.Options) 
 fn resolveProfile(opts: *options.Options, logger: *@import("log.zig").Logger) topology.Profile {
     const logical = miner_mod.cpuCount();
     const physical = topology.physicalCores(logical);
-    const battery = topology.batteryState();
+    // A cgroup CPU quota is not an affinity mask: under `docker --cpus=2`,
+    // `systemd CPUQuota=200%` or a Kubernetes limit the process still sees every
+    // CPU, so the heuristic below would ask for one thread per physical core and
+    // the whole group would then be throttled together - slower than the same
+    // work in fewer threads. Only the default is capped; `-t` is never changed.
+    const quota = topology.quotaCpus();
 
     const profile: topology.Profile = switch (opts.profile) {
         .free => .free,
         .watt => .watt,
-        // A laptop on battery is the only case where the machine's purpose is
-        // obvious from the hardware itself. Everything else gets max hashrate.
-        .auto => if (battery == .discharging) .watt else .free,
+        // `auto` is throughput-first too. Battery state is not consent to
+        // sacrifice hashrate; watt mode is opt-in via `--profile=watt`.
+        .auto => .free,
     };
 
     // A profile that asks for threads the machine does not have is a profile
@@ -1364,16 +1738,20 @@ fn resolveProfile(opts: *options.Options, logger: *@import("log.zig").Logger) to
     }
 
     if (opts.profile == .auto) {
-        logger.debug("profile auto -> {s} (battery {s}, {d} physical of {d} logical cpu)", .{
-            topology.profileName(profile),
-            @tagName(battery),
-            physical,
-            logical,
+        logger.debug("profile auto -> {s} (throughput-first, {d} physical of {d} logical cpu)", .{
+            topology.profileName(profile), physical, logical,
         });
     }
 
     if (opts.threads == null) {
-        const wanted = topology.threadsFor(profile, logical, physical);
+        var wanted = topology.threadsFor(profile, logical, physical);
+
+        if (quota) |cpus| {
+            if (cpus < wanted) {
+                logger.info("cpu quota: {d} cpu(s) available of {d} visible, using {d} thread(s)", .{ cpus, logical, @max(cpus, 1) });
+                wanted = @max(cpus, 1);
+            }
+        }
 
         if (wanted != miner_mod.defaultThreads(logical)) {
             // Say it once: the difference between the L3 heuristic and the
@@ -1400,11 +1778,16 @@ fn runAutotune(
     profile: topology.Profile,
     logger: *@import("log.zig").Logger,
 ) !void {
+    // Measuring more threads than the cgroup allows would report the throttled
+    // number as if it were this machine's best, so the search space is capped
+    // for the same reason the default is.
+    const quota = topology.quotaCpus();
     const logical = miner_mod.cpuCount();
     const physical = topology.physicalCores(logical);
+    const searchable = if (quota) |cpus| @max(@min(logical, cpus), 1) else logical;
 
     var list_buf: [8]usize = undefined;
-    const list = autotune.candidates(profile, logical, physical, &list_buf);
+    const list = autotune.candidates(profile, searchable, physical, &list_buf);
 
     var out = std.io.getStdOut().writer();
     try out.print("autotune: profile {s}, {d} logical cpu, {d} physical cores\n", .{
@@ -1419,20 +1802,25 @@ fn runAutotune(
     const margin = 0.02;
 
     for (list) |threads| {
-        // One trial per candidate. `benchmark` builds its own dataset, so the
-        // wall clock per candidate is the dataset init (~16 s) plus the sample
-        // window; that is honest but not free, which is why the candidate list
-        // is short.
+        // One fixed-duration trial per candidate. `benchmark` builds its own
+        // dataset, so the wall clock per candidate is dataset init (~16 s) plus
+        // the requested sample window. A zero hash limit disables early stop:
+        // using `threads * 2000` here made fast CPUs finish well before the
+        // advertised autotune duration and gave candidates unequal samples.
         var trial_opts = opts.*;
         trial_opts.threads = threads;
-        trial_opts.bench_hashes = @as(u64, threads) * 2000;
+        trial_opts.bench_hashes = 0;
 
         const measure = benchmark(allocator, &trial_opts, opts.autotune_seconds, 0) catch |e| {
             try out.print("{d:>8}  {s:>12}  {s}\n", .{ threads, "-", @errorName(e) });
             continue;
         };
 
-        const trial = autotune.Trial{ .threads = threads, .rate = @max(measure.steady_rate, measure.rate) };
+        // The short autotune window is intentionally measured as a single
+        // equal-length average. `steady_rate` is a rolling window and can be
+        // based on only a few samples here; taking its maximum over the average
+        // biases the winner upward on whichever candidate got lucky.
+        const trial = autotune.Trial{ .threads = threads, .rate = measure.rate };
         const better = autotune.isBetter(trial, best, margin);
 
         var rate_buf: [32]u8 = undefined;
@@ -1477,7 +1865,10 @@ fn runAutotune(
         try out.print("the default heuristic picks {d} thread(s): this machine was leaving hashrate on the table\n", .{candidate_threads});
     }
 
-    try out.print("\nkeep it:\n  \"threads\": {d}\n  or on the command line: -t {d}\n", .{ best.threads, best.threads });
+    // The config file reads `cpu.threads` (XMRig's schema) and nothing else, so
+    // that is the spelling to print: `"threads": 2` at the top of a config is
+    // not read, and a recommendation that does nothing is worse than none.
+    try out.print("\nkeep it:\n  \"cpu\": {{\"threads\": {d}}}\n  or on the command line: -t {d}\n", .{ best.threads, best.threads });
     logger.debug("autotune finished", .{});
 }
 
@@ -1487,7 +1878,9 @@ fn autoReserveHugePages(opts: *const options.Options, logger: *@import("log.zig"
     if (!opts.huge_pages or !opts.auto_hugepages) return;
 
     const algo = firstAlgo(opts);
-    const need_mb = memoryMb(algo, opts.mode, miner_mod.totalMemory());
+    // Reserving pages for a dataset the miner is about to decline would take
+    // RAM away from the machine for nothing: ask the same question it asks.
+    const need_mb = plannedMemoryMb(opts);
     const before = hugepages_mod.read();
 
     switch (hugepages_mod.shouldReserve(need_mb, true, before)) {
@@ -1504,7 +1897,7 @@ fn autoReserveHugePages(opts: *const options.Options, logger: *@import("log.zig"
         // rx/0 mapping), and the miner verifies that figure after the dataset
         // is built. With THP off, the warning is real and worth acting on.
         switch (hugepages_mod.thp()) {
-            .never, .unknown => logger.warn("huge pages: {d} reserved, {d} needed for {d} MB, and transparent huge pages are {s}: RandomX is ~28% slower on 4 KiB pages. Run as root or set vm.nr_hugepages={d}", .{
+            .never, .unknown => logger.warn("huge pages: {d} reserved, {d} needed for {d} MB, and transparent huge pages are {s}: RandomX is ~18% slower on 4 KiB pages. Run as root or set vm.nr_hugepages={d}", .{
                 before.reserved, want, need_mb, hugepages_mod.thp().label(), want,
             }),
             .always, .madvise => logger.info("huge pages: {d} of {d} reserved; transparent huge pages ({s}) will back the {d} MB mapping instead", .{
@@ -1557,10 +1950,19 @@ fn memoryMb(algo: api.Algo, mode: options.Mode, total_ram: u64) u64 {
     return memory_mod.mibFor(sizesFor(algo), mode, total_ram);
 }
 
+/// The MiB the run will actually map, decided the way `Miner.init` decides it:
+/// `usableMemory()` (host RAM and cgroup limit, whichever is smaller), not
+/// `totalMemory()`. Passing the host number made `--check` and the huge-page
+/// reserve plan a 1 GB container for a 2336 MB dataset under `mode auto`, i.e.
+/// it planned for a mapping the miner was about to decline.
+fn plannedMemoryMb(opts: *const options.Options) u64 {
+    return memoryMb(firstAlgo(opts), opts.mode, miner_mod.usableMemory());
+}
+
 /// Reads the kernel's huge page pool and turns it into one sentence a human can
 /// act on. Kept separate so --check and the warning in miner.zig agree.
 fn hugePageStatus(opts: *const options.Options) []const u8 {
-    const needed_mb = memoryMb(firstAlgo(opts), opts.mode, miner_mod.totalMemory());
+    const needed_mb = plannedMemoryMb(opts);
     const pages_needed = (needed_mb + 1) / 2;
 
     var buf: [32]u8 = undefined;
@@ -1585,10 +1987,74 @@ fn hugePageStatus(opts: *const options.Options) []const u8 {
         return if (thp_ok)
             "no pages reserved; transparent huge pages collapse the mapping instead"
         else
-            "no huge pages and THP off -> 4 KiB pages, ~28% slower; see --help";
+            "no huge pages and THP off -> 4 KiB pages, ~18% slower; see --help";
     }
 
     return "fewer pages reserved than this mode needs; see --help";
+}
+
+/// Static buffer for `giganticStatus`, which has to return a slice.
+var gigantic_summary_buf: [224]u8 = undefined;
+
+/// One line for `--check`: does the mapper's first choice exist?
+///
+/// RandomX asks for 1 GiB pages before 2 MiB ones, and the pool for them can
+/// only be created early in boot — `echo 3 > /sys/kernel/mm/hugepages/\
+/// hugepages-1048576kB/nr_hugepages` on a machine that has been up for days
+/// either fails or compacts memory for minutes and then fails. So this is
+/// information, not a warning: on a fresh install it says which of the two the
+/// mapping will use, and how many of them the current mode needs.
+fn giganticStatus(need_mb: u64) []const u8 {
+    const buf = &gigantic_summary_buf;
+    const pages = (need_mb + 1023) / 1024;
+    const have = hugepages_mod.giganticMb();
+
+    if (have == 0) {
+        return std.fmt.bufPrint(buf, "no pool: this mode would need {d} page(s) of 1 GiB, and the mapping uses 2 MiB pages instead (doc/PERFORMANCE.md has the one-line reservation)", .{pages}) catch "no 1 GiB pool";
+    }
+
+    if (have < need_mb) {
+        return std.fmt.bufPrint(buf, "{d} MB reserved in 1 GiB pages, {d} MB needed: short by {d} page(s), so the mapping uses 2 MiB pages", .{ have, need_mb, pages - have / 1024 }) catch "1 GiB pool too small";
+    }
+
+    return std.fmt.bufPrint(buf, "{d} MB reserved in 1 GiB pages: this mode takes {d} of them and RandomX reads its dataset through 1 GiB pages", .{ have, pages }) catch "1 GiB pool present";
+}
+
+/// One line for `--check`: whether the governor is armed, and the number it
+/// would act on right now.
+fn thermalSummary(opts: *const options.Options) []const u8 {
+    const buf = &thermal_summary_buf;
+    buf.* = [_]u8{0} ** thermal_summary_buf.len;
+
+    const target = opts.max_temp orelse return std.fmt.bufPrint(buf, "off (--no-thermal: explicitly disabled)", .{}) catch "off";
+
+    const config = thermal.Config.fromTarget(target);
+    const reading = readTemperature(opts) orelse
+        return std.fmt.bufPrint(buf, "target {d:.0} C, pause at {d:.0} C - but no CPU sensor found: the governor would never act (--thermal-file=PATH overrides the sensor)", .{
+            config.target_c, config.critical_c,
+        }) catch "on, no sensor";
+
+    return std.fmt.bufPrint(buf, "hold {d:.0} C: {s} {d:.1} C now, step down at {d:.0} C, pause at {d:.0} C (--no-thermal turns it off)", .{
+        config.target_c, reading.label(), reading.celsius, config.target_c, config.critical_c,
+    }) catch "on";
+}
+
+var thermal_summary_buf: [320]u8 = undefined;
+
+/// The temperature the governor should act on: the file if one was given
+/// (`--thermal-file`), else the hottest CPU sensor in /sys.
+fn readTemperature(opts: *const options.Options) ?thermal.Reading {
+    if (opts.thermal_file) |path| {
+        const celsius = thermal.readPlainFile(path) orelse return null;
+        var reading = thermal.Reading{ .celsius = celsius };
+        const name = "file";
+        @memcpy(reading.name_buf[0..name.len], name);
+        reading.name_len = name.len;
+
+        return reading;
+    }
+
+    return thermal.readSys("/sys");
 }
 
 /// One line for `--check`: which huge-page mechanism this host has, and what it
@@ -1598,7 +2064,7 @@ fn thpStatus() []const u8 {
     return switch (hugepages_mod.thp()) {
         .always => "always: the kernel collapses anonymous memory into 2 MiB pages without being asked",
         .madvise => "madvise (default): the hint this miner sets is honoured, so no root step is needed",
-        .never => "never: nothing backs the mapping with 2 MiB pages; reserve pages as root or boot with transparent_hugepage=madvise (~28% hashrate)",
+        .never => "never: nothing backs the mapping with 2 MiB pages; reserve pages as root or boot with transparent_hugepage=madvise (~18% hashrate)",
         .unknown => "unknown: this kernel does not report a THP policy; reserve pages as root",
     };
 }
@@ -1831,9 +2297,32 @@ fn lightCheck(algo: api.Algo, hex: []const u8, out: anytype) !bool {
 
 fn requireMemory(needed_mb: u64) !void {
     const memory = report.checkMemory(needed_mb);
-    if (memory.ok) return;
+    // `/proc/meminfo` is the host's, and a container's cgroup limit is not in
+    // it: `docker run --memory=1g` on a 32 GB host passed this check and was
+    // then OOM-killed halfway through building the dataset. Both have to say
+    // yes before the 2 GiB allocation is worth starting.
+    const usable_mb = miner_mod.usableMemory() / (1024 * 1024);
+    if (memory.ok and usable_mb >= needed_mb) return;
 
     var stderr = std.io.getStdErr().writer();
+    if (memory.ok) {
+        var why_buf: [128]u8 = undefined;
+        const why = if (miner_mod.memoryBudget()) |budget|
+            std.fmt.bufPrint(&why_buf, "its cgroup allows {d} MB ({d} MB of it already in use)", .{
+                budget.limit / (1024 * 1024), (budget.limit - budget.available) / (1024 * 1024),
+            }) catch "its cgroup allows less"
+        else
+            "other processes are using it";
+
+        try stderr.print(
+            "zmrig: this machine can give the dataset {d} MB of the {d} MB it needs: {s}\n" ++
+                "       raise the limit, free some memory, or use --mode light\n",
+            .{ usable_mb, needed_mb, why },
+        );
+
+        std.process.exit(2);
+    }
+
     try stderr.print(
         "zmrig: not enough memory for the {d} MB dataset: {d} MB free in huge pages plus {d} MB available\n" ++
             "       stop other miners (or lower vm.nr_hugepages) and try again, or use --mode light\n",
@@ -1895,6 +2384,21 @@ fn benchmark(allocator: std.mem.Allocator, opts: *const options.Options, cap_sec
     miner.shared.bench_limit.store(opts.bench_hashes, .release);
     miner.shared.publish(&bench_job);
 
+    // Benchmarks and autotune are still sustained CPU load. Run the same
+    // thermal policy as normal mining so a long measurement cannot cook a rig
+    // before the service's monitor thread exists.
+    var bench_governor: ?thermal.Governor = null;
+    if (opts.max_temp) |target| {
+        bench_governor = thermal.Governor.init(thermal.Config.fromTarget(target), miner.threadCount());
+        if (readTemperature(opts)) |reading| {
+            logger.info("benchmark thermal: target {d:.0} C, {s} reads {d:.1} C now; pause at {d:.0} C", .{
+                target, reading.label(), reading.celsius, bench_governor.?.config.critical_c,
+            });
+        } else {
+            logger.warn("benchmark thermal: no CPU sensor found; --max-temp cannot act (use --thermal-file=PATH)", .{});
+        }
+    }
+
     const started = std.time.milliTimestamp();
     var last_report = started;
     var last_sample = started;
@@ -1911,6 +2415,31 @@ fn benchmark(allocator: std.mem.Allocator, opts: *const options.Options, cap_sec
         if (now - last_sample >= 1000) {
             last_sample = now;
             miner.stats.add(miner.shared.totalHashes());
+
+            if (bench_governor) |*gov| {
+                const reading = readTemperature(opts);
+                switch (gov.step(now, if (reading) |r| r.celsius else null)) {
+                    .none => {},
+                    .set_threads => |threads| {
+                        miner.shared.setActiveThreads(threads);
+                        logger.warn("benchmark thermal: {d:.1} C -> {d} of {d} threads", .{
+                            reading.?.celsius, threads, miner.threadCount(),
+                        });
+                    },
+                    .pause => {
+                        miner.shared.pause();
+                        miner.shared.setActiveThreads(0);
+                        logger.warn("benchmark thermal: {d:.1} C; pausing until below {d:.0} C", .{
+                            reading.?.celsius, gov.config.resume_c,
+                        });
+                    },
+                    .unpause => {
+                        miner.shared.unpause();
+                        miner.shared.setActiveThreads(gov.threads);
+                        logger.info("benchmark thermal: resumed at {d} thread(s)", .{gov.threads});
+                    },
+                }
+            }
         }
 
         if (now - last_report >= 10_000) {

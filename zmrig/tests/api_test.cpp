@@ -253,6 +253,29 @@ int main()
         }
     }
 
+    /*
+     * The 512-bit scratchpad pass. The engine selects it on Zen 5 only, so on
+     * any other CPU the honest report is "not run" - but where the instructions
+     * exist it has to hash the same bytes as the ordinary path, and it has to do
+     * it with a `fill_state` that is not 64-byte aligned (a stack `uint64_t[8]`
+     * is not, and a vmovdqa64 against one is a crash, not a wrong answer).
+     */
+    {
+        char report[256] = {};
+        const int verdict = xmo_wide_scratchpad_agrees(report, sizeof(report));
+
+        if (verdict == 0) {
+            std::printf("SKIP wide scratchpad pass: this CPU has no AVX-512 + VAES (the engine only uses it on Zen 5)\n");
+        }
+        else if (verdict > 0) {
+            std::printf("PASS wide scratchpad pass: %s\n", report);
+        }
+        else {
+            std::printf("FAIL wide scratchpad pass: %s\n", report);
+            ++failures;
+        }
+    }
+
     /* --- full memory mode equals light mode, and the dataset is 2 GiB ---
      * Needs 2.25 GiB, so it only runs when the machine has reserved huge pages
      * (or plenty of RAM); otherwise we would OOM the box, not test the code. */

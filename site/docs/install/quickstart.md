@@ -1,13 +1,17 @@
 ---
 title: Install in one command
 description: Install ZMRIG with one command and a wallet address. What the installer decides on its own, what it prints, and how to check that it worked.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-en.png
+image: https://molik-labs.github.io/ZMRIG/img/og-en.png
 ---
 
 # Install in one command
 
+Not sure this is the route you want? [Setup from zero](/docs/install/setup)
+compares it with the container and the bootable image in one table, and has the
+five checks that prove the install worked.
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NggKhaiz/ZMRIG/BETA/oneclick.sh \
+curl -fsSL https://raw.githubusercontent.com/MoLik-Labs/ZMRIG/BETA/oneclick.sh \
   | sudo bash -s -- --wallet 4YourMoneroAddress
 ```
 
@@ -28,10 +32,11 @@ newer than the sources.
 
 | Decision | How the installer chooses |
 | --- | --- |
-| Engine | `zmrig` (1 % of Monero time, `--donate-level=0` to remove it). It advertises the whole RandomX family, so a switching pool can still move the rig to whichever coin pays best. `--algo` outside RandomX, or `--engine=xmrig`, selects the C++ engine, which takes nothing. |
-| Profile | `free` (maximum hashrate) everywhere, except a laptop on battery → `watt` (maximum hashes per watt). |
+| Engine | `zmrig` (3 % of Monero time, `--donate-level=0` to remove it). It advertises the whole RandomX family, so a switching pool can still move the rig to whichever coin pays best. `--algo` outside RandomX, or `--engine=xmrig`, selects the C++ engine, which takes nothing. |
+| Profile | `free` (maximum hashrate), whether on mains or battery. `watt` is only selected when explicitly requested. |
 | Threads | Measured after the build: each candidate runs 8 s on the real dataset, the winner is written to the config. |
 | Huge pages | Sized from the dataset. If the kernel grants fewer, it falls back to transparent huge pages and says so. |
+| Thermal safety | Default target 80 °C; the governor backs off threads when hot and pauses at 95 °C. `--no-thermal` is an explicit opt-out. |
 | Governor | `performance` for `free`, the existing powersave governor for `watt`. |
 
 See the same list without touching the machine:
@@ -42,10 +47,10 @@ See the same list without touching the machine:
 
 ```text
 ==> plan
-    engine         zmrig  (RandomX family, 1% dev fee)
+    engine         zmrig  (RandomX family, 3% dev fee)
     pool           gulf.moneroocean.stream:10001
     algo           auto  (RandomX family: rx/0, rx/wow, rx/arq, …)
-    profile        free  (auto: no battery, electricity is treated as free)
+    profile        free  (default: maximum hashrate regardless of battery state)
     mode           auto (fast when RAM allows)
     huge pages     none yet, the installer reserves what the dataset needs
     autotune       8 s per candidate, winner written to config.json
@@ -83,10 +88,13 @@ sudo ./oneclick.sh install --wallet 4YourMoneroAddress --profile free
 sudo ./oneclick.sh install --wallet 4YourMoneroAddress --profile watt
 ```
 
-`free` uses every logical CPU, `--mode fast`, huge pages and `--priority 5`.
-`watt` drops to one thread per physical core (SMT adds 5–15 % hashrate for
-30–40 % more power), does not pin the CPU to its highest clock, and stops by
-itself when a laptop switches to battery.
+`free` is the default and uses every logical CPU, `--mode fast`, huge pages and
+`--priority 5`, independent of battery state. The default thermal governor targets
+80 °C and steps down threads as needed; the hardware's own thermal protection
+remains the last line of defense. `watt` is an explicit opt-in: it
+uses one thread per physical core (SMT adds 5–15 % hashrate for 30–40 % more
+power) and does not pin the CPU to its highest clock. Battery pause is a
+separate opt-in and is off in the installer.
 
 ## Update, remove
 

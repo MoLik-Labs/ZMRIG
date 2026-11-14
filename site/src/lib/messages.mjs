@@ -31,9 +31,9 @@ export const messages = {
     "builder.engineAutoHint":
       "Switching pool → C++ engine. RandomX-only pool → zmrig.",
     "builder.profile": "Power profile",
-    "builder.profileAuto": "Automatic",
-    "builder.profileFree": "Free electricity — maximum hashrate",
-    "builder.profileWatt": "Metered — maximum hashes per watt",
+    "builder.profileAuto": "Automatic (same as max hashrate)",
+    "builder.profileFree": "Maximum hashrate (default)",
+    "builder.profileWatt": "Optional: maximum hashes per watt",
     "builder.network": "Network",
     "builder.tls": "TLS to the pool",
     "builder.cloudflare": "Only 443 out — WebSocket over TLS",
@@ -71,8 +71,12 @@ export const messages = {
       "Dial address must be host:port, for example 203.0.113.10:3333.",
     "builder.blocked.proxy-missing": "Enter the proxy URL.",
     "builder.wallet.empty": "Not entered yet.",
-    "builder.wallet.valid": "Valid Monero address (95 characters).",
-    "builder.wallet.integrated": "Integrated address (106 characters).",
+    "builder.wallet.valid": "Valid Monero address: checksum verified (95 characters).",
+    "builder.wallet.integrated": "Integrated address: checksum verified (106 characters).",
+    "builder.wallet.checksum":
+      "One character is wrong: the checksum does not match. Copy the address again — this is the typo that costs a week of hashing.",
+    "builder.wallet.network":
+      "This is a valid address on another network (stagenet or testnet). A mainnet pool cannot pay it.",
     "builder.wallet.plausible":
       "Base58 address, {n} characters. The pool checks the checksum — this page does not.",
     "builder.wallet.prefix":
@@ -100,7 +104,7 @@ export const messages = {
     "builder.note.profileWatt":
       "Metered profile: keeps the powersave governor and fewer SMT threads — a few percent less hashrate, more hashes per watt.",
     "builder.note.profileFree":
-      "Free profile: uses every CPU, for machines whose power is free.",
+      "Maximum-hashrate profile: uses every logical CPU, on mains or battery. The miner still targets 80 C by default and backs off if the CPU overheats.",
     "builder.note.algoPinned":
       "Pinned with --algo {algo}: {coin} is only mined with that algorithm, so both engines give the same shares.",
     "builder.warn.engineForced":
@@ -241,9 +245,9 @@ export const messages = {
     "builder.engineAutoHint":
       "Pool chuyển thuật toán → engine C++. Pool chỉ RandomX → zmrig.",
     "builder.profile": "Chế độ điện",
-    "builder.profileAuto": "Tự nhận diện",
-    "builder.profileFree": "Điện free — hashrate tối đa",
-    "builder.profileWatt": "Trả tiền điện — tối đa hash mỗi watt",
+    "builder.profileAuto": "Tự động (giống tối đa hashrate)",
+    "builder.profileFree": "Hashrate tối đa (mặc định)",
+    "builder.profileWatt": "Tùy chọn: tối đa hash trên mỗi watt",
     "builder.network": "Mạng",
     "builder.tls": "TLS tới pool",
     "builder.cloudflare": "Chỉ ra ngoài được 443 — WebSocket qua TLS",
@@ -281,8 +285,12 @@ export const messages = {
       "Địa chỉ dial phải là host:port, ví dụ 203.0.113.10:3333.",
     "builder.blocked.proxy-missing": "Nhập địa chỉ proxy.",
     "builder.wallet.empty": "Chưa nhập gì.",
-    "builder.wallet.valid": "Địa chỉ Monero hợp lệ (95 ký tự).",
-    "builder.wallet.integrated": "Địa chỉ tích hợp (106 ký tự).",
+    "builder.wallet.valid": "Địa chỉ Monero hợp lệ: đã xác minh checksum (95 ký tự).",
+    "builder.wallet.integrated": "Địa chỉ tích hợp: đã xác minh checksum (106 ký tự).",
+    "builder.wallet.checksum":
+      "Sai một ký tự: checksum không khớp. Sao chép lại địa chỉ — đây đúng là kiểu gõ nhầm làm mất một tuần đào.",
+    "builder.wallet.network":
+      "Đây là địa chỉ hợp lệ nhưng ở mạng khác (stagenet hoặc testnet). Pool mainnet không trả được cho nó.",
     "builder.wallet.plausible":
       "Địa chỉ base58, {n} ký tự. Pool kiểm tra checksum — trang này thì không.",
     "builder.wallet.prefix":
@@ -309,7 +317,7 @@ export const messages = {
     "builder.note.profileWatt":
       "Chế độ trả điện: giữ governor tiết kiệm điện và bớt thread SMT — hashrate thấp hơn vài %, H/W cao hơn.",
     "builder.note.profileFree":
-      "Chế độ free: dùng hết CPU, chỉ hợp máy có điện free.",
+      "Chế độ hashrate tối đa: dùng mọi CPU logic, dù cắm điện hay dùng pin. Miner vẫn đặt mục tiêu 80 °C và giảm thread nếu CPU quá nóng.",
     "builder.note.algoPinned":
       "Ghim bằng --algo {algo}: {coin} chỉ đào bằng thuật toán đó, nên cả hai engine cho share như nhau.",
     "builder.warn.engineForced":

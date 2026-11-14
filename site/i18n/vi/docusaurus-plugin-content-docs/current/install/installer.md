@@ -1,7 +1,7 @@
 ---
 title: Tham chiếu installer
 description: Mọi lệnh con và cờ của oneclick.sh, các file nó cài, unit systemd nó ghi, cách nó chuyển từ bản cài cũ và cách tự gỡ.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
+image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 ---
 
 # Tham chiếu installer

@@ -10,6 +10,13 @@ const crypto = require('node:crypto');
 
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const MAX_FRAME = 1024 * 1024; // stratum lines are small; refuse the rest
+// ...and so is a *message*. A frame cap alone bounds nothing: RFC 6455 lets a
+// client open a 1 MB frame with FIN clear and then send continuation frames
+// forever, and this connection would keep every one of them. That is 1 MB per
+// frame of unbounded growth from a single socket - the cheapest way to take a
+// pool down. A stratum login is under a kilobyte and the largest real message
+// (a 34-algorithm job list from a proxy) is a few kilobytes.
+const MAX_MESSAGE = 256 * 1024;
 
 function acceptKey(key) {
   return crypto.createHash('sha1').update(key + GUID).digest('base64');
@@ -61,6 +68,7 @@ class WebSocketConnection {
     this.log = log;
     this.inbox = Buffer.alloc(0); // frame accumulator, private
     this.fragments = [];
+    this.fragmentBytes = 0;
     this.listeners = { message: [], close: [] };
     this.closed = false;
 
@@ -130,19 +138,43 @@ class WebSocketConnection {
 
       switch (opcode) {
         case 0x0: // continuation
+          this.fragmentBytes += payload.length;
+          if (this.fragmentBytes > MAX_MESSAGE) {
+            this.close();
+            return;
+          }
           this.fragments.push(payload);
           if (fin) {
             const text = Buffer.concat(this.fragments).toString('utf8');
             this.fragments = [];
+            this.fragmentBytes = 0;
             this.emit('message', text);
           }
           break;
         case 0x1: // text
         case 0x2: // binary (treat as text: stratum is JSON)
           if (fin) {
+            if (payload.length > MAX_MESSAGE) {
+              this.close();
+              return;
+            }
             this.emit('message', payload.toString('utf8'));
           } else {
+            // A new data frame while a message is still open is a protocol
+            // error, not a reason to quietly drop the first half: half a login
+            // parsed as a message is worse than a closed connection.
+            if (this.fragments.length > 0) {
+              this.close();
+              return;
+            }
+            // The first fragment counts too: a single 1 MB frame with FIN clear
+            // is already four times the largest message this protocol has.
+            if (payload.length > MAX_MESSAGE) {
+              this.close();
+              return;
+            }
             this.fragments = [payload];
+            this.fragmentBytes = payload.length;
           }
           break;
         case 0x8: // close

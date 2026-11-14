@@ -1,7 +1,7 @@
 # zmrig-pool
 
 A Monero (RandomX) mining pool in about 5 000 lines of dependency-free
-JavaScript, part of [ZMRIG](https://github.com/NggKhaiz/ZMRIG) by
+JavaScript, part of [ZMRIG](https://github.com/MoLik-Labs/ZMRIG) by
 [@nggkhaiz](https://github.com/NggKhaiz).
 
 It speaks classic stratum over TCP and stratum over WebSocket, which
@@ -28,7 +28,7 @@ miner ──stratum/tcp:3333──────────────┐
 | Pool fee             | **1.0 %**, taken from each block reward, rounded *down* |
 | Hidden fees          | none                                                   |
 | Where it goes        | published at `/api/config` and on the status page       |
-| Miner-side dev fee   | 0 % (`zmrig` has none, and the pool is GPL-3.0)         |
+| Miner-side dev fee   | 3 % of Monero time on `zmrig` (`--donate-level=0` turns it off) |
 | Payout threshold     | 0.01 XMR, paid in the network fee                       |
 
 The fee is deducted from the block reward before the PPLNS split, never from a
@@ -95,6 +95,10 @@ is the annotated starting point.
 | `target_share_seconds` | `15` | Vardiff target. |
 | `min_difficulty` / `max_difficulty` | `100` / `4e6` | Vardiff clamp. |
 | `verify_shares` | `true` | Re-hash every share with `zmrig --verify-share`. |
+| `verifier_mode` | `light` | `light` (256 MB cache, rebuild per share) or `fast` (2 GiB dataset, ~9x faster per share, 2336 MB of RAM per verifier). |
+| `verifier_concurrency` | `2` | Long-lived verifier processes. Each `fast` one is 2336 MB. |
+| `verifier_threads` | `1` | Hashing threads *inside* each process (`-t`). They share one dataset, so 2 threads cost 1 dataset, where 2 processes cost 2. |
+| `verifier_pipeline` | `0` (= `verifier_threads`) | Shares in flight per process. A thread needs a share waiting to have work. |
 | `pplns_window` | `3600` | Seconds of shares that split a block. |
 | `payout_min` | `0.010000000000` | Minimum balance before a payout. |
 | `payout_mode` | `ledger` | `ledger` records balances, `wallet` really pays. |
@@ -104,14 +108,19 @@ is the annotated starting point.
 
 Environment names are the upper-case equivalents: `POOL_FEE_PERCENT`,
 `OPERATOR_ADDRESS`, `PORT`, `HTTP_PORT`, `DAEMON`, `POOL_MODE`,
-`VERIFY_SHARES`, `PPLNS_WINDOW`, `PAYOUT_MODE`, `WALLET_RPC`,
-`INITIAL_DIFFICULTY`, `VARDIFF`, `STATE_FILE`, `AUDIT_FILE`, `LOG_LEVEL`, and
-the rest of the table above.
+`VERIFY_SHARES`, `VERIFIER_MODE`, `VERIFIER_CONCURRENCY`, `VERIFIER_THREADS`,
+`VERIFIER_PIPELINE`, `PPLNS_WINDOW`,
+`PAYOUT_MODE`, `WALLET_RPC`, `INITIAL_DIFFICULTY`, `VARDIFF`, `STATE_FILE`,
+`AUDIT_FILE`, `LOG_LEVEL`, and the rest of the table above.
 
 `--check` prints the effective configuration and exits non-zero on anything that
-would let the pool take a fee it cannot justify (fee out of range, unknown mode,
-a PPLNS window so short that payouts are a lottery, a non-Monero operator
-address in `wallet` mode).
+would let the pool take a fee it cannot justify: a fee out of range, an unknown
+mode, a PPLNS window so short that payouts are a lottery, or an operator address
+that no wallet can spend. The last one is checked by decoding the address -
+base58, network byte, Keccak-256 checksum - not by matching its shape, because a
+single wrong character in a 95-character string still looks like an address and
+would send every fee payment to a key nobody holds. The fee address never logs
+in, so nothing else in the pool would ever have noticed.
 
 ## Shares, PPLNS and the audit log
 
@@ -131,6 +140,121 @@ address in `wallet` mode).
   ```
 
 `GET /api/audit?limit=20` returns the same records, newest first.
+
+### Verifying shares
+
+`zmrig --verify-share` is a line protocol: one JSON object in, one out, and
+**its log goes to stderr** — `stdout` belongs to the protocol. The pool keeps one
+verifier per core alive and re-uses it, so the 256 MB RandomX cache is built
+once per round rather than once per share. `pool/tests/bench-verify.mjs`
+measures the three numbers that matter, on whatever machine you run it on; on a
+2 vCPU test box with two verifiers and 200 shares per round: the first share of
+a round costs **0.58 s** (the cache build), every share after that takes about
+**22 ms** of wall time, and the steady state is **46 shares per second** for one
+verifier. A rig at 1 kH/s on difficulty 300 submits about 3.3 shares a second, so
+one verifier keeps up with a dozen of them.
+
+### Using both cores without buying the RAM twice
+
+There are two ways to verify more than one share at a time, and they are not
+equally expensive:
+
+| | Processes | Threads | Warm, light | Warm, fast | RAM (`fast`) |
+| --- | --- | --- | --- | --- | --- |
+| `VERIFIER_CONCURRENCY=1` | 1 | 1 | 46 shares/s | 349 shares/s | 2336 MB |
+| `VERIFIER_CONCURRENCY=2` | 2 | 1 | 74 shares/s | — (4.6 GiB) | 4672 MB |
+| `VERIFIER_CONCURRENCY=1` `VERIFIER_THREADS=2` | 1 | 2 | **87 shares/s** | **626 shares/s** | **2336 MB** |
+
+Measured warm, one seed, through `pool/src/verifier.js` on the 2 vCPU test host.
+Threads share the dataset — that is how the miner itself runs, one VM per thread
+over one cache — so two threads in one process are both faster than two
+processes and half the memory. Set `VERIFIER_THREADS` to the number of cores you
+want the verifier to have, and leave `VERIFIER_CONCURRENCY` at 1 unless you have
+the RAM for another dataset: `fast` with two processes needs 4.6 GiB.
+
+A thread only has work if a share is waiting, so each process keeps
+`verifier_pipeline` shares in flight (the same number as its threads by
+default). The replies are matched first in, first out, because that is the order
+`zmrig --verify-share` answers in. If a process misses `verifier_timeout`, it is
+killed and every share in it fails: with several shares in flight, a late reply
+would otherwise be handed to the next share, which is worse than a rejected
+share.
+
+### When one thread is not enough: `VERIFIER_MODE=fast`
+
+Light mode rebuilds the dataset for every hash — that *is* the 22 ms. `fast`
+mode builds the 2 GiB dataset once at startup and reads it instead:
+
+| | `light` (default) | `fast` |
+| --- | --- | --- |
+| Setup | 0.6 s | 21 s at 2 threads, 42 s at 1 |
+| Per share, warm | 22 ms | **2.9 ms** |
+| Throughput, one verifier (1 thread) | 46 shares/s | **349 shares/s** |
+| Throughput, 1 process × 2 threads | 87 shares/s | **626 shares/s** |
+| RAM, per verifier | 256 MB | **2336 MB** |
+
+Same hashes out of both — the mode changes how RandomX is initialised, not what
+it computes. The cost is the RAM, and it is per process: `VERIFIER_MODE=fast`
+with the default `VERIFIER_CONCURRENCY=2` is 4.6 GiB, which is more than a 4 GB
+VPS has. The pool reads `/proc/meminfo` at startup (and `--check` on demand) and
+says so:
+
+```text
+warn  VERIFIER_MODE=fast needs 9344 MB for 4 verifier(s) and 3641 MB can be
+      allocated here: set VERIFIER_CONCURRENCY=1 to fit
+```
+
+Free huge pages count towards that room, because the verifier asks for them
+first; a host that already reserved 2.3 GiB with `zmrig-os hugepages` can run one
+fast verifier without any ordinary memory to spare. A verifier that cannot get
+the dataset falls back to the light cache by itself and logs why — a pool stays
+up, it just verifies slower. On a 1 GB VPS, stay on `light`.
+
+Shares queued behind a busy verifier are dispatched as each one frees, not when
+the next share happens to arrive; a share that cannot be verified within
+`verifier_timeout` is dropped with `verification unavailable` rather than accepted
+on trust.
+
+### What the WebSocket transport refuses
+
+The pool's `/stratum` endpoint is the one that faces the internet through a
+CDN, so its framing is bounded on purpose:
+
+* a frame over 1 MiB closes the connection, before anything is allocated for it;
+* a *message* over 256 KiB closes it too, and that is the bound that matters.
+  RFC 6455 lets a client open a 1 MiB frame with FIN clear and then send
+  continuation frames for ever; a per-frame limit alone leaves the assembler
+  growing by a megabyte per frame from a single socket;
+* a second data frame arriving while a message is still open is a protocol
+  error. Half a login parsed as a message is worse than a closed connection.
+
+Stratum messages are under a kilobyte, plus a few for a job list; the caps are
+two orders of magnitude above anything a miner sends.
+
+### Forty rigs, one wallet
+
+A miner logs in as `wallet.rig` or `wallet/rig`, and the wallet is the account:
+the rig is a label on it, never a second bucket. Every machine pointed at the same
+address shares one PPLNS weight and one balance, and a block pays that address
+once. Two buckets for one wallet would be paid twice out of the same window, and
+neither would reach the payout minimum on its own.
+
+```bash
+curl -s localhost:8080/api/worker/4... | jq '{pending, hashrate, rigCount, rigs}'
+```
+
+```json
+{"pending":"125000000000","hashrate":4821.5,"rigCount":3,
+ "rigs":[{"name":"rack-1","shares":41,"hashrate":3120.2,"lastSeen":1762300000},
+         {"name":"rack-2","shares":18,"hashrate":1201.3,"lastSeen":1762300000},
+         {"name":"rack-3","shares":0,"hashrate":0,"lastSeen":1762200000}]}
+```
+
+The wallet's rate is the sum of its rigs, and each rig's rate comes from the same
+share records the payout does, so the two numbers cannot disagree. A rig that
+went quiet is still listed with a zero rate: that is the machine to look at. The
+per-wallet rig map is capped (64 names by default, least recently seen evicted
+first), because a rig name is free text from a public connection.
 
 ## Payouts
 
@@ -222,7 +346,7 @@ pool's HTTP API is ordinary JSON, so a static page on Vercel can render it.
 | `GET /api/stats` | Pool counters, ledger totals, published config. |
 | `GET /api/config` | Fee, operator address, PPLNS window, payout minimum. |
 | `GET /api/audit?limit=20` | Block records: reward, fee, per-miner split, dust. |
-| `GET /api/worker/:address` | Balance, shares and last-seen for one address. |
+| `GET /api/worker/:address` | Balance, hashrate and every rig behind one wallet (`wallet.rig` also works). |
 | `GET /metrics` | Prometheus text format. |
 | `WS /stratum` | Stratum over WebSocket (`login`, `submit`, `keepalived`, `getjob`). |
 
@@ -259,8 +383,11 @@ rejected and nothing is credited. It skips itself if `zmrig` is not built.
 * **The audit log is append-only.** Rotate it with `logrotate`, never rewrite it;
   miners check their own numbers against it.
 * **A pool with zero miners makes zero money.** The fee is only as good as the
-  hashrate behind it; the miner side of this repository (`zmrig`) is where the
-  users come from, which is why it has no developer fee of its own.
+  hashrate behind it, and the miner side of this repository (`zmrig`) is where
+  the users come from. That miner takes 3 % of Monero mining time for the
+  developer — stated in its banner, in `--check`, and switchable off with
+  `--donate-level=0` — and none of that reaches the pool: the pool fee below is
+  the operator's, from the block, and the two are unrelated.
 
 ## License
 

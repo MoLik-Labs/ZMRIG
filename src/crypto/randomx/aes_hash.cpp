@@ -122,10 +122,10 @@ void hashAes1Rx4(const void *input, size_t inputSize, void *hash)
 	state3 = aesdec<softAes>(state3, xkey1);
 
 	//output hash
-	rx_store_vec_i128((rx_vec_i128*)hash + 0, state0);
-	rx_store_vec_i128((rx_vec_i128*)hash + 1, state1);
-	rx_store_vec_i128((rx_vec_i128*)hash + 2, state2);
-	rx_store_vec_i128((rx_vec_i128*)hash + 3, state3);
+	rx_storeu_vec_i128((rx_vec_i128*)hash + 0, state0);
+	rx_storeu_vec_i128((rx_vec_i128*)hash + 1, state1);
+	rx_storeu_vec_i128((rx_vec_i128*)hash + 2, state2);
+	rx_storeu_vec_i128((rx_vec_i128*)hash + 3, state3);
 }
 
 template void hashAes1Rx4<false>(const void *input, size_t inputSize, void *hash);
@@ -323,10 +323,10 @@ void hashAndFillAes1Rx4(void *scratchpad, size_t scratchpadSize, void *hash, voi
 	const rx_vec_i128 key2 = rx_set_int_vec_i128(AES_GEN_1R_KEY2);
 	const rx_vec_i128 key3 = rx_set_int_vec_i128(AES_GEN_1R_KEY3);
 
-	rx_vec_i128 fill_state0 = rx_load_vec_i128((rx_vec_i128*)fill_state + 0);
-	rx_vec_i128 fill_state1 = rx_load_vec_i128((rx_vec_i128*)fill_state + 1);
-	rx_vec_i128 fill_state2 = rx_load_vec_i128((rx_vec_i128*)fill_state + 2);
-	rx_vec_i128 fill_state3 = rx_load_vec_i128((rx_vec_i128*)fill_state + 3);
+	rx_vec_i128 fill_state0 = rx_loadu_vec_i128((rx_vec_i128*)fill_state + 0);
+	rx_vec_i128 fill_state1 = rx_loadu_vec_i128((rx_vec_i128*)fill_state + 1);
+	rx_vec_i128 fill_state2 = rx_loadu_vec_i128((rx_vec_i128*)fill_state + 2);
+	rx_vec_i128 fill_state3 = rx_loadu_vec_i128((rx_vec_i128*)fill_state + 3);
 
 	constexpr int PREFETCH_DISTANCE = 7168;
 	const char* prefetchPtr = ((const char*)scratchpad) + PREFETCH_DISTANCE;
@@ -420,10 +420,10 @@ void hashAndFillAes1Rx4(void *scratchpad, size_t scratchpadSize, void *hash, voi
 		scratchpadEnd += PREFETCH_DISTANCE;
 	}
 
-	rx_store_vec_i128((rx_vec_i128*)fill_state + 0, fill_state0);
-	rx_store_vec_i128((rx_vec_i128*)fill_state + 1, fill_state1);
-	rx_store_vec_i128((rx_vec_i128*)fill_state + 2, fill_state2);
-	rx_store_vec_i128((rx_vec_i128*)fill_state + 3, fill_state3);
+	rx_storeu_vec_i128((rx_vec_i128*)fill_state + 0, fill_state0);
+	rx_storeu_vec_i128((rx_vec_i128*)fill_state + 1, fill_state1);
+	rx_storeu_vec_i128((rx_vec_i128*)fill_state + 2, fill_state2);
+	rx_storeu_vec_i128((rx_vec_i128*)fill_state + 3, fill_state3);
 
 	//two extra rounds to achieve full diffusion
 	rx_vec_i128 xkey0 = rx_set_int_vec_i128(AES_HASH_1R_XKEY0);
@@ -440,10 +440,10 @@ void hashAndFillAes1Rx4(void *scratchpad, size_t scratchpadSize, void *hash, voi
 	hash_state3 = aesdec<softAes>(hash_state3, xkey1);
 
 	//output hash
-	rx_store_vec_i128((rx_vec_i128*)hash + 0, hash_state0);
-	rx_store_vec_i128((rx_vec_i128*)hash + 1, hash_state1);
-	rx_store_vec_i128((rx_vec_i128*)hash + 2, hash_state2);
-	rx_store_vec_i128((rx_vec_i128*)hash + 3, hash_state3);
+	rx_storeu_vec_i128((rx_vec_i128*)hash + 0, hash_state0);
+	rx_storeu_vec_i128((rx_vec_i128*)hash + 1, hash_state1);
+	rx_storeu_vec_i128((rx_vec_i128*)hash + 2, hash_state2);
+	rx_storeu_vec_i128((rx_vec_i128*)hash + 3, hash_state3);
 }
 
 template void hashAndFillAes1Rx4<0,2>(void* scratchpad, size_t scratchpadSize, void* hash, void* fill_state);
@@ -506,4 +506,12 @@ void SelectSoftAESImpl(size_t threadsCount)
 		}
 	}
 	softAESImpl = impl[fast_idx];
+}
+
+/* See aes_hash.hpp: the ordinary implementation, by name, for the conformance
+ * test that compares it with the 512-bit one. */
+
+void hashAndFillAes1Rx4_x86(void *scratchpad, size_t scratchpadSize, void *hash, void* fill_state)
+{
+	hashAndFillAes1Rx4<0, 2>(scratchpad, scratchpadSize, hash, fill_state);
 }

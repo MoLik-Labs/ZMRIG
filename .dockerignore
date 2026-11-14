@@ -1,0 +1,57 @@
+# What the image builds do not need.
+#
+# Both Dockerfiles copy four things - src/, zmrig/, lib/, pool/ - and build
+# context is uploaded before the first RUN, so everything else is paid for on
+# every build. The .git directory alone is bigger than the sources.
+#
+# This is a deny list, not an allow list: a new directory that a build turns out
+# to need is a build failure with an obvious message ("COPY failed: no source
+# files"), while an allow list would silently ship a stale copy of something a
+# later commit added.
+.git
+.github
+.vscode
+.idea
+
+# Local build output
+build
+zmrig/out
+.zig-cache
+zig-out
+zig-cache
+
+# Node dependencies and build products (the images run plain Node with no
+# install step; the docs site is not built here)
+node_modules
+site/node_modules
+site/build
+site/.docusaurus
+site/.cache
+host/node_modules
+fleet/node_modules
+serve/node_modules
+
+# Generated and static web assets: the site is baked into web/ by
+# scripts/publish-site.sh, and neither image serves it
+web
+docs
+docs.html
+assets
+img
+search-index.json
+sitemap.xml
+404.html
+index.html
+wizard.html
+search.html
+vi
+
+# Sources of documentation screenshots and test data
+data
+res
+test
+var
+
+# Pool runtime state: money data, never in an image
+pool/data
+*.log

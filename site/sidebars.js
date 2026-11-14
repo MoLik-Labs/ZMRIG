@@ -17,17 +17,19 @@ const sidebars = {
       collapsible: true,
       collapsed: false,
       items: [
+        "install/setup",
         "install/quickstart",
         "install/builder",
         "install/installer",
         "install/engines",
+        "install/docker",
       ],
     },
     {
       type: "category",
       label: "Appliance",
       collapsible: true,
-      items: ["appliance/iso"],
+      items: ["appliance/iso", "appliance/web"],
     },
     {
       type: "category",
@@ -61,13 +63,13 @@ const sidebars = {
       type: "category",
       label: "A whole fleet",
       collapsible: true,
-      items: ["fleet/proxy", "fleet/pool"],
+      items: ["fleet/telegram", "fleet/dashboard", "fleet/proxy", "fleet/pool"],
     },
     {
       type: "category",
       label: "Reference",
       collapsible: true,
-      items: ["reference/benchmarks", "reference/fee"],
+      items: ["reference/benchmarks", "reference/tool", "reference/fee"],
     },
     {
       type: "category",

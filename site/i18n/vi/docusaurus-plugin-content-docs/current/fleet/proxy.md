@@ -1,7 +1,7 @@
 ---
 title: Proxy cho farm
 description: Một kết nối pool cho nhiều rig. Extranonce riêng từng rig, độ khó riêng, một login cho cả farm, và tunnel cho rig ở toà nhà khác.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
+image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 ---
 
 # Proxy cho farm

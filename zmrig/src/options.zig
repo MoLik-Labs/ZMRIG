@@ -103,6 +103,14 @@ const Pending = struct {
     }
 };
 
+/// The workers the miner can hold. It is the width of the arrays the mining
+/// core allocates per thread, and `-t` has to be policed against it *here*:
+/// the check used to live only in the mining core, so `--check` blessed
+/// `-t 0` and the run then refused to start - and `-t 99999` was turned into a
+/// "202398 MB dataset does not fit" message about a thread count that could
+/// never have existed.
+pub const max_threads: usize = 128;
+
 pub const Mode = enum { auto, fast, light };
 
 /// Which options the command line actually set. The config file is read first
@@ -110,6 +118,7 @@ pub const Mode = enum { auto, fast, light };
 /// not overwrite the config with its default value (that is how a `mode` of
 /// "light" in config.json was silently replaced by "auto").
 pub const Seen = struct {
+    algo: bool = false,
     mode: bool = false,
     huge_pages: bool = false,
     huge_pages_jit: bool = false,
@@ -121,6 +130,7 @@ pub const Seen = struct {
     affinity_mask: bool = false,
     user_agent: bool = false,
     init_threads: bool = false,
+    threads: bool = false,
     priority: bool = false,
     print_time: bool = false,
     retries: bool = false,
@@ -130,6 +140,7 @@ pub const Seen = struct {
     keepalive_interval: bool = false,
     scratchpad_prefetch: bool = false,
     optimized_init: bool = false,
+    dataset_cache: bool = false,
     msr: bool = false,
     msr_restore: bool = false,
     colors: bool = false,
@@ -141,6 +152,14 @@ pub const Seen = struct {
     report_interval: bool = false,
     report_id: bool = false,
     power: bool = false,
+    max_temp: bool = false,
+    thermal_file: bool = false,
+    donate_percent: bool = false,
+    autotune: bool = false,
+    health_warmup: bool = false,
+    health_restart_seconds: bool = false,
+    http_host: bool = false,
+    api_port: bool = false,
 };
 
 pub const ProfileSetting = enum {
@@ -164,6 +183,12 @@ pub const ProfileSetting = enum {
         };
     }
 };
+
+/// What to do about the RandomX MSR preset: prefetchers off is worth 5-15% on
+/// Zen and Intel bare metal, and exactly nothing in a VM that does not pass the
+/// registers through. `auto` is the default, so the win is not left on the table
+/// by somebody who did not read the help; `--no-msr` is how you stop it.
+pub const MsrMode = enum { auto, on, off };
 
 pub const Options = struct {
     pools: std.ArrayListUnmanaged(Pool) = .{},
@@ -216,21 +241,35 @@ pub const Options = struct {
     /// first share). 180 s is generous for a laptop; a bare-metal server is
     /// hashing in 20.
     health_warmup_seconds: u32 = 180,
-    /// `--profile=free|watt|auto`: what the machine is for. `free` maximises
-    /// hashrate (electricity is not the user's problem: cafe, school lab,
-    /// flat-rate VPS), `watt` maximises hashrate per watt (physical cores only,
-    /// stops on battery). `auto` resolves to `watt` on a laptop running on
-    /// battery and to `free` everywhere else.
-    profile: ProfileSetting = .auto,
+    /// `free` is the default: maximum hashrate, every logical CPU, independent
+    /// of battery state or electricity price. `watt` is the explicit lower-
+    /// power option. `auto` is an alias for `free` and never checks battery state.
+    profile: ProfileSetting = .free,
+    /// `--max-temp=°C`: keep the hottest CPU sensor at or below this. The
+    /// default 80 C target caps sustained heat; `--no-thermal` is an explicit
+    /// opt-out for machines with external thermal management.
+    max_temp: ?f32 = 80,
+    /// `--thermal-file=PATH`: take the temperature from this file instead of
+    /// sysfs. For rigs whose sensor is not in /sys (a BMC, a USB thermometer
+    /// read by udev) and for the test suite, which starts the real binary and
+    /// changes a real number.
+    thermal_file: ?[]const u8 = null,
     /// `--autotune[=SECONDS]`: measure the thread count on this machine, print
     /// the winner and the config line to keep. Never trusts the L3 heuristic.
     autotune: bool = false,
     autotune_seconds: u32 = 8,
     /// Use the AVX2 dataset initialiser (faster seeding, identical hashes).
     optimized_init: bool = true,
-    /// Apply the RandomX MSR preset (prefetchers off). Needs root; off by
-    /// default because it writes to hardware registers.
-    msr: bool = false,
+    /// MB of dataset memory to keep mapped after an algorithm switch, so a
+    /// pool that moves between RandomX forks does not pay a 20 s rebuild every
+    /// time it moves back. `null` is the default: as much as the kernel can
+    /// hand out for the next engine, decided at the switch. 0 disables it.
+    dataset_cache_mb: ?u64 = null,
+    /// Apply the RandomX MSR preset (prefetchers off). `auto`, the default,
+    /// does it when the machine can take it: root, bare metal, and an MSR
+    /// device the kernel answers on. Anything else is a logged no-op, because
+    /// writing nobody's registers is the only safe thing to do in a container.
+    msr: MsrMode = .auto,
     /// Put the old MSR values back on exit.
     msr_restore: bool = true,
     /// `--donate-level=N`: percent of Monero mining time spent on the
@@ -240,10 +279,21 @@ pub const Options = struct {
     api_port: u16 = 0,
     api_token: ?[]const u8 = null,
     http_host: []const u8 = "127.0.0.1",
+    /// `http_host` may point into the argv buffer (no ownership) or into this
+    /// allocation (config JSON strings are freed when the parser returns).
+    http_host_owned: ?[]const u8 = null,
     background: bool = false,
     config_path: ?[]const u8 = null,
     self_test: bool = false,
     self_test_light: bool = false,
+    /// `--check-wallet ADDR`: decode the address, verify its checksum and say
+    /// what it is. Exits non-zero when a pool could not pay it.
+    check_wallet: ?[]const u8 = null,
+    /// `--allow-bad-wallet`: start even though the address fails its checksum.
+    /// For the rare rig that logs into a pool with something that is address
+    /// shaped but is not a Monero address; without it, a bad checksum under
+    /// rx/0 is a refusal rather than a rig that hashes for nobody.
+    allow_bad_wallet: bool = false,
     check: bool = false,
     benchmark: bool = false,
     bench_hashes: u64 = 1_000_000,
@@ -277,6 +327,7 @@ pub const Options = struct {
         if (self.report_file) |v| allocator.free(v);
         if (self.report_id) |v| allocator.free(v);
         if (self.api_token) |v| allocator.free(v);
+        if (self.http_host_owned) |v| allocator.free(v);
         if (self.config_path) |v| allocator.free(v);
         if (self.ws_path) |v| allocator.free(v);
         if (self.ws_origin) |v| allocator.free(v);
@@ -284,11 +335,20 @@ pub const Options = struct {
         if (self.connect_to) |v| allocator.free(v);
         if (self.tls_ca) |v| allocator.free(v);
         if (self.proxy_url) |v| allocator.free(v);
+        if (self.thermal_file) |v| allocator.free(v);
     }
 
-    /// Resolves the algorithm for a pool: explicit flag > pool flag > job value.
+    /// Resolves a pinned algorithm: explicit global flag > per-pool pin > job.
+    ///
+    /// A global `--algo=auto` is also an explicit override: it clears a
+    /// per-pool pin and makes `loginAlgos` announce the full supported family.
+    /// `null` here therefore means either auto or "pool decides"; `loginAlgos`
+    /// distinguishes them from `algo_all` / `pool.algo_all`.
     pub fn poolAlgo(self: *const Options, pool: *const Pool) ?api.Algo {
-        return pool.algo orelse self.algo;
+        if (self.algo) |algo| return algo;
+        if (self.algo_all) return null;
+
+        return pool.algo;
     }
 
     /// What to announce in the login request, in priority order.
@@ -326,6 +386,23 @@ pub const ParseError = error{
     NoWallet,
     OutOfMemory,
     InvalidConfig,
+    /// `-t 0`, `-t 99999`: a count no run can use.
+    InvalidThreads,
+    /// `--scratchpad-prefetch` is 0..3. Anything else used to be accepted and
+    /// silently hashed with mode 1, which is a tuning flag that does nothing.
+    InvalidPrefetch,
+    /// `--priority` outside -20..19 (the range `setpriority` accepts) and
+    /// outside the XMRig 1..5 scale, where the kernel ignored it silently.
+    InvalidPriority,
+    /// A pool written as `host:0`.
+    InvalidPoolPort,
+    /// `--tls-ca` pointed at a file that cannot be read: the handshake cannot
+    /// succeed, so the run is refused here rather than at the first connect.
+    UnreadableTlsCa,
+    /// A path with a NUL in it. JSON can carry one (`"\u0000"`), and a POSIX
+    /// path cannot: `createFile` on one is `unreachable` in Zig's std, which in
+    /// a ReleaseFast build is undefined behaviour, not a message.
+    InvalidPath,
     /// The config file exists but cannot be read (usually permissions).
     ConfigUnreadable,
     /// The config file was read but is not a JSON object.
@@ -340,6 +417,10 @@ pub const usage =
     \\  -o, --url=URL            pool URL. Schemes: tcp (default), tls, ws, wss -
   \\                           e.g. wss://pool.example.com/monero
     \\  -u, --user=USER          wallet address (login)
+\\      --check-wallet=ADDR  verify a Monero address (checksum, network) and exit
+\\      --allow-bad-wallet   start anyway if the address fails its checksum
+\\                           (rx/0 refuses to start on a bad checksum: the rig
+\\                           would mine and never be paid)
     \\  -p, --pass=PASS          password / worker name (default: x)
     \\  -a, --algo=ALGO          rx/0, rx/2, rx/wow, rx/arq, rx/graft, rx/sfx, rx/yada, panthera
     \\                           'auto' advertises all RandomX variants, so a pool that
@@ -370,10 +451,13 @@ pub const usage =
     \\  -t, --threads=N          number of mining threads (default: cache aware)
     \\      --mode=MODE          auto | fast (2 GiB dataset) | light (256 MiB cache)
     \\      --randomx-init=N     threads used to build the dataset (default: every CPU)
+    \\      --dataset-cache[=MB] keep the old dataset mapped across an algorithm
+    \\                           switch (default: auto - as much as fits; 0 = off)
+    \\      --no-dataset-cache   always rebuild a dataset after a switch
     \\      --no-huge-pages      disable huge pages
     \\      --auto-hugepages     reserve the pages this mode needs when running as root (default)
     \\      --no-auto-hugepages  never reserve huge pages, even when running as root
-    \\      --profile=NAME       auto | free (max hashrate) | watt (max hashrate per watt)
+    \\      --profile=NAME       free (default, max hashrate) | watt (opt-in, max hashes/watt) | auto (= free)
     \\      --no-health-restart  never exit to recover from a stall
     \\      --health-restart=SEC exit after SEC s of stall / all-rejected
     \\                           (default 900; the supervisor restarts it)
@@ -390,6 +474,11 @@ pub const usage =
     \\      --cpu-affinity=0x3   pin threads to these CPUs (bitmask, XMRig style)
     \\      --priority=N         1..5 (XMRig scale) or a raw nice value like -10
     \\      --cpu-priority=N     same as --priority (XMRig spelling)
+    \\      --max-temp=C         safe temperature target [default: 80 C]:
+    \\                           shed threads as it warms, pause at C+15, never
+    \\                           go above the thread count you asked for
+    \\      --thermal-file=PATH  read the temperature from PATH instead of sysfs
+    \\      --no-thermal         explicitly disable the thermal governor
     \\
     \\Logging:
     \\      --no-color           disable colours
@@ -410,7 +499,7 @@ pub const usage =
     \\                           (light skips the 2 GiB dataset check)
     \\      --background         detach from the terminal and keep mining
     \\      --nicehash           mask the nonce for a NiceHash/rental pool
-    \\      --donate-level=N     percent of Monero time for the developer (0-10, default 1)
+    \\      --donate-level=N     percent of Monero time for the developer (0-10, default 3)
     \\      --no-donate          same as --donate-level=0
     \\      --check              validate the configuration and exit
     \\      --dry-run            alias of --check (XMRig spelling)
@@ -424,12 +513,26 @@ pub const usage =
     \\      --power=W            wall power in watts, used by the report
     \\      --verify-share       read {"seed","blob","nonce"} JSON lines on stdin and
     \\                           print the hashes: share verification for a pool
+    \\                           (--mode=fast builds the dataset once: 9x faster
+    \\                           per share for 2.3 GiB of RAM; -t N hashes N
+    \\                           shares at once over that one dataset)
     \\  -h, --help               this help
     \\  -V, --version            print the version
     \\
     \\Every option that takes a value also accepts the "--option value" form.
     \\
 ;
+
+/// `--max-temp=75` and `--max-temp=75.5`. Out-of-range values are rejected
+/// rather than clamped: a target of 20 °C would park the miner for ever, and a
+/// target of 150 °C is not a policy, it is a typo.
+fn parseTemperature(text: []const u8) ParseError!f32 {
+    const value = std.fmt.parseFloat(f32, text) catch return error.InvalidNumber;
+
+    if (!(value >= 45 and value <= 95)) return error.InvalidNumber;
+
+    return value;
+}
 
 fn parseNumber(comptime T: type, text: []const u8) ParseError!T {
     return std.fmt.parseInt(T, text, 10) catch error.InvalidNumber;
@@ -517,6 +620,11 @@ pub fn parseUrl(allocator: std.mem.Allocator, url: []const u8) ParseError!Pool {
 
 pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseError!Options {
     var opts = Options{};
+    // A parse that fails half way has already allocated host names, wallet
+    // strings and file paths. Without this, every rejection - a typo in
+    // --max-temp, a bad pool URL - leaks what it read before the typo. The
+    // process normally exits anyway, which is exactly why nobody noticed.
+    errdefer opts.deinit(allocator);
     // Per-pool options seen before the pool they belong to (see `Pending`).
     var pending = Pending{};
     var i: usize = 0;
@@ -559,6 +667,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseEr
             }
         } else if (std.mem.eql(u8, name, "-a") or std.mem.eql(u8, name, "--algo")) {
             const value = try needValue(args, &i, inline_value);
+            opts.seen.algo = true;
             // `auto` is the one value that is not an algorithm name: it is the
             // instruction to advertise all of them.
             if (std.ascii.eqlIgnoreCase(value, "auto")) {
@@ -645,6 +754,7 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseEr
             if (opts.pools.items.len > 0) opts.pools.items[opts.pools.items.len - 1].tls_insecure = true;
         } else if (std.mem.eql(u8, name, "-t") or std.mem.eql(u8, name, "--threads")) {
             opts.threads = try parseNumber(usize, try needValue(args, &i, inline_value));
+            opts.seen.threads = true;
         } else if (std.mem.eql(u8, name, "--mode")) {
             const value = try needValue(args, &i, inline_value);
             if (std.mem.eql(u8, value, "auto")) {
@@ -666,10 +776,10 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseEr
             opts.auto_hugepages = false;
             opts.seen.auto_hugepages = true;
         } else if (std.mem.eql(u8, name, "--msr")) {
-            opts.msr = true;
+            opts.msr = .on;
             opts.seen.msr = true;
         } else if (std.mem.eql(u8, name, "--no-msr")) {
-            opts.msr = false;
+            opts.msr = .off;
             opts.seen.msr = true;
         } else if (std.mem.eql(u8, name, "--no-msr-restore")) {
             opts.msr_restore = false;
@@ -679,11 +789,13 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseEr
             opts.seen.health_restart = true;
         } else if (std.mem.eql(u8, name, "--health-warmup")) {
             opts.health_warmup_seconds = try parseNumber(u32, try needValue(args, &i, inline_value));
+            opts.seen.health_warmup = true;
         } else if (std.mem.eql(u8, name, "--health-restart")) {
             // Optional value: "--health-restart" alone re-enables it, with a
             // value it also sets the delay.
             if (inline_value) |value| {
                 opts.health_restart_seconds = try parseNumber(u32, value);
+                opts.seen.health_restart_seconds = true;
             } else {
                 opts.health_restart = true;
             }
@@ -692,8 +804,21 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseEr
             const value = try needValue(args, &i, inline_value);
             opts.profile = ProfileSetting.fromName(value) orelse return error.UnknownOption;
             opts.seen.profile = true;
+        } else if (std.mem.eql(u8, name, "--max-temp")) {
+            const value = try needValue(args, &i, inline_value);
+            opts.max_temp = try parseTemperature(value);
+            opts.seen.max_temp = true;
+        } else if (std.mem.eql(u8, name, "--thermal-file")) {
+            const value = try needValue(args, &i, inline_value);
+            if (opts.thermal_file) |old| allocator.free(old);
+            opts.thermal_file = allocator.dupe(u8, value) catch return error.OutOfMemory;
+            opts.seen.thermal_file = true;
+        } else if (std.mem.eql(u8, name, "--no-thermal")) {
+            opts.max_temp = null;
+            opts.seen.max_temp = true;
         } else if (std.mem.eql(u8, name, "--autotune")) {
             opts.autotune = true;
+            opts.seen.autotune = true;
             if (inline_value) |v| {
                 opts.autotune_seconds = parseNumber(u32, v) catch return error.InvalidNumber;
                 if (opts.autotune_seconds == 0) return error.InvalidNumber;
@@ -729,11 +854,11 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseEr
             if (inline_value) |v| {
                 if (!std.mem.eql(u8, v, "1")) return error.UnknownOption;
             }
-            opts.msr = true;
+            opts.msr = .on;
         } else if (std.mem.eql(u8, name, "--randomx-no-rdmsr") or std.mem.eql(u8, name, "--no-rdmsr")) {
             opts.msr_restore = false;
         } else if (std.mem.eql(u8, name, "--no-wrmsr")) {
-            opts.msr = false;
+            opts.msr = .off;
         } else if (std.mem.eql(u8, name, "--donate-level")) {
             // Same spelling and meaning as XMRig: percent of mining time that
             // goes to the developer. 0 turns it off entirely.
@@ -741,8 +866,10 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseEr
             const level = parseNumber(u32, value) catch return error.InvalidNumber;
             if (level > @import("fee.zig").max_percent) return error.InvalidNumber;
             opts.donate_percent = level;
+            opts.seen.donate_percent = true;
         } else if (std.mem.eql(u8, name, "--no-donate")) {
             opts.donate_percent = 0;
+            opts.seen.donate_percent = true;
         } else if (std.mem.eql(u8, name, "--no-affinity")) {
             opts.affinity = false;
             opts.seen.affinity = true;
@@ -770,6 +897,19 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseEr
         } else if (std.mem.eql(u8, name, "--no-optimized-init")) {
             opts.optimized_init = false;
             opts.seen.optimized_init = true;
+        } else if (std.mem.eql(u8, name, "--dataset-cache")) {
+            const text = try needValue(args, &i, inline_value);
+            if (std.mem.eql(u8, text, "auto")) {
+                opts.dataset_cache_mb = null;
+            } else if (std.mem.eql(u8, text, "off") or std.mem.eql(u8, text, "no")) {
+                opts.dataset_cache_mb = 0;
+            } else {
+                opts.dataset_cache_mb = try parseNumber(u64, text);
+            }
+            opts.seen.dataset_cache = true;
+        } else if (std.mem.eql(u8, name, "--no-dataset-cache")) {
+            opts.dataset_cache_mb = 0;
+            opts.seen.dataset_cache = true;
         } else if (std.mem.eql(u8, name, "--idle-timeout")) {
             opts.idle_timeout = try parseNumber(u32, try needValue(args, &i, inline_value));
             opts.seen.idle_timeout = true;
@@ -783,8 +923,10 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseEr
             opts.log_file = allocator.dupe(u8, try needValue(args, &i, inline_value)) catch return error.OutOfMemory;
         } else if (std.mem.eql(u8, name, "--http-host")) {
             opts.http_host = try needValue(args, &i, inline_value);
+            opts.seen.http_host = true;
         } else if (std.mem.eql(u8, name, "--http-port")) {
             opts.api_port = try parseNumber(u16, try needValue(args, &i, inline_value));
+            opts.seen.api_port = true;
         } else if (std.mem.eql(u8, name, "--http-access-token")) {
             opts.api_token = allocator.dupe(u8, try needValue(args, &i, inline_value)) catch return error.OutOfMemory;
         } else if (std.mem.eql(u8, name, "-c") or std.mem.eql(u8, name, "--config")) {
@@ -801,6 +943,10 @@ pub fn parseArgs(allocator: std.mem.Allocator, args: []const []const u8) ParseEr
                     return error.UnknownOption;
                 }
             }
+        } else if (std.mem.eql(u8, name, "--allow-bad-wallet")) {
+            opts.allow_bad_wallet = true;
+        } else if (std.mem.eql(u8, name, "--check-wallet")) {
+            opts.check_wallet = allocator.dupe(u8, try needValue(args, &i, inline_value)) catch return error.OutOfMemory;
         } else if (std.mem.eql(u8, name, "--check") or std.mem.eql(u8, name, "--dry-run")) {
             // --dry-run is XMRig's name for "validate and exit".
             opts.check = true;
@@ -862,7 +1008,7 @@ pub fn validate(opts: *const Options) ParseError!void {
     // it used to be rejected with NoPools, which made the one command that
     // helps a fresh box useless on a fresh box.
     if (opts.help or opts.version or opts.self_test or opts.benchmark or
-        opts.report or opts.verify_share or opts.autotune) return;
+        opts.report or opts.verify_share or opts.autotune or opts.check_wallet != null) return;
     _ = opts.check;
 
     if (opts.pools.items.len == 0) return error.NoPools;
@@ -871,6 +1017,66 @@ pub fn validate(opts: *const Options) ParseError!void {
         if (pool.host.len == 0) return error.InvalidPool;
         if (pool.user.len == 0) return error.NoWallet;
     }
+}
+
+/// A known key whose value this binary cannot use. It is still ignored - an
+/// XMRig config or a file written by an older version has to keep starting -
+/// but not silently: `"cpu": {"threads": "8"}` used to mine with the default
+/// thread count and the log never mentioned it.
+fn warnIgnored(comptime fmt: []const u8, args: anytype) void {
+    const stderr = std.io.getStdErr().writer();
+    stderr.print("zmrig: warning: " ++ fmt ++ "\n", args) catch {};
+}
+
+/// The values that used to be checked only by the code that used them, if at
+/// all: an invalid `-t` was reported by the mining core *after* the memory
+/// check had already turned it into a dataset size, `--scratchpad-prefetch=7`
+/// was accepted and quietly hashed with mode 1, `--priority=99` reached a
+/// `setpriority` call the kernel answers with EINVAL and nobody read, and a
+/// `--tls-ca` path that did not exist was only noticed when the first TLS
+/// handshake failed to build a trust store.
+///
+/// `--check` is what scripts and `zmrig-os doctor` use to ask "is this
+/// configuration usable", so all of it is answered here, once, for both the
+/// command line and the config file.
+pub fn validateValues(opts: *const Options) ParseError!void {
+    if (opts.threads) |threads| {
+        if (threads == 0 or threads > max_threads) return error.InvalidThreads;
+    }
+
+    if (opts.scratchpad_prefetch < 0 or opts.scratchpad_prefetch > 3) return error.InvalidPrefetch;
+
+    // -1 means "do not touch the scheduler". 1..5 is XMRig's scale, which the
+    // mining core maps to a nice value; anything else is a raw nice value and
+    // has to be one the kernel will accept.
+    if (opts.priority != -1 and !(opts.priority >= 1 and opts.priority <= 5) and
+        !(opts.priority >= -20 and opts.priority <= 19)) return error.InvalidPriority;
+
+    for (opts.pools.items) |pool| {
+        if (pool.user_port and pool.port == 0) return error.InvalidPoolPort;
+    }
+
+    // A path from a config file is a string like any other, and JSON can carry
+    // a NUL in it. Nothing that reaches the filesystem can: the next call would
+    // be `createFile("a\x00b")`, which is `unreachable` inside Zig's std.
+    if (opts.log_file) |path| {
+        if (std.mem.indexOfScalar(u8, path, 0) != null) return error.InvalidPath;
+    }
+    for (opts.pools.items) |pool| {
+        if (pool.tls_ca) |path| {
+            if (std.mem.indexOfScalar(u8, path, 0) != null) return error.InvalidPath;
+            try checkReadable(path);
+        }
+    }
+    if (opts.tls_ca) |path| {
+        if (std.mem.indexOfScalar(u8, path, 0) != null) return error.InvalidPath;
+        try checkReadable(path);
+    }
+}
+
+fn checkReadable(path: []const u8) ParseError!void {
+    const file = std.fs.cwd().openFile(path, .{}) catch return error.UnreadableTlsCa;
+    file.close();
 }
 
 /// Applies the transport flags to every pool that did not set them itself.
@@ -1018,6 +1224,19 @@ fn jsonInt(comptime T: type, obj: std.json.ObjectMap, key: []const u8) ?T {
     };
 }
 
+/// JSON has one number type and it may arrive as either. `"max-temp": 75` and
+/// `"max-temp": 75.5` both have to work, or the installer has to guess which
+/// one to write.
+fn jsonFloat(obj: std.json.ObjectMap, key: []const u8) ?f32 {
+    const value = obj.get(key) orelse return null;
+
+    return switch (value) {
+        .integer => |v| @floatFromInt(v),
+        .float => |v| @floatCast(v),
+        else => null,
+    };
+}
+
 fn applyPoolObject(allocator: std.mem.Allocator, opts: *Options, obj: std.json.ObjectMap) ParseError!void {
     const url = jsonString(obj, "url") orelse return error.InvalidConfig;
     var pool = try parseUrl(allocator, url);
@@ -1100,8 +1319,16 @@ pub fn parseConfigFile(allocator: std.mem.Allocator, opts: *Options, path: []con
             if (std.ascii.eqlIgnoreCase(value.string, "auto")) {
                 opts.algo = null;
                 opts.algo_all = true;
+            } else if (api.Algo.fromName(value.string)) |algo| {
+                opts.algo = algo;
+                opts.algo_all = false;
             } else {
-                opts.algo = api.Algo.fromName(value.string) orelse opts.algo;
+                // A typo here is expensive and invisible: `"algo": "rx/01"`
+                // mined rx/0 on a pool that asked for something else.
+                warnIgnored("config: algo \"{s}\" is not one this miner knows; using {s}", .{
+                    value.string,
+                    if (opts.algo) |a| a.label() else "auto",
+                });
                 opts.algo_all = false;
             }
         }
@@ -1115,7 +1342,28 @@ pub fn parseConfigFile(allocator: std.mem.Allocator, opts: *Options, path: []con
     // Written by `oneclick.sh --profile=...`. No `seen` flag: the config is
     // read before the command line, so an explicit `--profile` still wins.
     if (jsonString(root, "profile")) |v| {
-        opts.profile = ProfileSetting.fromName(v) orelse opts.profile;
+        if (ProfileSetting.fromName(v)) |profile| {
+            opts.profile = profile;
+        } else {
+            warnIgnored("config: profile \"{s}\" is not a profile: auto, free or watt; using {s}", .{ v, opts.profile.label() });
+        }
+    }
+    // The thermal policy, as written by `oneclick.sh --max-temp=...` and by the
+    // appliance's safe mode. A value outside 45..95 is ignored rather than
+    // refused here: a config file that an older binary wrote must not stop the
+    // miner from starting.
+    if (jsonFloat(root, "max-temp")) |v| {
+        // Invalid config should not remove the safe default. Zero is the
+        // installer's explicit encoding for --no-thermal.
+        if (v == 0) {
+            opts.max_temp = null;
+        } else if (v >= 45 and v <= 95) {
+            opts.max_temp = v;
+        }
+    }
+    if (jsonString(root, "thermal-file")) |v| {
+        if (opts.thermal_file) |old| allocator.free(old);
+        opts.thermal_file = allocator.dupe(u8, v) catch return error.OutOfMemory;
     }
     if (jsonBool(root, "colors")) |v| opts.colors = v;
     if (jsonBool(root, "background")) |v| opts.background = v;
@@ -1156,10 +1404,24 @@ pub fn parseConfigFile(allocator: std.mem.Allocator, opts: *Options, path: []con
         }
     }
 
+    // XMRig's schema puts the thread count under `cpu`, and the docs here say
+    // so, but `"threads": 8` at the top of the file is the mistake people make
+    // - it is silently ignored, which is a rig at half its configured hashrate
+    // with nothing anywhere to say why.
+    if (root.get("threads")) |top| {
+        if (top != .null and root.get("cpu") == null) {
+            warnIgnored("config: \"threads\" at the top of the file is not read - it lives under \"cpu\", as {{\"cpu\": {{\"threads\": N}}}}", .{});
+        }
+    }
+
     if (root.get("cpu")) |cpu_value| {
         if (cpu_value == .object) {
             const cpu = cpu_value.object;
-            if (jsonInt(i32, cpu, "priority")) |v| opts.priority = v;
+            if (jsonInt(i32, cpu, "priority")) |v| {
+                opts.priority = v;
+            } else if (cpu.get("priority") != null and cpu.get("priority").? != .null) {
+                warnIgnored("config: cpu.priority must be a number between -20 and 19; leaving the scheduler alone", .{});
+            }
             if (jsonBool(cpu, "yield")) |_| {}
 
             // XMRig writes the mask as an integer, or null for "all cores".
@@ -1179,7 +1441,13 @@ pub fn parseConfigFile(allocator: std.mem.Allocator, opts: *Options, path: []con
 
             if (cpu.get("threads")) |threads| {
                 switch (threads) {
-                    .integer => |v| opts.threads = std.math.cast(usize, v),
+                    .integer => |v| {
+                        if (std.math.cast(usize, v)) |count| {
+                            opts.threads = count;
+                        } else {
+                            warnIgnored("config: cpu.threads {d} is not a thread count; using the default", .{v});
+                        }
+                    },
                     .bool => |enabled| {
                         if (!enabled) opts.threads = 0;
                     },
@@ -1191,17 +1459,31 @@ pub fn parseConfigFile(allocator: std.mem.Allocator, opts: *Options, path: []con
 
                         var mask: u64 = 0;
                         var pinned = false;
+                        var beyond: ?i64 = null;
                         for (arr.items) |entry| {
                             if (entry != .integer) continue;
                             if (entry.integer < 0) continue;
-                            if (entry.integer > 63) continue;
+                            if (entry.integer > 63) {
+                                // Remembered rather than acted on: the rest of
+                                // the list is still what the user meant.
+                                if (beyond == null) beyond = entry.integer;
+                                continue;
+                            }
 
                             mask |= @as(u64, 1) << @intCast(entry.integer);
                             pinned = true;
                         }
+
+                        // The mask is 64 bits wide, so cpu 64 and above cannot
+                        // be named - and a rig with 96 cores writing
+                        // `[0..95]` would otherwise have 32 threads pinned and
+                        // 32 not, with nothing anywhere to say why they moved.
+                        if (beyond) |index| {
+                            warnIgnored("config: cpu.threads pins cpu {d}, which a 64-bit affinity mask cannot name; that thread is left unpinned", .{index});
+                        }
                         if (pinned) opts.affinity_mask = mask;
                     },
-                    else => {},
+                    else => warnIgnored("config: cpu.threads must be a number or an array of CPU indexes; using the default (XMRig's own files put the thread count there)", .{}),
                 }
             }
         }
@@ -1211,21 +1493,45 @@ pub fn parseConfigFile(allocator: std.mem.Allocator, opts: *Options, path: []con
         if (rx_value == .object) {
             const rx = rx_value.object;
             if (jsonString(rx, "mode")) |mode| {
-                if (std.mem.eql(u8, mode, "light")) opts.mode = .light;
-                if (std.mem.eql(u8, mode, "fast")) opts.mode = .fast;
-                if (std.mem.eql(u8, mode, "auto")) opts.mode = .auto;
+                if (std.mem.eql(u8, mode, "light")) {
+                    opts.mode = .light;
+                } else if (std.mem.eql(u8, mode, "fast")) {
+                    opts.mode = .fast;
+                } else if (std.mem.eql(u8, mode, "auto")) {
+                    opts.mode = .auto;
+                } else {
+                    warnIgnored("config: randomx.mode \"{s}\" is not a mode: auto, fast or light; using auto", .{mode});
+                }
             }
             if (jsonInt(usize, rx, "init")) |v| opts.init_threads = v;
-            if (jsonBool(rx, "msr")) |v| opts.msr = v;
+            // `true`/`false` is XMRig's spelling and means on/off. The string
+            // form exists so a generated config can say what the CLI says:
+            // "auto" leaves the decision to the probe, which is the default and
+            // the only honest answer for a file that may be copied to another
+            // machine.
+            switch (rx.get("msr") orelse .null) {
+                .bool => |v| opts.msr = if (v) .on else .off,
+                .string => |v| opts.msr = if (std.mem.eql(u8, v, "auto"))
+                    .auto
+                else if (std.mem.eql(u8, v, "off") or std.mem.eql(u8, v, "false"))
+                    .off
+                else
+                    .on,
+                else => {},
+            }
             if (jsonBool(rx, "rdmsr")) |v| opts.msr_restore = v;
             // `wrmsr` is a bool or an explicit register array in XMRig. We only
             // support the built-in presets, so an array means "use the preset".
             switch (rx.get("wrmsr") orelse .null) {
-                .bool => |v| opts.msr = v,
-                .array => opts.msr = true,
+                .bool => |v| opts.msr = if (v) .on else .off,
+                .array => opts.msr = .on,
                 else => {},
             }
-            if (jsonInt(i32, rx, "scratchpad_prefetch_mode")) |v| opts.scratchpad_prefetch = v;
+            if (jsonInt(i32, rx, "scratchpad_prefetch_mode")) |v| {
+                opts.scratchpad_prefetch = v;
+            } else if (rx.get("scratchpad_prefetch_mode") != null and rx.get("scratchpad_prefetch_mode").? != .null) {
+                warnIgnored("config: randomx.scratchpad_prefetch_mode must be 0..3; using 1 (prefetcht0)", .{});
+            }
             if (jsonInt(i32, rx, "init-avx2")) |v| opts.optimized_init = v != 0;
         }
     }
@@ -1238,19 +1544,161 @@ pub fn parseConfigFile(allocator: std.mem.Allocator, opts: *Options, path: []con
                     if (jsonInt(u16, http, "port")) |port| opts.api_port = port;
                 }
             }
-            if (jsonString(http, "host")) |host| opts.http_host = host;
+            if (jsonString(http, "host")) |host| {
+                if (opts.http_host_owned) |old| allocator.free(old);
+                opts.http_host_owned = allocator.dupe(u8, host) catch return error.OutOfMemory;
+                opts.http_host = opts.http_host_owned.?;
+            }
             if (jsonString(http, "access-token")) |token| opts.api_token = allocator.dupe(u8, token) catch return error.OutOfMemory;
         }
     }
 
     if (root.get("pools")) |pools_value| {
         if (pools_value == .array) {
-            for (pools_value.array.items) |item| {
-                if (item != .object) continue;
+            for (pools_value.array.items, 0..) |item, i| {
+                if (item != .object) {
+                    // `"pools": ["pool.example:3333"]` is the shape people
+                    // write when they are guessing. Dropping it silently ends
+                    // in "no pool configured" with nothing pointing at the
+                    // line that caused it.
+                    warnIgnored("config: pools[{d}] is not a pool object (it needs url and user); skipping it", .{i});
+                    continue;
+                }
+
                 try applyPoolObject(allocator, opts, item.object);
             }
+        } else if (pools_value != .null) {
+            warnIgnored("config: pools must be a list of pool objects; ignoring it", .{});
         }
     }
+}
+
+/// Move an owned optional string from the CLI parse into the merged options.
+/// The caller can then deinit the CLI options without leaking or double-freeing.
+fn moveString(allocator: std.mem.Allocator, dst: *?[]const u8, src: *?[]const u8) void {
+    if (src.*) |value| {
+        if (dst.*) |old| allocator.free(old);
+        dst.* = value;
+        src.* = null;
+    }
+}
+
+/// Applies the command line on top of the config file.
+///
+/// The two are parsed into separate `Options` and this is what joins them, so
+/// every field has to be listed here or the flag does nothing whenever a config
+/// file is also given - which is how `zmrig -c /etc/zmrig/config.json
+/// --donate-level=0` came to charge the fee and `--max-temp=70` came to leave
+/// the thermal governor off. The test at the end of this file walks every field
+/// of `Options` and fails if one is not accounted for.
+///
+/// Strings are moved, not copied: `extra` is deinitialized by the caller, and
+/// any string this function transfers is nulled out of `extra` first.
+pub fn mergeInto(allocator: std.mem.Allocator, base: *Options, extra: *Options) void {
+    if (extra.seen.algo) {
+        base.algo = extra.algo;
+        base.algo_all = extra.algo_all;
+    }
+    if (extra.threads) |v| base.threads = v;
+    if (extra.pools.items.len > 0) {
+        // Command line pools replace config file pools, like xmrig does. Take
+        // ownership of the CLI buffers instead of copying: `extra` is discarded
+        // right after the merge and a copy would leak on every start.
+        base.pools.ensureUnusedCapacity(allocator, extra.pools.items.len) catch {
+            // Out of memory here means we cannot apply the CLI pools, but it
+            // must not first destroy the config pools we already have.
+            return;
+        };
+        for (base.pools.items) |pool| freePool(allocator, pool);
+        base.pools.clearRetainingCapacity();
+        base.pools.appendSliceAssumeCapacity(extra.pools.items);
+        extra.pools.clearRetainingCapacity();
+    }
+    // Only what the command line set: a plain `-c config.json --verbose` must
+    // not reset mode, threads, retries or huge pages to their defaults.
+    // Every one of these was missing, and every one of them is a flag a config
+    // file cannot fully express: `zmrig -c config.json --donate-level=0` charged
+    // the fee anyway, `--max-temp=70` left the thermal governor off, and
+    // `--profile=free` was ignored. A command line that names a value has to
+    // win over the file, which is the whole point of reading the file first.
+    if (extra.seen.profile) base.profile = extra.profile;
+    if (extra.seen.max_temp) base.max_temp = extra.max_temp;
+    if (extra.seen.donate_percent) base.donate_percent = extra.donate_percent;
+    if (extra.seen.ban_cooldown) base.ban_cooldown = extra.ban_cooldown;
+    if (extra.seen.health_restart) base.health_restart = extra.health_restart;
+    if (extra.seen.health_restart_seconds) base.health_restart_seconds = extra.health_restart_seconds;
+    if (extra.seen.health_warmup) base.health_warmup_seconds = extra.health_warmup_seconds;
+    if (extra.seen.dataset_cache) base.dataset_cache_mb = extra.dataset_cache_mb;
+    if (extra.seen.autotune) {
+        base.autotune = true;
+        base.autotune_seconds = extra.autotune_seconds;
+    }
+    if (extra.seen.thermal_file) moveString(allocator, &base.thermal_file, &extra.thermal_file);
+    moveString(allocator, &base.api_token, &extra.api_token);
+    if (extra.allow_bad_wallet) base.allow_bad_wallet = true;
+    moveString(allocator, &base.check_wallet, &extra.check_wallet);
+    if (extra.verify_share) base.verify_share = true;
+    if (extra.seen.mode) base.mode = extra.mode;
+    if (extra.seen.huge_pages) base.huge_pages = extra.huge_pages;
+    if (extra.seen.auto_hugepages) base.auto_hugepages = extra.auto_hugepages;
+    if (extra.seen.huge_pages_jit) base.huge_pages_jit = extra.huge_pages_jit;
+    if (extra.seen.jit) base.jit = extra.jit;
+    if (extra.seen.print_time) base.print_time = extra.print_time;
+    if (extra.seen.retries) base.retries = extra.retries;
+    if (extra.seen.retry_pause) base.retry_pause = extra.retry_pause;
+    if (extra.seen.colors) base.colors = extra.colors;
+    if (extra.seen.verbose) base.verbose = extra.verbose;
+    if (extra.seen.affinity) base.affinity = extra.affinity;
+    if (extra.seen.affinity_mask) base.affinity_mask = extra.affinity_mask;
+    if (extra.seen.user_agent) base.user_agent = extra.user_agent;
+    if (extra.seen.init_threads) base.init_threads = extra.init_threads;
+    // MSR is opt-in, and "opt-in on the command line" has to work too.
+    if (extra.seen.msr) base.msr = extra.msr;
+    if (extra.seen.msr_restore) base.msr_restore = extra.msr_restore;
+    if (extra.seen.priority) base.priority = extra.priority;
+    if (extra.seen.idle_timeout) base.idle_timeout = extra.idle_timeout;
+    if (extra.seen.keepalive_interval) base.keepalive_interval = extra.keepalive_interval;
+    if (extra.seen.scratchpad_prefetch) base.scratchpad_prefetch = extra.scratchpad_prefetch;
+    if (extra.seen.optimized_init) base.optimized_init = extra.optimized_init;
+    moveString(allocator, &base.log_file, &extra.log_file);
+    if (extra.seen.api_port) base.api_port = extra.api_port;
+    if (extra.benchmark) {
+        base.benchmark = true;
+        base.bench_hashes = extra.bench_hashes;
+    }
+
+    // These short-circuit the run, so they must survive the merge: dropping
+    // them turned `zmrig -c config.json --check` into a live miner.
+    if (extra.check) base.check = true;
+    if (extra.self_test) base.self_test = true;
+    if (extra.self_test_light) base.self_test_light = true;
+    if (extra.help) base.help = true;
+    if (extra.version) base.version = true;
+    if (extra.verbose) base.verbose = true;
+    if (extra.seen.background) base.background = extra.background;
+    // The report flags follow the same rule: a config file may already carry a
+    // report file, an interval, an id and a power figure, and a command line
+    // that does not mention them must leave those values alone.
+    if (extra.seen.report) base.report = true;
+    if (extra.seen.report_time) base.report_seconds = extra.report_seconds;
+    if (extra.seen.report_file) moveString(allocator, &base.report_file, &extra.report_file);
+    if (extra.seen.report_interval) base.report_interval = extra.report_interval;
+    if (extra.seen.report_id) moveString(allocator, &base.report_id, &extra.report_id);
+    if (extra.seen.power) base.power_watts = extra.power_watts;
+    if (extra.seen.http_host) {
+        if (base.http_host_owned) |old| allocator.free(old);
+        base.http_host_owned = null;
+        base.http_host = extra.http_host; // argv-owned for the life of main
+    }
+
+    if (extra.transport_override) |v| base.transport_override = v;
+    moveString(allocator, &base.ws_path, &extra.ws_path);
+    moveString(allocator, &base.ws_origin, &extra.ws_origin);
+    moveString(allocator, &base.host_header, &extra.host_header);
+    moveString(allocator, &base.connect_to, &extra.connect_to);
+    moveString(allocator, &base.tls_ca, &extra.tls_ca);
+    moveString(allocator, &base.proxy_url, &extra.proxy_url);
+    if (extra.cloudflare) base.cloudflare = true;
 }
 
 // --- tests -----------------------------------------------------------------
@@ -1367,7 +1815,7 @@ test "XMRig-compatible flags are accepted and reach options" {
     try testing.expectEqualStrings("xmrig/6.26.0", opts.user_agent.?);
     // The XMRig flag sets the real fee, it is not decoration.
     try testing.expectEqual(@as(u32, 1), opts.donate_percent);
-    try testing.expect(opts.msr);
+    try testing.expectEqual(MsrMode.on, opts.msr);
     try testing.expect(!opts.msr_restore);
 
     // `--donate-level=11` is a typo, not a generous user.
@@ -1420,7 +1868,10 @@ test "an xmrig config.json is read with the keys it uses" {
     try testing.expectEqual(@as(usize, 1), opts.init_threads);
     try testing.expectEqual(@as(i32, 2), opts.scratchpad_prefetch);
     try testing.expect(!opts.optimized_init);
-    try testing.expect(!opts.msr);
+    // `"msr": false` in the config is an instruction, not the default: the
+    // default is `auto`, and a config that says false must not be upgraded back
+    // to `auto` behind the user's back.
+    try testing.expectEqual(MsrMode.off, opts.msr);
     try testing.expect(!opts.msr_restore);
     try testing.expectEqual(@as(usize, 1), opts.pools.items.len);
     try testing.expectEqualStrings("wallet", opts.pools.items[0].user);
@@ -1563,7 +2014,7 @@ test "the installer's profile key is read from the config file" {
     defer testing.allocator.free(path2);
     try parseConfigFile(testing.allocator, &other, path2);
 
-    try testing.expectEqual(ProfileSetting.auto, other.profile);
+    try testing.expectEqual(ProfileSetting.free, other.profile);
 }
 
 test "an autotune run needs no pool: it measures the machine" {
@@ -1718,4 +2169,703 @@ test "algo: auto is also readable from the JSON config" {
 
     try testing.expect(!pinned.algo_all);
     try testing.expectEqual(@as(?api.Algo, .rx_wow), pinned.algo);
+}
+
+test "--max-temp is a temperature, not a wish" {
+    const testing = std.testing;
+    const ok = [_][]const u8{ "-u", "w", "-o", "pool.example.com:3333" };
+
+    // 75 and 75.5 are both temperatures; 20 and 150 are a typo that would park
+    // the miner for ever or protect nothing.
+    var args: [6][]const u8 = undefined;
+    @memcpy(args[0..4], &ok);
+
+    args[4] = "--max-temp=75";
+    args[5] = "--threads=2";
+    var opts = try parseArgs(testing.allocator, &args);
+    defer opts.deinit(testing.allocator);
+    try testing.expectEqual(@as(f32, 75), opts.max_temp.?);
+
+    args[4] = "--max-temp=75.5";
+    var half = try parseArgs(testing.allocator, &args);
+    defer half.deinit(testing.allocator);
+    try testing.expectEqual(@as(f32, 75.5), half.max_temp.?);
+
+    // The floor and the ceiling of what counts as a policy.
+    args[4] = "--max-temp=45";
+    var low = try parseArgs(testing.allocator, &args);
+    defer low.deinit(testing.allocator);
+    try testing.expectEqual(@as(f32, 45), low.max_temp.?);
+
+    args[4] = "--max-temp=44.9";
+    try testing.expectError(error.InvalidNumber, parseArgs(testing.allocator, &args));
+    args[4] = "--max-temp=95.1";
+    try testing.expectError(error.InvalidNumber, parseArgs(testing.allocator, &args));
+    args[4] = "--max-temp=warm";
+    try testing.expectError(error.InvalidNumber, parseArgs(testing.allocator, &args));
+}
+
+test "thermal governor defaults to 80 C, and --no-thermal opts out" {
+    const testing = std.testing;
+
+    var plain = try parseArgs(testing.allocator, &[_][]const u8{ "-u", "w", "-o", "pool.example.com:3333" });
+    defer plain.deinit(testing.allocator);
+    try testing.expectEqual(@as(f32, 80), plain.max_temp.?);
+
+    var undone = try parseArgs(testing.allocator, &[_][]const u8{
+        "-u", "w", "-o", "pool.example.com:3333", "--max-temp=70", "--no-thermal",
+    });
+    defer undone.deinit(testing.allocator);
+    try testing.expect(undone.max_temp == null);
+}
+
+test "--thermal-file keeps its own copy of the path" {
+    const testing = std.testing;
+    const source = "sensors/cpu0";
+
+    var opts = try parseArgs(testing.allocator, &[_][]const u8{
+        "-u", "w", "-o", "pool.example.com:3333", "--thermal-file", source,
+    });
+    defer opts.deinit(testing.allocator);
+
+    try testing.expectEqualStrings(source, opts.thermal_file.?);
+    // Not the same slice: the argv it came from may not outlive the options.
+    try testing.expect(opts.thermal_file.?.ptr != source.ptr);
+}
+
+test "the thermal policy is read from the config file, and a silly one is ignored" {
+    const testing = std.testing;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "safe.json", .data =
+        \\{"max-temp":72,"thermal-file":"/run/cpu.temp","pools":[{"url":"pool.example.com:3333","user":"w"}]}
+    });
+    try tmp.dir.writeFile(.{ .sub_path = "silly.json", .data =
+        \\{"max-temp":12,"pools":[{"url":"pool.example.com:3333","user":"w"}]}
+    });
+
+    var safe = Options{};
+    defer safe.deinit(testing.allocator);
+    const safe_path = try tmp.dir.realpathAlloc(testing.allocator, "safe.json");
+    defer testing.allocator.free(safe_path);
+    try parseConfigFile(testing.allocator, &safe, safe_path);
+
+    try testing.expectEqual(@as(f32, 72), safe.max_temp.?);
+    try testing.expectEqualStrings("/run/cpu.temp", safe.thermal_file.?);
+
+    var silly = Options{};
+    defer silly.deinit(testing.allocator);
+    const silly_path = try tmp.dir.realpathAlloc(testing.allocator, "silly.json");
+    defer testing.allocator.free(silly_path);
+    try parseConfigFile(testing.allocator, &silly, silly_path);
+
+    try testing.expectEqual(@as(f32, 80), silly.max_temp.?);
+}
+
+test "the values that used to be refused late are refused by --check" {
+    const testing = std.testing;
+    // `--check` is what a provisioning script and `zmrig-os doctor` ask.
+    // Every one of these exited 0 from `--check` and then failed (or was
+    // ignored) at run time, which is the worst of both: the check said the
+    // configuration was fine.
+    var opts = Options{};
+    // The pool below points at string literals, so only the array is ours.
+    defer opts.pools.deinit(testing.allocator);
+
+    opts.pools.append(testing.allocator, .{ .host = "pool.example", .port = 3333, .user = "x" }) catch unreachable;
+
+    opts.threads = 0;
+    try testing.expectError(error.InvalidThreads, validateValues(&opts));
+    opts.threads = max_threads + 1;
+    try testing.expectError(error.InvalidThreads, validateValues(&opts));
+    opts.threads = max_threads;
+    try validateValues(&opts);
+
+    opts.scratchpad_prefetch = 7;
+    try testing.expectError(error.InvalidPrefetch, validateValues(&opts));
+    opts.scratchpad_prefetch = -1;
+    try testing.expectError(error.InvalidPrefetch, validateValues(&opts));
+    opts.scratchpad_prefetch = 3;
+    try validateValues(&opts);
+
+    // 1..5 is XMRig's scale, a raw nice value is -20..19, -1 is "leave it".
+    opts.priority = 99;
+    try testing.expectError(error.InvalidPriority, validateValues(&opts));
+    opts.priority = -21;
+    try testing.expectError(error.InvalidPriority, validateValues(&opts));
+    for ([_]i32{ -1, 0, 5, -20, 19 }) |p| {
+        opts.priority = p;
+        try validateValues(&opts);
+    }
+
+    opts.pools.items[0].user_port = true;
+    opts.pools.items[0].port = 0;
+    try testing.expectError(error.InvalidPoolPort, validateValues(&opts));
+    opts.pools.items[0].port = 3333;
+    try validateValues(&opts);
+
+    opts.pools.items[0].tls_ca = "/nonexistent/ca.pem";
+    try testing.expectError(error.UnreadableTlsCa, validateValues(&opts));
+}
+
+test "a thread count in the wrong place is reported" {
+    const testing = std.testing;
+    // `"threads": 8` at the top of the file, which is not where this miner (or
+    // XMRig) reads it: the rig then ran at the default count in silence.
+    const path = "zig-cache-test-top-level-threads.json";
+    const text =
+        \\{"pools":[{"url":"pool.example:3333","user":"x"}],"threads":8}
+    ;
+    {
+        const file = std.fs.cwd().createFile(path, .{}) catch unreachable;
+        defer file.close();
+        file.writeAll(text) catch unreachable;
+    }
+    defer std.fs.cwd().deleteFile(path) catch {};
+
+    var opts = Options{};
+    defer opts.deinit(testing.allocator);
+
+    try parseConfigFile(testing.allocator, &opts, path);
+
+    try testing.expectEqual(@as(?usize, null), opts.threads);
+
+    // The spelling that works is the one the docs and XMRig use.
+    const good_path = "zig-cache-test-cpu-threads.json";
+    const good_text =
+        \\{"pools":[{"url":"pool.example:3333","user":"x"}],"cpu":{"threads":8}}
+    ;
+    {
+        const file = std.fs.cwd().createFile(good_path, .{}) catch unreachable;
+        defer file.close();
+        file.writeAll(good_text) catch unreachable;
+    }
+    defer std.fs.cwd().deleteFile(good_path) catch {};
+
+    var pinned = Options{};
+    defer pinned.deinit(testing.allocator);
+
+    try parseConfigFile(testing.allocator, &pinned, good_path);
+
+    try testing.expectEqual(@as(?usize, 8), pinned.threads);
+}
+
+test "a pool that is not a pool object is reported" {
+    const testing = std.testing;
+    // `"pools": ["pool.example:3333"]` parses to zero pools in the old code,
+    // and the miner then exits with "no pool configured" - true, and useless.
+    const path = "zig-cache-test-pool-shape.json";
+    const text =
+        \\{"pools":["pool.example:3333",
+        \\          {"url":"pool2.example:4444","user":"x"}]}
+    ;
+    {
+        const file = std.fs.cwd().createFile(path, .{}) catch unreachable;
+        defer file.close();
+        file.writeAll(text) catch unreachable;
+    }
+    defer std.fs.cwd().deleteFile(path) catch {};
+
+    var opts = Options{};
+    defer opts.deinit(testing.allocator);
+
+    try parseConfigFile(testing.allocator, &opts, path);
+
+    // The object in the list still becomes the pool; the string does not
+    // become a half-filled one.
+    try testing.expectEqual(@as(usize, 1), opts.pools.items.len);
+    try testing.expectEqualStrings("pool2.example", opts.pools.items[0].host);
+    try testing.expectEqual(@as(u16, 4444), opts.pools.items[0].port);
+
+    // And `"pools"` as something other than a list is not read as an empty one.
+    const wrong = "zig-cache-test-pool-not-list.json";
+    const wrong_text =
+        \\{"pools":{"url":"pool.example:3333","user":"x"}}
+    ;
+    {
+        const file = std.fs.cwd().createFile(wrong, .{}) catch unreachable;
+        defer file.close();
+        file.writeAll(wrong_text) catch unreachable;
+    }
+    defer std.fs.cwd().deleteFile(wrong) catch {};
+
+    var other = Options{};
+    defer other.deinit(testing.allocator);
+
+    try parseConfigFile(testing.allocator, &other, wrong);
+
+    try testing.expectEqual(@as(usize, 0), other.pools.items.len);
+}
+
+test "an affinity list wider than the mask keeps what it can and says so" {
+    const testing = std.testing;
+    // XMRig writes per-thread CPU indexes here. The mask this miner carries is
+    // 64 bits, so a list written for a 96-core machine cannot be honoured in
+    // full - the CPUs it can name are pinned, and the first one it cannot is
+    // reported (on stderr, which this test cannot capture; the parse result is
+    // what is checked here).
+    const path = "zig-cache-test-wide-affinity.json";
+    const text =
+        \\{"pools":[{"url":"pool.example:3333","user":"x"}],
+        \\ "cpu":{"threads":[0,1,70,90]}}
+    ;
+    {
+        const file = std.fs.cwd().createFile(path, .{}) catch unreachable;
+        defer file.close();
+        file.writeAll(text) catch unreachable;
+    }
+    defer std.fs.cwd().deleteFile(path) catch {};
+
+    var opts = Options{};
+    defer opts.deinit(testing.allocator);
+
+    try parseConfigFile(testing.allocator, &opts, path);
+
+    // Three of the four entries are not a thread count this mask can express,
+    // and the thread count itself is the list length, exactly as before.
+    try testing.expectEqual(@as(?usize, 4), opts.threads);
+    try testing.expectEqual(@as(?u64, 0b11), opts.affinity_mask);
+
+    // A list with nothing nameable in it pins nothing at all rather than
+    // pinning everything to cpu 0.
+    const only_high = "zig-cache-test-wide-affinity-only-high.json";
+    const high_text =
+        \\{"pools":[{"url":"pool.example:3333","user":"x"}],
+        \\ "cpu":{"threads":[70,90]}}
+    ;
+    {
+        const file = std.fs.cwd().createFile(only_high, .{}) catch unreachable;
+        defer file.close();
+        file.writeAll(high_text) catch unreachable;
+    }
+    defer std.fs.cwd().deleteFile(only_high) catch {};
+
+    var wide = Options{};
+    defer wide.deinit(testing.allocator);
+
+    try parseConfigFile(testing.allocator, &wide, only_high);
+
+    try testing.expectEqual(@as(?usize, 2), wide.threads);
+    try testing.expectEqual(@as(?u64, null), wide.affinity_mask);
+}
+
+test "a config value this binary cannot use is reported, not silently dropped" {
+    const testing = std.testing;
+    // `"threads": "8"` used to mine with the default count and say nothing.
+    const path = "zig-cache-test-warn-config.json";
+    const text =
+        \\{"pools":[{"url":"pool.example:3333","user":"x"}],
+        \\ "cpu":{"threads":"8","priority":"high"},
+        \\ "algo":"rx/01","profile":"turbo",
+        \\ "randomx":{"mode":"quick","scratchpad_prefetch_mode":"two"}}
+    ;
+    {
+        const file = std.fs.cwd().createFile(path, .{}) catch unreachable;
+        defer file.close();
+        file.writeAll(text) catch unreachable;
+    }
+    defer std.fs.cwd().deleteFile(path) catch {};
+
+    var opts = Options{};
+    defer opts.deinit(testing.allocator);
+
+    try parseConfigFile(testing.allocator, &opts, path);
+
+    // Nothing was applied, and nothing was invented either: the defaults stand.
+    try testing.expectEqual(@as(?usize, null), opts.threads);
+    try testing.expectEqual(@as(?api.Algo, null), opts.algo);
+    try testing.expectEqual(ProfileSetting.free, opts.profile);
+    try testing.expectEqual(Mode.auto, opts.mode);
+    try testing.expectEqual(@as(i32, 1), opts.scratchpad_prefetch);
+    try testing.expectEqual(@as(i32, -1), opts.priority);
+}
+
+test "a path with a NUL in it is refused, not handed to the kernel" {
+    const testing = std.testing;
+
+    // JSON can carry `\u0000` inside a string, and a POSIX path cannot. The old
+    // code passed it to createFile, which is `unreachable` in Zig's std - in a
+    // ReleaseFast build that is undefined behaviour, and it took the process
+    // down before a single line of the run was printed.
+    var with_log = Options{ .log_file = "logs/zmrig\u{0}.log" };
+    try testing.expectError(error.InvalidPath, validateValues(&with_log));
+
+    var with_ca = Options{ .tls_ca = "/etc/ssl/\u{0}ca.pem" };
+    try testing.expectError(error.InvalidPath, validateValues(&with_ca));
+
+    // An ordinary path is not disturbed by the check.
+    var fine = Options{ .log_file = "logs/zmrig.log", .tls_ca = null };
+    try validateValues(&fine);
+}
+
+// --- the merge, checked against the struct it merges ------------------------
+//
+// A flag that is parsed and then not merged is a flag that silently does
+// nothing whenever a config file is also in play, which is how every installed
+// rig runs. The list below is the contract; the tests that follow walk
+// `@typeInfo(Options)` and fail if a field is not on it, so adding an option
+// without deciding what the merge does with it breaks the build instead of the
+// flag.
+
+const MergePolicy = enum {
+    /// Copied only when `extra.seen.<field>` says the command line set it.
+    seen,
+    /// Copied when the command line gave it a value at all (strings, mostly).
+    given,
+    /// An action: `true` on the command line turns it on, and nothing turns it
+    /// off, because a config file is not allowed to start a sign-off run.
+    action,
+    /// Carried along by another flag: `autotune_seconds` is only meaningful
+    /// when `--autotune` was given, and `bench_hashes` only with `--bench`.
+    together,
+    /// Comes from somewhere else (the config path itself, parsed pools, the
+    /// fields `parseArgs` fills in after the loop).
+    elsewhere,
+};
+
+fn mergePolicy(comptime name: []const u8) MergePolicy {
+    // 66 fields x 66 entries of string comparison: the default comptime branch
+    // quota (1000) is not enough, and exhausting it is a compile error that
+    // looks like a bug in this table.
+    @setEvalBranchQuota(40000);
+
+    const policies = .{
+        // copied from a `seen` flag
+        .{ "algo", MergePolicy.seen },
+        .{ "mode", MergePolicy.seen },
+        .{ "huge_pages", MergePolicy.seen },
+        .{ "auto_hugepages", MergePolicy.seen },
+        .{ "huge_pages_jit", MergePolicy.seen },
+        .{ "jit", MergePolicy.seen },
+        .{ "print_time", MergePolicy.seen },
+        .{ "retries", MergePolicy.seen },
+        .{ "retry_pause", MergePolicy.seen },
+        .{ "colors", MergePolicy.seen },
+        .{ "verbose", MergePolicy.seen },
+        .{ "affinity", MergePolicy.seen },
+        .{ "affinity_mask", MergePolicy.seen },
+        .{ "user_agent", MergePolicy.seen },
+        .{ "init_threads", MergePolicy.seen },
+        .{ "msr", MergePolicy.seen },
+        .{ "msr_restore", MergePolicy.seen },
+        .{ "priority", MergePolicy.seen },
+        .{ "idle_timeout", MergePolicy.seen },
+        .{ "keepalive_interval", MergePolicy.seen },
+        .{ "scratchpad_prefetch", MergePolicy.seen },
+        .{ "optimized_init", MergePolicy.seen },
+        .{ "background", MergePolicy.seen },
+        .{ "report_seconds", MergePolicy.seen },
+        .{ "report_interval", MergePolicy.seen },
+        .{ "power_watts", MergePolicy.seen },
+        .{ "profile", MergePolicy.seen },
+        .{ "max_temp", MergePolicy.seen },
+        .{ "donate_percent", MergePolicy.seen },
+        .{ "ban_cooldown", MergePolicy.seen },
+        .{ "health_restart", MergePolicy.seen },
+        .{ "health_restart_seconds", MergePolicy.seen },
+        .{ "health_warmup_seconds", MergePolicy.seen },
+        .{ "dataset_cache_mb", MergePolicy.seen },
+        .{ "http_host", MergePolicy.seen },
+        // coupled values: `--algo` copies both `algo` and `algo_all`.
+        .{ "algo_all", MergePolicy.together },
+        // copied when the command line supplied a value
+        .{ "threads", MergePolicy.given },
+        .{ "log_file", MergePolicy.given },
+        // api_port is copied only when seen; zero is the explicit "off" value.
+        .{ "api_port", MergePolicy.seen },
+        .{ "http_host_owned", MergePolicy.elsewhere },
+        .{ "transport_override", MergePolicy.given },
+        .{ "ws_path", MergePolicy.given },
+        .{ "ws_origin", MergePolicy.given },
+        .{ "host_header", MergePolicy.given },
+        .{ "connect_to", MergePolicy.given },
+        .{ "tls_ca", MergePolicy.given },
+        .{ "proxy_url", MergePolicy.given },
+        .{ "report_file", MergePolicy.given },
+        .{ "report_id", MergePolicy.given },
+        .{ "thermal_file", MergePolicy.given },
+        .{ "api_token", MergePolicy.given },
+        // actions: the command line can turn them on and nothing turns them off
+        .{ "check", MergePolicy.action },
+        .{ "self_test", MergePolicy.action },
+        .{ "self_test_light", MergePolicy.action },
+        .{ "help", MergePolicy.action },
+        .{ "version", MergePolicy.action },
+        .{ "benchmark", MergePolicy.action },
+        .{ "report", MergePolicy.action },
+        .{ "verify_share", MergePolicy.action },
+        .{ "autotune", MergePolicy.action },
+        .{ "autotune_seconds", MergePolicy.together },
+        .{ "cloudflare", MergePolicy.action },
+        .{ "allow_bad_wallet", MergePolicy.action },
+        .{ "check_wallet", MergePolicy.action },
+        // not merged, on purpose
+        .{ "pools", MergePolicy.elsewhere },
+        .{ "config_path", MergePolicy.elsewhere },
+        .{ "bench_hashes", MergePolicy.together },
+        .{ "seen", MergePolicy.elsewhere },
+    };
+
+    inline for (policies) |entry| {
+        if (comptime std.mem.eql(u8, entry[0], name)) return entry[1];
+    }
+
+    @compileError("options.mergeInto does not say what to do with Options." ++ name);
+}
+
+test "every field of Options has a merge policy" {
+    // The test is the compile: `mergePolicy` raises `@compileError` for a field
+    // that is not in its table. This loop is what makes the compiler visit them.
+    inline for (std.meta.fields(Options)) |field| {
+        _ = mergePolicy(field.name);
+    }
+}
+
+test "a flag given on the command line beats the config file" {
+    const testing = std.testing;
+
+    var cli = Options{
+        // The four that were silently dropped, plus one action.
+        .profile = .free,
+        .max_temp = 70,
+        .donate_percent = 0,
+        .ban_cooldown = 5,
+        .dataset_cache_mb = 0,
+        .allow_bad_wallet = true,
+        .verify_share = true,
+        .seen = .{
+            .profile = true,
+            .max_temp = true,
+            .donate_percent = true,
+            .ban_cooldown = true,
+            .dataset_cache = true,
+        },
+    };
+    defer cli.deinit(testing.allocator);
+
+    // What a config file would have produced.
+    var from_file = Options{
+        .profile = .watt,
+        .max_temp = null,
+        .donate_percent = @import("fee.zig").default_percent,
+        .ban_cooldown = 900,
+        .dataset_cache_mb = 512,
+    };
+    defer from_file.deinit(testing.allocator);
+
+    mergeInto(testing.allocator, &from_file, &cli);
+
+    try testing.expectEqual(ProfileSetting.free, from_file.profile);
+    try testing.expectEqual(@as(?f32, 70), from_file.max_temp);
+    try testing.expectEqual(@as(u32, 0), from_file.donate_percent);
+    try testing.expectEqual(@as(u32, 5), from_file.ban_cooldown);
+    try testing.expectEqual(@as(?u64, 0), from_file.dataset_cache_mb);
+    try testing.expect(from_file.allow_bad_wallet);
+    try testing.expect(from_file.verify_share);
+
+    // And a command line that does not mention them leaves the file alone.
+    var quiet = Options{};
+    defer quiet.deinit(testing.allocator);
+
+    var kept = Options{ .profile = .watt, .max_temp = 80, .donate_percent = 1 };
+    defer kept.deinit(testing.allocator);
+
+    mergeInto(testing.allocator, &kept, &quiet);
+
+    try testing.expectEqual(ProfileSetting.watt, kept.profile);
+    try testing.expectEqual(@as(?f32, 80), kept.max_temp);
+    try testing.expectEqual(@as(u32, 1), kept.donate_percent);
+}
+
+/// A value of `T` that is different from `default_value`, for the fields the
+/// merge test can generate one for. Strings are excluded on purpose: the merge
+/// moves them, so a generated literal would be freed by `deinit`.
+fn otherValue(comptime T: type, default_value: T) ?T {
+    return switch (@typeInfo(T)) {
+        .Int => if (default_value == 7) @as(T, 8) else @as(T, 7),
+        .Bool => !default_value,
+        .Float => default_value + 1,
+        .Enum => blk: {
+            inline for (std.meta.fields(T)) |f| {
+                const candidate: T = @enumFromInt(f.value);
+                if (candidate != default_value) break :blk candidate;
+            }
+            break :blk default_value;
+        },
+        .Optional => |opt| switch (@typeInfo(opt.child)) {
+            .Pointer, .Array, .Struct, .Union => null,
+            else => otherValue(opt.child, default_value orelse return null) orelse return null,
+        },
+        else => null,
+    };
+}
+
+test "mergeInto copies every field that has a seen flag" {
+    const testing = std.testing;
+    var checked: usize = 0;
+
+    inline for (std.meta.fields(Options)) |field| {
+        if (comptime mergePolicy(field.name) == .seen and @hasField(Seen, field.name)) {
+            const T = field.type;
+            const defaults: Options = .{};
+            const default_value = @field(defaults, field.name);
+
+            if (comptime otherValue(T, default_value) != null) {
+                var extra: Options = .{};
+                defer extra.deinit(testing.allocator);
+                @field(extra, field.name) = otherValue(T, default_value).?;
+                @field(extra.seen, field.name) = true;
+
+                var base: Options = .{};
+                defer base.deinit(testing.allocator);
+
+                mergeInto(testing.allocator, &base, &extra);
+                try testing.expectEqual(otherValue(T, default_value).?, @field(base, field.name));
+
+                // And without the flag, the config file's value stands.
+                var quiet: Options = .{};
+                defer quiet.deinit(testing.allocator);
+                @field(quiet, field.name) = otherValue(T, default_value).?;
+
+                var kept: Options = .{};
+                defer kept.deinit(testing.allocator);
+                @field(kept, field.name) = default_value;
+
+                var no_flags: Options = .{};
+                defer no_flags.deinit(testing.allocator);
+
+                mergeInto(testing.allocator, &kept, &no_flags);
+                try testing.expectEqual(default_value, @field(kept, field.name));
+
+                checked += 1;
+            }
+        }
+    }
+
+    // A guard on the guard: if a refactor stops the loop from finding fields,
+    // this test would pass while checking nothing.
+    try testing.expect(checked >= 25);
+}
+
+test "http.host from JSON lives after parse and is not replaced by the CLI default" {
+    const testing = std.testing;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "http.json", .data =
+        \\{"http":{"enabled":true,"host":"0.0.0.0"},"pools":[{"url":"pool.example:3333","user":"x"}]}
+    });
+    const path = try tmp.dir.realpathAlloc(testing.allocator, "http.json");
+    defer testing.allocator.free(path);
+
+    var from_file = Options{};
+    defer from_file.deinit(testing.allocator);
+    try parseConfigFile(testing.allocator, &from_file, path);
+    // parseConfigFile has returned and freed its JSON parse tree. A slice into
+    // that tree used to dangle here; the config value is now owned by Options.
+    try testing.expectEqualStrings("0.0.0.0", from_file.http_host);
+
+    // No --http-host on the CLI means exactly that: do not replace the file's
+    // binding address with the command-line parser's default.
+    var quiet = Options{};
+    defer quiet.deinit(testing.allocator);
+    mergeInto(testing.allocator, &from_file, &quiet);
+    try testing.expectEqualStrings("0.0.0.0", from_file.http_host);
+
+    // An explicit CLI value wins and releases the config-owned copy once.
+    var cli = Options{ .http_host = "127.0.0.1", .seen = .{ .http_host = true } };
+    defer cli.deinit(testing.allocator);
+    mergeInto(testing.allocator, &from_file, &cli);
+    try testing.expectEqualStrings("127.0.0.1", from_file.http_host);
+}
+
+test "mergeInto transfers CLI allocations exactly once" {
+    const testing = std.testing;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "base.json", .data =
+        \\{"log-file":"config.log","pools":[{"url":"config.pool:3333","user":"config-wallet"}]}
+    });
+    const path = try tmp.dir.realpathAlloc(testing.allocator, "base.json");
+    defer testing.allocator.free(path);
+
+    var base = Options{};
+    defer base.deinit(testing.allocator);
+    try parseConfigFile(testing.allocator, &base, path);
+
+    var cli = try parseArgs(testing.allocator, &[_][]const u8{
+        "-o", "cli.pool:3333", "-u", "cli-wallet", "--log-file", "cli.log",
+    });
+    defer cli.deinit(testing.allocator);
+
+    mergeInto(testing.allocator, &base, &cli);
+    try testing.expectEqualStrings("cli.log", base.log_file.?);
+    try testing.expectEqualStrings("cli.pool", base.pools.items[0].host);
+    try testing.expectEqual(@as(usize, 1), base.pools.items.len);
+
+    // Both deinit calls run via defer. The GPA-backed testing allocator will
+    // fail this test on a leak; a double free fails immediately.
+}
+
+test "an explicit HTTP port of zero turns off the configured API" {
+    const testing = std.testing;
+    var cli = try parseArgs(testing.allocator, &[_][]const u8{"--http-port=0"});
+    defer cli.deinit(testing.allocator);
+
+    var config = Options{ .api_port = 3811 };
+    defer config.deinit(testing.allocator);
+    mergeInto(testing.allocator, &config, &cli);
+    try testing.expectEqual(@as(u16, 0), config.api_port);
+}
+
+test "explicit algo auto and pinning both override the config" {
+    const testing = std.testing;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(.{ .sub_path = "algo.json", .data =
+        \\{"algo":"rx/0","pools":[{"url":"pool.example:3333","user":"x"}]}
+    });
+    const path = try tmp.dir.realpathAlloc(testing.allocator, "algo.json");
+    defer testing.allocator.free(path);
+
+    var from_file = Options{};
+    defer from_file.deinit(testing.allocator);
+    try parseConfigFile(testing.allocator, &from_file, path);
+    try testing.expectEqual(api.Algo.rx_0, from_file.algo.?);
+
+    var to_auto = try parseArgs(testing.allocator, &[_][]const u8{"--algo=auto"});
+    defer to_auto.deinit(testing.allocator);
+    mergeInto(testing.allocator, &from_file, &to_auto);
+    try testing.expect(from_file.algo == null);
+    try testing.expect(from_file.algo_all);
+
+    var to_pin = try parseArgs(testing.allocator, &[_][]const u8{"--algo=rx/wow"});
+    defer to_pin.deinit(testing.allocator);
+    mergeInto(testing.allocator, &from_file, &to_pin);
+    try testing.expectEqual(api.Algo.rx_wow, from_file.algo.?);
+    try testing.expect(!from_file.algo_all);
+}
+
+test "a global algorithm choice overrides a pool's algorithm" {
+    const testing = std.testing;
+    var buf: [api.auto_algos.len]api.Algo = undefined;
+
+    var per_pool = Pool{ .algo = .rx_0 };
+    var global_pin = Options{ .algo = .rx_wow };
+    try testing.expectEqual(api.Algo.rx_wow, global_pin.poolAlgo(&per_pool).?);
+    const pinned = global_pin.loginAlgos(&per_pool, &buf);
+    try testing.expectEqual(@as(usize, 1), pinned.len);
+    try testing.expectEqual(api.Algo.rx_wow, pinned[0]);
+
+    var global_auto = Options{ .algo_all = true };
+    try testing.expect(global_auto.poolAlgo(&per_pool) == null);
+    const all = global_auto.loginAlgos(&per_pool, &buf);
+    try testing.expectEqual(api.auto_algos.len, all.len);
+
+    // With no global choice, the pool's own pin remains in force.
+    var no_override = Options{};
+    try testing.expectEqual(api.Algo.rx_0, no_override.poolAlgo(&per_pool).?);
 }

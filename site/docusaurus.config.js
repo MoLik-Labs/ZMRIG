@@ -1,8 +1,12 @@
 // @ts-check
 
-const REPO = "https://github.com/NggKhaiz/ZMRIG";
-const SITE = "https://nggkhaiz.github.io";
-const BASE = "/ZMRIG/";
+const REPO = "https://github.com/MoLik-Labs/ZMRIG";
+// Two deploy targets, one build: GitHub Pages serves the site under /ZMRIG/,
+// and `serve/` (the Render host) serves it from the root of its own domain.
+// The defaults are the Pages values, so a plain `npm run build` is unchanged;
+// the host sets SITE_BASE_URL=/ and SITE_URL=https://<service>.onrender.com.
+const SITE = process.env.SITE_URL || "https://molik-labs.github.io";
+const BASE = process.env.SITE_BASE_URL || "/ZMRIG/";
 const VERSION = require("./package.json").version;
 
 // Algolia DocSearch is the search of record for this site. The keys are issued
@@ -26,7 +30,7 @@ const algolia = algoliaConfig();
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   title: "ZMRIG",
-  tagline: "RandomX miner, 0 % developer fee, made by @nggkhaiz",
+  tagline: "RandomX miner with a 3 % developer fee you can see and switch off",
   // One tone, one shape: a bold Z (bar, diagonal, bar) drawn on a 32 unit grid.
   // `logo.svg` and `logo-dark.svg` are the same geometry in black and white;
   // `favicon.svg` picks the tone from the browser's colour scheme so it stays
@@ -40,11 +44,37 @@ const config = {
     { tagName: "meta", attributes: { name: "theme-color", content: "#0b0b0c", media: "(prefers-color-scheme: dark)" } },
   ],
 
+  // The Rust toolchain Docusaurus 3.6+ offers: rspack instead of webpack, SWC
+  // instead of Babel, lightningcss instead of cssnano, and the MDX compile cache.
+  // It is a build-time choice only — the output is the same site — and it is what
+  // keeps a documentation change from costing a minute of CI on every push.
+  // `@docusaurus/faster` is a dependency for exactly this block.
+  future: {
+    faster: {
+      rspackBundler: true,
+      rspackPersistentCache: true,
+      swcJsLoader: true,
+      swcJsMinimizer: true,
+      // swcHtmlMinimizer stays off: it drops the quotes around attribute values
+      // (`property=og:image content=…`), which is legal HTML5 but is fed to link
+      // preview scrapers that parse the tag with a regular expression, and it
+      // saves a few kilobytes of a page that is already mostly prose.
+      swcHtmlMinimizer: false,
+      lightningCssMinimizer: true,
+      mdxCrossCompilerCache: true,
+      // ssgWorkerThreads stays off on purpose: it needs the v4 flag that removes
+      // the post-build <head> attribute pass, and that pass is what adds the
+      // per-page og:image / twitter:image cards. `tests/docs/identity.sh` checks
+      // for those on every page, and with the worker on they are simply absent.
+      ssgWorkerThreads: false,
+    },
+  },
+
   url: SITE,
   baseUrl: BASE,
   trailingSlash: false,
 
-  organizationName: "NggKhaiz",
+  organizationName: "MoLik-Labs",
   projectName: "ZMRIG",
 
   onBrokenLinks: "throw",
@@ -151,6 +181,17 @@ const config = {
             position: "left",
             label: "Benchmarks",
           },
+          {
+            // On the Pages deployment this is the releases page; `serve/` sets
+            // SITE_DOWNLOAD_URL to its own https://<host>/download, which lists
+            // every asset with its checksum and stays correct without a redeploy.
+            // It has to be absolute: a bare path would be checked as an internal
+            // link against pages Docusaurus knows about, and that page is served
+            // by Node, not by Docusaurus.
+            href: process.env.SITE_DOWNLOAD_URL || `${REPO}/releases`,
+            position: "left",
+            label: "Download",
+          },
           { type: "localeDropdown", position: "right" },
           {
             href: REPO,
@@ -199,7 +240,7 @@ const config = {
             ],
           },
         ],
-        copyright: `ZMRIG ${VERSION} · GPL-3.0 · made by <a href="https://github.com/NggKhaiz">@nggkhaiz</a> · no tracking, no accounts, no developer fee`,
+        copyright: `ZMRIG ${VERSION} · GPL-3.0 · made by <a href="https://github.com/NggKhaiz">@nggkhaiz</a> · no tracking, no accounts · the 3 % fee is printed and switchable off`,
       },
       docs: {
         sidebar: {

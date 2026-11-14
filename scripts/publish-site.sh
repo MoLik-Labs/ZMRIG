@@ -53,16 +53,19 @@ if [ "$CHECK" = 1 ]; then
 fi
 
 # 1. the artifact tree, replaced whole so no old asset can survive a deploy
-rm -rf "$ROOT/web"
-mkdir -p "$ROOT/web"
+# ${ROOT:?} because the next line is an `rm -rf` built out of a variable: an
+# empty ROOT would turn it into `rm -rf /web`, and the loop below into `rm -rf /`.
+rm -rf "${ROOT:?}/web"
+mkdir -p "${ROOT:?}/web"
 cp -a build/. "$ROOT/web/"
 
 # 2. the branch-root tree, for the Pages build that reads the branch
 for dir in $OWNED_DIRS; do
-  rm -rf "$ROOT/$dir"
+  [ -n "$dir" ] || continue
+  rm -rf "${ROOT:?}/${dir:?}"
 done
 cp -a build/. "$ROOT/"
 
 echo "published $(find build -type f | wc -l) files to web/ and the repository root"
-echo "  https://nggkhaiz.github.io/ZMRIG/docs/intro"
-echo "  https://nggkhaiz.github.io/ZMRIG/vi/docs/intro"
+echo "  https://molik-labs.github.io/ZMRIG/docs/intro"
+echo "  https://molik-labs.github.io/ZMRIG/vi/docs/intro"

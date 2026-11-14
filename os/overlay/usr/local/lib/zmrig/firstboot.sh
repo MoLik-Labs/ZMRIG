@@ -5,6 +5,19 @@
 set -eu
 
 CONF=/etc/zmrig/os.conf
+STAMP=/etc/zmrig/.identity-shown
+
+# The Device ID is the first thing an owner needs, and it is on the machine, not
+# in a manual: printed once, on the console, before anything else asks for
+# anything. A rig with a wallet and a fleet URL is not asked again.
+if [ ! -f "$STAMP" ]; then
+    if ID=$(/usr/local/bin/zmrig-os id 2>/dev/null); then
+        CONSOLE=/dev/tty1
+        [ -w "$CONSOLE" ] || CONSOLE=/dev/console
+        printf '\n%s\n\n' "$ID" > "$CONSOLE" 2>&1 || true
+        : > "$STAMP" 2>/dev/null || true
+    fi
+fi
 
 if [ -f "$CONF" ] && grep -q '^WALLET="..*"' "$CONF"; then
     exit 0

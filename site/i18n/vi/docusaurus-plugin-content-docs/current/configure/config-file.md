@@ -1,7 +1,7 @@
 ---
 title: File cấu hình
 description: Thứ tự ưu tiên, một config.json đầy đủ do installer ghi, và mọi khoá mà engine Zig hiểu.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-vi.png
+image: https://molik-labs.github.io/ZMRIG/img/og-vi.png
 ---
 
 # File cấu hình
@@ -34,7 +34,7 @@ thì có; xem changelog.)
   "randomx": {
     "mode": "auto",
     "rdmsr": true,
-    "wrmsr": true,
+    "msr": "auto",
     "numa": true,
     "scratchpad_prefetch_mode": 1
   },
@@ -96,6 +96,7 @@ hai.
 | `http.port` / `http.host` | number / string | 18080 / 127.0.0.1 | |
 | `http.access-token` | string | null | bắt buộc Bearer token |
 | `randomx.mode` | `auto`/`fast`/`light` | auto | `fast` dựng dataset 2 GiB |
+| `randomx.msr` | `"auto"` / true / false | `"auto"` | preset tắt prefetcher: `auto` hỏi máy trước, đáng 5-15 % trên máy thật; `wrmsr` kiểu bool là cùng một khóa |
 | `cpu.threads` | number hoặc mảng | theo cache | mảng là mỗi thread một phần tử |
 | `cpu.huge-pages` | bool | true | |
 | `cpu.huge-pages-jit` | bool | true | |

@@ -1,13 +1,2156 @@
-# Unreleased — ZMRIG OS: a miner you boot instead of install
+# Unreleased — the page a first-time rig owner reads
+
+_Not a release: no tag, no image. This lands on `BETA` and becomes a version when
+the release is cut._
+
+## Inputs that are legal JSON but fatal to the process
+
+The first bug was a `log-file` path with a NUL in it (`"log-file": "a\u0000b"`).
+JSON permits that byte; POSIX paths do not, and Zig's `createFile` marks the call
+`unreachable`. The installed `ReleaseFast` build had no safety check there, so a
+config file could kill the miner before the first log line. `--check` now refuses
+both `log-file` and pool `tls-ca` paths with a clear error. A separate
+`ReleaseSafe` build in `zmrig/tests/safety.sh` keeps those checks on for hostile
+JSON/CLI inputs without changing the binary that ships.
+
+The same pass found two more config-path bugs that were independent of the
+hashing code:
+
+- `http.host` was kept as a slice into the JSON parser's temporary arena. As
+  soon as `parseConfigFile` returned, the configured bind address was dangling;
+  additionally, the default `127.0.0.1` from the CLI parse overwrote the file
+  even when `--http-host` had never been given. The config value now has an
+  owned copy and only an explicit command-line host replaces it.
+- `-c FILE` reparses the command line to merge it with the config. The second
+  parse used to discard its options without freeing their strings, and changing
+  to a normal `deinit` would have double-freed strings the merge had borrowed.
+  The merge now moves ownership and clears the source; it is deinitialized after
+  the merge. A safety test runs `-c ... --donate-level=0 --max-temp=70` against
+  the checked binary and fails on any allocator leak.
+
+The WebSocket reader had its own malformed-peer case: it copied at most 125 bytes
+out of an oversized ping and cleared the frame length, leaving the rest to be
+parsed as a new frame. That desynchronised the stream and was logged as the
+ordinary `ConnectionClosed`, so the owner saw the pool close the connection.
+RFC 6455 forbids fragmented control frames and control payloads over 125 bytes;
+we now refuse them as `WsProtocol`, print what that means, and reconnect. The
+network suite sends a 512-byte ping and proves the refusal and reconnect both
+happen. The suite is now 30 cases.
+
+## The command line dropped controls whenever a config file was given
+
+The miner reads `-c FILE` first and then applies the command line on top, in
+`mergeInto`. That function listed most of the options and not all of them, so
+every option it forgot worked only when no config file was given - which is
+never, on an installed rig:
+
+```console
+$ zmrig --check -c /etc/zmrig/config.json --donate-level=0 --max-temp=70
+  donate  3% of Monero (rx/0) mining time to 46SQLW7D…    <- the fee was charged
+  thermal off (no --max-temp: nothing throttles…)         <- the limit was ignored
+```
+
+`--donate-level=0` charged the fee anyway, `--max-temp` left the thermal
+governor off, and `--profile`, `--ban-cooldown`, `--dataset-cache`,
+`--health-warmup`, `--health-restart` (including its seconds value) and
+`--autotune` were dropped. `--algo=auto` and a named `--algo` also failed to
+replace the config's algorithm state correctly: one could not clear a global or
+per-pool pin, and the other could not clear `auto`; even when the command-line
+value was present, the per-pool pin took precedence over the documented global
+flag. These were actual omissions from the merge;
+`--thermal-file`, `--http-access-token`, `--verify-share`, `--allow-bad-wallet`
+and `--report` were already merged, and are not counted as bugs here.
+
+`mergeInto` now lives in `options.zig`, next to the struct it merges, and the
+test at the end of that file walks `@typeInfo(Options)`: every field must be
+classified as copied-from-a-`seen`-flag, copied-when-given, an action, carried
+by another flag, or deliberately not merged - and adding an option without
+deciding breaks the compile. A second test generates a value for every field
+with a `seen` flag and asserts it lands, both directions. `cli.sh` checks the two
+that cost the user something: the fee and the temperature limit.
+
+## A hash is 16 384 dependent reads, and now that is written down
+
+
+`zmrig/tests/profile.sh` builds a copy of the hash engine with cycle counters in
+it (`-DXMO_PROFILE`, compiled out of every other build) and prints what each
+phase of one hash costs. On the 2 vCPU Xeon VM used for this fork's measurements,
+on the path the worker loop actually runs: **97.1 %** of the cycles are the eight
+VM programs — 16 384 random 64-byte reads from the 2080 MiB dataset, each
+dependent on the one before it — 2.7 % is the final AES pass over the scratchpad,
+0.2 % is blake2b, and the scratchpad fill is *free* because the pipelined API
+fuses it with that AES pass. The same binary through the one-shot API does the
+same work at 374–405 H/s against 392–433 H/s pipelined, which is the +5–7 % the
+mining loop already takes.
+
+The script also measures what one of those reads costs on the machine it runs on
+(218.8 ns here, against 70–90 ns on bare metal), which is the number that
+explains the 400 H/s of a contested VM and the 800–1 100 H/s in the older
+rounds of the performance guide. Both halves are now in
+`doc/PERFORMANCE.md` and the site's performance page, in both languages,
+together with the two things they rule out: compiler flags (five interleaved
+rounds of `-O3 -march=native`, `-Ofast`, `-funroll-loops`, `-O2` — medians
+401.7, 392.0, 394.6, 397.2 H/s, inside the ±6 % the host drifts) and the miner's
+own loop (`--bench -t 1` at 398.1 H/s against 395.7 H/s for the bare C API).
+
+## `--check` said the configuration was fine and the run disagreed
+
+`--check` is what the installer, `zmrig-os doctor` and every provisioning script
+asks before a rig is left alone, so a "config ok" from it has to mean the run
+will start. It did not. `-t 0` passed the check and the miner then refused it;
+`--scratchpad-prefetch=7` passed and hashed with mode 1, silently, forever;
+`--priority=99` passed and reached a `setpriority` the kernel answers with
+EINVAL, which nobody read; `-o host:0` passed and connected to port zero; and
+`--tls-ca` pointing at a file that does not exist passed and turned into a
+handshake failure later, on the pool's account.
+
+The worst of them was arithmetic. `-t 99999` was turned into a dataset size
+before the thread count was looked at:
+
+```console
+$ zmrig -t 99999 --bench
+zmrig: not enough memory for the 202398 MB dataset: 0 MB free in huge pages plus 3587 MB available
+```
+
+202398 MB is 2 MB of scratchpad per thread, for a thread count that could never
+have existed, offered as an explanation for a machine with 4 GB. Every one of
+these is now refused before anything is allocated, by name, with the range that
+is valid:
+
+```console
+zmrig: 99999 is not a thread count this miner can run: -t takes 1..128
+zmrig: --scratchpad-prefetch=7 is not a mode: 0 = no prefetch, 1 = prefetcht0 (default), 2 = prefetchnta, 3 = a plain load
+```
+
+### The config file was dropping values without saying so
+
+`"cpu": {"threads": "8"}` - a JSON string where a number belonged - mined with
+the default thread count and said nothing about it. So did `"algo": "rx/01"`,
+`"profile": "turbo"`, `"randomx": {"mode": "quick"}` and a `priority` that was
+not a number. A config file is written once by a script and then read for years,
+and a rig that hashes at half the thread count it was configured for has nothing
+anywhere that says why. Those values are still ignored - an XMRig file written
+for another version has to keep starting - but each one now says so once, on
+stderr, and the run continues with the default.
+
+That includes the mistake `zmrig --autotune` was itself making. It printed
+`"threads": 2` as the line to keep, and a `"threads"` key at the top of a config
+file is read by neither this miner nor XMRig - it lives under `cpu`. A
+recommendation that does nothing is worse than no recommendation, and the rig it
+was pasted into runs at the default thread count with nothing to show for it. The
+advice is now `"cpu": {"threads": 2}`, and a top-level `"threads"` in an existing
+file is reported rather than dropped.
+
+The same silence hid a second case in the same key. `cpu.threads` may also be a
+list of CPU indexes (XMRig's per-thread affinity), and the mask that carries them
+is 64 bits wide, so every index from 64 up was skipped without a word: a file
+written for a 96-core machine had a third of its threads pinned and the rest
+left to the scheduler, and the only visible symptom was a hashrate that did not
+match the tuning. The indexes that fit are still applied; the first one that does
+not is named on stderr.
+
+`pools` got the same treatment. An entry that is not an object -
+`"pools": ["pool.example:3333"]`, which is the shape people write when they are
+guessing - was skipped, so the run ended at "no pool configured" with nothing
+pointing at the line that caused it. It is now named, and a `pools` value that is
+not a list at all is not read as an empty one.
+
+### The one hash path that could crash, and the alignment it assumed
+
+RandomX's per-hash scratchpad pass exists twice: 128-bit AES, which every x86
+runs, and a 512-bit VAES version selected on Zen 5. The wide one began with
+`vmovdqa64` on the caller's `fill_state` - a `uint64_t[8]` that the VM keeps on
+a stack frame - which is a general-protection fault, not a wrong answer, on any
+frame that is not 64-byte aligned. `zmrig`'s own C API happens to bounce that
+buffer through an aligned local, which is why nobody has crashed; the library's
+contract was the part that was wrong.
+
+Both implementations now use unaligned loads and stores for the two buffers the
+caller owns - twelve instructions per hash, all of them outside the loops, which
+is below the noise floor of the measurement below. The conformance test in
+`zmrig/tests/api_test.cpp` runs *both* over identical inputs with the buffers
+deliberately eight bytes past a 64-byte boundary and requires the output to be
+bit-identical:
+
+```
+PASS wide scratchpad pass: both ran on unaligned buffers, output identical
+```
+
+Measuring it also settled a question worth writing down. On an Intel Xeon with
+AVX-512F, AVX-512VL and VAES - every instruction the wide path needs - it is
+**slower**: 55.3 µs against 50.8 µs for one 2 MiB pass, 0.92x. The Zen-5-only
+gate in `aes_hash.cpp` is not conservative, it is correct, and it stays.
+
+## Every algorithm switch was 16.5 seconds of nothing
+
+A multi-algorithm pool moves a rig between RandomX forks on its own schedule.
+Each move back rebuilt the dataset from the seed: 256 MB of cache, then 2080 MB
+built with that fork's program configuration. On two vCPUs, measured, `rx/0`
+cold took **16 491 ms** — and 20 337 ms on a slower day — during which the rig
+hashed nothing at all. On a pool that rotates every few minutes that is not a
+cold start, it is most of the run.
+
+The dataset is one read-only mapping, so it is now kept:
+
+| Event | before | after |
+| --- | ---: | ---: |
+| cold `rx/0` dataset | 16 491 ms | 16 491 ms |
+| switch to `panthera`, `rx/0` still mapped | 374 ms | 374 ms |
+| switch back to `rx/0` | 16 491 ms | **0 ms** |
+| hashes over one round trip | 99 973 | 337 338 |
+
+* `--dataset-cache[=MB]` (default: `auto`, keep what fits), `--no-dataset-cache`,
+  and `DATASET_CACHE` in the container. `--dataset-cache=0` is the same as off.
+* The decision is made per switch, and it is a memory decision: the retired
+  mapping has to coexist with the live one plus 64 MB of slack under the memory
+  limit the miner actually has — the cgroup's, not the host's, which is the
+  difference between a rig that switches and a rig the OOM killer takes. At most
+  two datasets are retained; a second Monero dataset on a 3 GiB container is
+  declined, in the log.
+* The log reports the cost it avoided rather than a vague success:
+  `switched to rx/0 without re-initialising: its dataset was still mapped (9 s
+  old, built in 18259 ms, 1 initialisation(s) saved), hash engine ready
+  immediately`. That time is the retained engine's own build, remembered per
+  engine: the last build in the log on a rotating pool is the *other* coin's
+  (348 ms for Panthera), and quoting it beside a 2 GiB rebuild would be a made-up
+  number.
+
+### The cache was returning wrong hashes, and the reason was not the hashes
+
+Shares submitted after a switch came back as mismatches from `--verify-share`.
+The first suspicion — a bad blob, a nonce offset, a broken verifier — was wrong
+on all three counts, and proving that closed the door on the real cause: the
+active RandomX configuration (dataset size, JIT program, AES keys, program
+count) is **process-wide** state, and a retained engine that is switched back to
+is not the one that was created last. It hashed under the other algorithm's
+program configuration: a perfectly valid RandomX hash of the wrong program.
+
+`xmo_engine_activate()` now applies the configuration the engine was built with
+— dataset flags, JIT flags, huge-page policy, the `RandomX_CurrentConfig` fields
+— and it is called from `xmo_engine_new`, `xmo_engine_seed`, `xmo_vm_new`, and
+from `Miner.start()`, which is the one that matters, because it runs before the
+first hash of every new pool job.
+
+Verified, not assumed: three shares submitted after a full
+`rx/0 → panthera → rx/0` round trip recompute to identical digests through
+`--verify-share`. `zmrig/tests/switch.sh` re-proves it on every push, in both
+the cached and the `--no-dataset-cache` configuration, and two unit tests pin
+the retention rule (`retentionFits`) that used to double-count the retired
+dataset.
+
+## The rig was hashing, but only sometimes
+
+Every number this project publishes is a rate: hashes per second. Not one of them
+answers the question that decides the payout — how many of the last hour's
+seconds were spent hashing at all. A rig that manages 1 000 H/s for 60 % of the
+day earns 60 % of what it should, and `speed 10s/60s/15m 1000 …` reads exactly
+the same on both days.
+
+So the miner now measures the clock it lives on. The monitor thread was already
+reading the hash counter once a second to build those rates; it now also asks
+whether the counter moved, and when it did not, what the engine and the governor
+were doing at that moment. Four categories, sampled per second, kept for two
+minutes:
+
+* **hashing** — the counter moved.
+* **building a dataset** — `randomx_init_dataset` was running: 14–20 s for
+  Monero's 2 GiB, measured on two vCPUs, and the price of every seed change.
+* **throttled** — `--max-temp` parked a thread. A decision, not a fault, and it
+  is reported as one rather than as "idle".
+* **no job** — nothing was hashing and nothing explains it: the pool is gone, or
+  a reconnect is in flight.
+
+The session ends with the sum:
+
+```console
+info hashing 29 s of 44 s (65.9 %): 16 s building a dataset
+```
+
+and a minute that was mostly the fourth category gets a warning instead of a
+silent percentage:
+
+```console
+warn hashing 41 % of the last minute: 22 s with no job (the pool is gone, or a reconnect is in flight)
+```
+
+The warning fires at most once a minute, only after the rig has hashed at least
+once, and never for a dataset build — that is expected, already logged with its
+own duration, and a warning about it would be noise on every start.
+
+### What the instrument found
+
+Used on two hostile pools on the same 2 vCPU host:
+
+| Pool | Behaviour | Result |
+| --- | --- | --- |
+| drops the socket every 5 s | 6–7 reconnects in 45 s | **0 s** lost — the workers keep hashing the last job while the main thread reconnects |
+| accepts the connection, never replies | no job, ever | `hashing 0 s of 24 s`, and the exit line names the reason |
+
+The first row is the design and had never been measured; `zmrig/tests/duty.sh`
+now asserts both, in 70 s, on every push.
+
+Two smaller bugs fell out of running it:
+
+* Every `systemctl stop` printed `warning connection lost: ConnectionClosed`
+  before `shutting down`. A SIGTERM wakes the blocking read, which is
+  indistinguishable from the pool closing the socket — except that the process
+  knows it is stopping. A warning about a lost connection during a clean shutdown
+  is how a log teaches somebody to ignore warnings.
+* The first version of the idle warning fired during the startup dataset build
+  ("hashing 0 % of the last minute"), which is the one time it is guaranteed to
+  be useless.
+
+### And two measurements that closed a question
+
+`--no-optimized-init` (the portable AVX2 dataset initialiser) was measured again
+for both halves of the claim: build time 19.9–20.9 s portable against
+20.1–20.9 s optimised, hashrate 950–962 against 905–967 H/s. Inside noise, both
+ways, so the default stays and the existing documentation is right.
+
+The other one was whether mining through a pool is slower than `--bench`, which
+an earlier run had suggested by 7 %. Alternating runs on the same host:
+**934–970 H/s** in `--bench`, **928–961 H/s** through a pool. That is the
+run-to-run spread of this machine, not an overhead — there is nothing in the pool
+path worth optimising.
+
+## Does the miner submit the shares it earned?
+
+Hashrate is the number everybody looks at and it is not the number that gets
+paid. A comparison that reads the wrong eight bytes of the digest, or uses `>`
+instead of `>=`, produces a rig that reports 1 000 H/s, logs nothing unusual and
+submits a fraction of the shares it should have found - or floods the pool until
+it bans the IP.
+
+RandomX output is uniform, so a correct target comparison submits exactly
+`hashes / difficulty` shares. That is a prediction with a number in it, and
+`zmrig/tests/targets.sh` checks it against a pool that counts, in two runs of
+one difficulty each so the expected count is exact rather than estimated:
+
+| Run | Difficulty | Hashes | Shares | Expected |
+| --- | ---: | ---: | ---: | --- |
+| a | 1 000 | 26 884 | **26** | 26 |
+| b | 1 000 000 | 25 424 | **0** | 0.03 |
+
+It also counts duplicate `(job, nonce)` pairs, because a rig that resubmits has
+an off-by-one in the pipelined `hash_next` bookkeeping and a real pool would
+call those stale, and it requires zero rejected and zero failed shares.
+
+The important half is neither count. The test takes the shares the pool was
+actually handed, recomputes them with `--verify-share`, and applies the rule a
+pool applies - the whole hash as a 256-bit little-endian number, below
+`2^256 / difficulty`. The miner's own check reads the top 64-bit word (bytes
+24..32) against `2^64 / difficulty`, which is the *same test* only if the
+rounding is right, and a comparison against the wrong eight bytes has exactly
+the same statistics as a correct one: every window of a uniform hash is uniform.
+That failure mode would pass every rate check in this file and be rejected by
+every real pool. Eight recomputed shares met the rule, which is the first
+end-to-end proof of the offset in this repository.
+
+### And the hand-over to the developer wallet costs nothing
+
+The fee documentation has always said a fee session must never cost the user a
+minute of hashing. Measured for the first time, with the duty meter, in an
+18-minute run at `--donate-level=10` (a session every 10 minutes instead of 33):
+
+| | |
+| --- | --- |
+| wall clock | 1 099 s |
+| hashing | 1 084 s (**98.6 %**) |
+| not hashing | 16 s - the dataset build at startup |
+| shares | 984 772 hashes, 17 accepted, 0 rejected |
+| fee session | 60 s owed, 59 s on the developer wallet, then back: **0 s lost** |
+
+Two reconnects, and neither costs a measurable second, for the same reason a
+pool that blinks does not: the workers keep hashing the job they have.
+
+### Three log lines that were lying about why a socket closed
+
+A closed socket has three causes and the log called all of them "connection
+lost":
+
+* **SIGTERM.** Every `systemctl stop` printed `warning connection lost:
+  ConnectionClosed` immediately before `shutting down`, which is how a log
+  teaches somebody to ignore warnings.
+* **The developer fee.** Every fee hand-over printed the same warning, so a
+  deliberate wallet swap read like a network fault - every 33 minutes, forever.
+* **A real disconnect.** The one case the warning is for.
+
+The monitor thread records why it shut the socket down (`.shutdown`, `.fee`) and
+the mining loop reads that instead of guessing: a hand-over now says
+`connection closed on purpose: the developer fee is due, reconnecting to pay it`
+at `info`, a shutdown says nothing, and the warning is left for the pool.
+
+### The run said "exit code 1" and nothing else
+
+The share test above went red on CI with a log that read, in full, `Process
+completed with exit code 1.` GitHub serves the log of a job from a signed URL on
+a storage host that was not answering, so there was nothing to read - not which
+case failed, not what the miner printed. Nothing was wrong with the test: it
+passes in 190 s on a machine that has a compiler warm.
+
+Annotations are served from the API instead of that blob, so the three pool tests
+(`switch.sh`, `duty.sh`, `targets.sh`) now emit one on failure, and the switch
+test puts the miner's own last fifteen lines - or the pool's - inside it. A red
+run is going to say which of the eight cases it was.
+
+## The tool has one index, and the container has a memory floor
+
+Three changes, all of them about the same failure: a rig that looks fine and
+mines slowly.
+
+### A container under 3 GiB was planned as if it were a host
+
+RandomX maps 2336 MB in one piece. Under a smaller limit the miner builds the
+256 MB cache and rebuilds the dataset per hash, which measured **10x slower** on
+the same cores — 973 H/s against 99 H/s, two threads. Three places knew that and
+none of them acted on it:
+
+* `deploy/docker/entry.js` now prints the cost at startup, with the number that
+  caused it and the flag that fixes it (`docker run --memory=2560m …`). Silent
+  when the limit is large enough, when `MODE=light` is deliberate, or when the
+  host itself is too small for a dataset — a note that fires on a healthy rig is
+  a note nobody reads.
+* `scripts/tune-linux.sh` no longer warns and then plans the fast layout anyway.
+  When the cgroup is the deciding number it switches the plan to `light` and
+  sizes the page reservation for the cache: every page reserved for a mapping
+  that will be declined is memory the rig never gets back. An explicit `--pages`
+  still wins, because an explicit number is a decision.
+* The Docker guide, the front page and the installer's own `args` output now say
+  the same thing, in that order: the flag, the measurement, and how to check
+  before starting.
+
+### The tool is one place, and it is now enforced
+
+`tool/README.md` is the index of everything a rig owner *runs* — the installer,
+the appliance CLI, the planner, the tuner, the container entry point and the
+image — with the tree each file lives in and the test that keeps it honest. It
+also explains why they are not all in one directory: `zmrig-os` must exist at
+`/usr/local/bin/zmrig-os` inside the image, and `oneclick.sh` must sit at the
+repository root for `curl … | sudo bash` to read what the documentation says it
+reads.
+
+`tests/lint/tool-layout.sh` runs in CI and enforces both halves of the promise:
+every path on the index exists, every top-level script is on the index, and
+every entry point named there has a test directory.
+
+### The download is smaller
+
+`tests/lint/repo-size.sh` fails on any tracked file over 1 MB outside `src/` and
+the published site mirror, and lists the ten largest when asked. It found a 3.6 MB
+Python wheel that nothing referenced and had been in every clone since it was
+added by accident.
+
+## Verifying on more than one core without buying the RAM twice
+
+Making `fast` mode work raised the obvious next question: a pool with four cores
+wanted four verifiers, which was 4 × 2336 MB. It does not have to be. RandomX is
+one read-only dataset plus a per-thread VM, which is exactly how the miner runs,
+so `zmrig --verify-share -t N` now hashes N shares at once over one dataset.
+
+The pool had to change with it: a verifier answered one share at a time, so a
+second thread inside the process would have had nothing to do. Each verifier
+process now keeps `VERIFIER_PIPELINE` shares in flight (twice its thread count by
+default, which is where the measurements stop improving) and matches the replies
+first in, first out — the order the child answers in. Measured warm, one seed, through `pool/src/verifier.js`:
+
+| Configuration | Processes | Threads | Light | Fast | RAM (`fast`) |
+| --- | --- | --- | --- | --- | --- |
+| `VERIFIER_CONCURRENCY=1` | 1 | 1 | 46 shares/s | 349 shares/s | 2336 MB |
+| `VERIFIER_CONCURRENCY=2` | 2 | 1 | 74 shares/s | 4.6 GiB needed | 4672 MB |
+| `CONCURRENCY=1 VERIFIER_THREADS=2` | 1 | 2 | **87 shares/s** | **626 shares/s** | **2336 MB** |
+
+Two threads in one process beat two processes and use half the memory.
+
+### More than one seed is where it broke
+
+The first threaded build returned *wrong hashes for the whole first round* when
+a client pipelined across a seed change, and the fixed-blob test that came
+before it could not see it. The cause was in the design: `seed` rebuilds the
+cache, and jobs submitted before it were still being hashed by the workers while
+it did. `run` now drains the queue before it changes the seed - and
+`pool/tests/verifier.test.js` has a case that sends two seeds through one
+threaded verifier and compares every hash with a single-threaded run.
+
+### Three bugs found by building it
+
+* The output buffer was only flushed at the top of the read loop, which was fine
+  while the pool sent one share and waited: it now sent one, waited, and the
+  reply sat in a buffer nobody flushed. Input is read with `poll` and replies are
+  written as soon as they are ready — a non-blocking check while shares are in
+  flight, then a 1 ms wake-up so a second share that arrives mid-hash is picked
+  up, and an indefinite wait when there is nothing to hash.
+* The first version waited for the oldest share and wrote whatever happened to
+  be ready, then exited: the last **7 of 2000** replies were never written.
+  `flushAll` keeps going until the queue is empty.
+* A 64 KiB read of many short lines announced `line too long` every time the
+  buffer was emptied, because "buffer full" was checked before "buffer empty".
+  The buffer is compacted and re-searched first; over-long lines are now
+  discarded up to their newline instead of being hashed as fragments.
+
+A timeout now kills the child instead of failing one share: with several shares
+in flight, the next reply would be matched to the wrong one. One failed share is
+honest; a wrong hash is not.
+
+## Verifying a share took 25 ms and did not have to
+
+The pool re-hashes every share it pays for, and that hash was expensive in the
+one way nobody could see from the configuration: `--verify-share` kept a 256 MB
+cache and **rebuilt the dataset for each share**. 2000 shares of one seed,
+measured on the 2 vCPU test box: 51.6 s, 25.5 ms each, 39 shares a second.
+
+The dataset is what a miner builds at startup and then reads for hours. A
+verifier can do the same. `--mode=fast` builds it once and hashes from it:
+
+| | `light` (default) | `fast` |
+| --- | --- | --- |
+| Setup | 0.6 s | 21.5 s at 2 threads, 42.5 s at 1 |
+| Per share, warm | 22 ms | **2.9 ms** |
+| One verifier | 46 shares/s | **349 shares/s** |
+| RAM per verifier | 256 MB | **2336 MB** |
+
+Same hashes from both, byte for byte; the mode changes how RandomX is
+initialised, not what it computes. The pool exposes it as `VERIFIER_MODE=fast`
+(passed to the child as its own `--mode`), and the default stays `light`: one
+verifier per core on a 1 GB VPS is not the place to find out what 2.3 GiB times
+two does.
+
+### The check said yes and the kernel said no
+
+Turning that on exposed a real bug on the way, which is why it is worth writing
+down. The verifier asked whether the dataset fits, was told yes, and was
+OOM-killed before it hashed a single share — on a host with 2.3 GB reserved as
+huge pages and 1.3 GB of ordinary memory. Both facts were true: `usableMemory`
+is capped by the *machine's* size, which is the right number for "does the
+machine have room", and the reserved page pool is part of the machine — but an
+ordinary `mmap` cannot touch it. The question a new allocation asks is
+`MemAvailable` **plus** the free huge pages, and that is now its own function
+(`availableMemory`, which also honours `--no-huge-pages`: a process told not to
+use the pool cannot count it). A verifier that cannot get the dataset now says
+so and uses the light cache instead of dying, and `--check` on the pool adds
+`VERIFIER_CONCURRENCY × 2336 MB` against `/proc/meminfo` and prints the number
+that fits:
+
+```text
+warn  VERIFIER_MODE=fast needs 9344 MB for 4 verifier(s) and 3641 MB can be
+      allocated here: set VERIFIER_CONCURRENCY=1 to fit
+```
+
+## The line splitter held a regex, not a copy
+
+Stratum reads arrive in whatever chunks the network hands over, so every
+connection runs a "find the newline, strip the CR" loop. That loop used
+`line.replace(/\r$/, '')` per line - a regex compile-free but still a regex
+match and a string copy on a path that runs once per share per rig.
+
+400 000 submits read 8 lines at a time, measured: **92 ms → 64 ms** in the pool,
+and the same change in the proxy. It is a small number quoted honestly: with
+`JSON.parse` on both sides of a real share the difference is under the noise of
+this host, and the win only shows up when one read carries many messages. The
+comment in the code says that, because "3x faster" would be a lie at the
+per-share level. A dropped connection now also drops its buffer, which the old
+loop kept until the process exited.
+
+## Two smaller ones from the same sweep
+
+* `Ledger.save()` wrote the state file with two-space indentation. 20 000
+  workers: 7.0 MB on disk and 47.6 ms per save, of which 34.3 ms was
+  `JSON.stringify`. Compact JSON: **4.8 MB**, 18.4 ms of stringify, 39–48 ms per
+  save (this host's write time is the noisy part; the stringify number is the
+  real one).
+* `os/plan.sh` read one cgroup layout. On a cgroup **v1** host it looked at
+  `${root}/memory/memory.limit_in_bytes` - usually `unlimited` - and planned the
+  huge page reservation from the *host's* RAM, which is the bug the v2 path had
+  already been fixed for. It now resolves the controller's own path from
+  `/proc/self/cgroup` and reads both layouts, and seven test cases pin the five
+  layouts that exist in the wild.
+
+## The container was sized for the host it ran on
+
+Three numbers decided how fast a container mined, and every one of them came from
+the host rather than from the container:
+
+* **Threads** were `os.cpus().length`, which lists the host's CPUs even under
+  `--cpuset-cpus=0-1`. Now `os.availableParallelism()`, the same
+  `sched_getaffinity` call the miner makes, so the shim and the miner agree about
+  how big this machine is. The quota still caps it, and an explicit `THREADS` is
+  still respected with a warning.
+* **Memory** was `/proc/meminfo`, which is not namespaced: `--memory=1g` on a 32 GB
+  host looked like 30 GB of headroom, and `--bench` passed its own memory check
+  right up to the OOM kill. `zmrig` now reads `memory.max`/`memory.limit_in_bytes`
+  and uses the smaller of that and the machine for the fast/light verdict, the
+  huge-page plan and the benchmark pre-flight. `--check` prints the limit, what is
+  left of it, and what will actually be mapped (`256 MB`, not `2336 MB`, when the
+  answer is light mode); `--bench` refuses with the cgroup named instead of
+  starting an allocation that cannot finish.
+* **Huge pages** were documented as needing `--cap-add=IPC_LOCK` and a
+  `/dev/hugepages` mount. They do not. An anonymous `MAP_HUGETLB` mapping needs no
+  capability at all, which was measured rather than assumed: with `CapEff: 0` and
+  no hugetlbfs mount, a process mapped **2336 MB of 2336 MB** from the reserved
+  pool and benchmarked 936.4 H/s. `docker run … args` now says which of the two
+  things that *do* block it applies - an empty host pool, or a cgroup hugetlb
+  limit of 0 - instead of a capability that was never required.
+
+The measurement that keeps the advice honest: 936.4 H/s from the pool against
+920.5 with transparent huge pages and **771.0 H/s on 4 KiB pages**, so the
+warning that said "~20 %" (and one place that said "up to 25 %") now says ~18 %,
+which is what both measuring sessions found.
+
+## The tuning script planned a reservation the container could not use
+
+`tune-linux.sh` sized the huge page reservation from `MemTotal`. Inside a VPS
+whose container has 2 GB of a 32 GB machine that is 32 GB, so `zmrig-tune`
+reserved 2.3 GB out of the *host's* pool for a dataset the container could never
+map - the host paid for it and the rig gained nothing. The plan is now capped by
+the cgroup limit (`memory.max`, or `memory.limit_in_bytes`; both read at the path
+`/proc/self/cgroup` names), the "Hardware" line reports `1024 MB usable of 3939 MB
+(cgroup limit)`, and when the dataset does not fit at all the reservation is
+skipped with the reason and the light-mode suggestion rather than a page count
+that cannot be satisfied. `--pages N` still wins, because it was asked for.
+
+## A junk `os.conf` is a rig that reboots every ten minutes
+
+`zmrig-os` passed `os.conf` straight to the miner's command line. `THREADS=abc`
+made the miner exit, the supervisor counted an exit as a crash, and five of those
+rebooted the machine - unattended, at three in the morning, over a typo in a file
+nobody was looking at. Every field now has a domain: out-of-range values fall back
+to the default with one `warning:` line naming the field and its new value, and
+the rig starts. `WORKER` and `API_TOKEN` are sanitised to the character set a
+stratum login can carry instead of splitting the argument list.
+
+## One page instead of five
+
+Setting up a rig meant reading `doc/INSTALL.md` for the installer, `doc/DOCKER.md`
+for the container, `doc/OS.md` for the image and `doc/FEE.md` for the fee - four
+documents written for four audiences, and nothing that answered the question a new
+owner actually asks: *which one, and how do I know it worked?*
+
+There is a page for that now, in both languages:
+[Setup from zero](https://molik-labs.github.io/ZMRIG/docs/install/setup) ·
+[Dựng rig từ đầu](https://molik-labs.github.io/ZMRIG/vi/docs/install/setup). It
+puts the three routes in one table, then five checks that each answer a different
+question, then the update matrix, the fee audit, naming the second rig, and the
+failure modes with the log line that identifies each one.
+
+The Vietnamese version is the point of the exercise: a first-time owner reading
+`zmrig-os doctor` output in English is one thing, and a first-time owner reading
+the instructions to get there in Vietnamese is another.
+
+## The commands were checked, not remembered
+
+A setup guide is the one page nobody rereads. Write `zmrig-os restrat`, and it
+reads perfectly, reviews perfectly, and fails in the reader's terminal.
+
+`tests/docs/setup-page.sh` (19 checks) parses both locales the way a reader uses
+them. Every `zmrig-os <command>` must be in the dispatcher's `case`. Every `zmrig
+<flag>` must be in the binary's own usage text. Every `oneclick.sh <subcommand>`
+must be dispatched, and every container command must be handled by the shim. The
+fee it quotes must equal `fee.default_percent`. Both locales must have the same
+sections, the page must be in the sidebar, and the quickstart must link to it.
+
+It found three things on its first run: `plan` and `purge` were implemented but
+missing from `--help`, because the help printed a fixed line range of its own
+header; and `doc/SETUP.md` still quoted a 1 % fee.
+
+## `--donate-level`, because "switchable" is not a switch
+
+The fee was documented as switchable and implemented as switchable, but the only
+way to switch it was to edit `config.json` - or to pass `DONATE=0` to the
+container, or `zmrig-os setup --donate 0` to the appliance. The installer, the one
+route most people take, had no flag at all.
+
+```console
+$ sudo ./oneclick.sh --wallet 4... --donate-level 0      # a fresh install, no fee
+$ sudo ./oneclick.sh config --donate-level 5             # rewrite the config
+$ sudo ./oneclick.sh --donate-level 11
+    xx --donate-level takes 0..10 (the miner's own ceiling), got 11
+```
+
+The value is written into `config.json` explicitly, so the file says what the rig
+pays rather than implying it, and a typo fails at setup instead of at boot.
+
+## The fee sweep now reads the whole tree
+
+`scripts/verify-fee.sh` used to compare the constant against four files. That is
+how the landing page kept "1 % developer fee" for a release after the constant
+moved to 3: the files that were checked were correct. The sweep now reads every
+Markdown, script, JSON and Zig file in the repository - with narrow patterns, so a
+pool's 0.6 % and a `--donate-level=5` example are not mistaken for the developer
+fee - and fails on any percentage that disagrees with the source. 67 statements in
+33 files, including the Vietnamese pages. A separate check fails a page that calls
+the Zig engine fee-free: the C++ engine is the one with no fee code.
+
+It immediately found six stale statements, in `oneclick.sh`, `package.json`,
+`doc/SETUP.md`, `os/build-iso.sh`, `zmrig/src/main.zig` and `zmrig/tests/cli.sh`.
+
+## Links are checked inside a page, too
+
+`tests/docs/links.sh` skipped `#anchor` links that stay on the page, and its
+slugger dropped non-ASCII letters - so every Vietnamese in-page link was
+unverifiable by construction (`#chạy-được-chưa` came out as `#chy-c`). It now
+checks same-page anchors and keeps the accents, uses the archived site's own
+folding rule for `legacy/content/`, and accepts a legacy page slug where the old
+renderer routes `#slug` to another document. 189 links, and it found a dead badge
+anchor in the README on the way.
+
+---
+
+# 6.48.0 — the boot that comes back configured
+
+## There was no container to pull
+
+Everything in this repository assumed the machine. The installer builds on the
+machine, the image boots the machine, and the pool needs a host with Node on it.
+Anyone who wanted to try a rig for ten minutes had to start by compiling.
+
+There is a published image now, `ghcr.io/molik-labs/zmrig`, built by CI from the
+same commit as the release binaries:
+
+```console
+$ docker run --rm -e WALLET=4YourAddress... -e POOL=gulf.moneroocean.stream:10001 \
+    ghcr.io/molik-labs/zmrig
+```
+
+One image, two jobs. The miner is the default; `pool` runs the Ocean Pool from the
+same bytes, so a rig and the pool it mines to cannot be built from different
+commits. The variables are the ones `zmrig-os` writes to `/etc/zmrig/os.conf`, and
+`docker inspect` answers which commit built what is running.
+
+Three things were not obvious until the image existed:
+
+**A CPU quota is not an affinity mask.** `docker run --cpus=2` limits the group,
+but the process still sees every CPU on the host, so a miner that sizes itself
+from the CPU count asks for one thread per physical core and then has all of them
+throttled together — when the quota is spent the whole group stops, and a thread
+with a dataset page in cache sits idle for the rest of the period. The image reads
+the cgroup quota (v2 `cpu.max`, v1 `cpu.cfs_quota_us`) and caps the automatic
+thread count to it. An explicit `THREADS` is always respected; it is only
+mentioned when it is above the quota. The miner itself reads the quota too - same
+two files, at the path `/proc/self/cgroup` names - so `systemd CPUQuota=` and a
+Kubernetes `limits.cpu` get the same treatment without a container, and `--bench`
+resolves the profile before it measures instead of reporting a throttled thread
+count as this machine's best.
+
+**A wallet with no default is a refusal, not a convenience.** `WALLET` and `POOL`
+have none: a placeholder wallet hashes for nobody and a default pool would be
+choosing a custodian on the operator's behalf. The shim names the missing variable
+and exits 2. The wallet is then checked at startup by the miner itself, so the
+verdict is in the log of every container whether or not anyone asked for it, and
+`ghcr.io/molik-labs/zmrig check` asks on demand.
+
+**An update needs two halves.** A container cannot replace its own image without
+a Docker socket, and handing a miner the ability to start any container on the
+machine is not a trade worth making. So `update --check` runs *inside* the image
+(the same code whether the host has Node or not) and resolves the published tag
+over anonymous HTTPS, comparing the release label with the version baked into the
+running container; `zmrig-docker-update --apply` runs on the host, pulls, and only
+then recreates. A failed pull leaves the running miner alone. The exit codes are
+`zmrig-os update`'s: 0 current, 3 available, 2 cannot tell — and the daily timer
+treats 2 as a notice, because a unit that goes red when GitHub is unreachable is a
+unit that gets masked.
+
+`deploy/Dockerfile` (the Render/Fly pool service) is unchanged and stays
+deliberately minimal; `deploy/docker/` is the thing people pull. Both build the
+engine out of `src/` and `zmrig/` in the first stage, so neither can ship a
+verifier that does not match the miner.
+
+## The wallet address is decoded now, not counted
+
+Every address check in this repository was a regex on the alphabet: 95
+characters, starts with `4` or `8`. A Monero address also carries a four-byte
+Keccak-256 checksum, and nothing looked at it — so changing one character to
+another base58 character passed every check there was. A rig configured that
+way mines for a week, is credited correctly by the pool, and the payout goes to
+an address whose spend key nobody holds. The pool cannot tell; the miner cannot
+tell; the person finds out from a balance that never arrives.
+
+There is one decoder now, and everything that accepts an address uses it:
+
+- `lib/address.js` — block base58 (8 bytes to 11 characters) plus Keccak-256,
+  written out because Node's `crypto` only ships the SHA3 variant, which pads
+  differently and produces a different digest. It reports the network
+  (mainnet/stagenet/testnet) and the kind (standard/subaddress/integrated).
+  `pool/src/address.js` and `fleet/src/address.js` re-export it.
+- `zmrig/src/wallet.zig` — the same check inside the miner, allocation-free, so
+  a bad address is refused before the first hash instead of after the first
+  payout.
+
+Where it lands:
+
+| Where an address is typed | Before | Now |
+| --- | --- | --- |
+| `zmrig -u ADDR` | warned | **refuses to start** under `rx/0`, with the reason and the flag to override it |
+| `zmrig --check` | — | prints `wallet  standard mainnet checksum verified`, or `INVALID: …` |
+| `zmrig --check-wallet ADDR` | — | one verdict: kind, net, spend key, view key; exit 0/1 |
+| pool stratum login | accepted | refused with `wallet address is not valid: …`; not payable, not credited |
+| pool `looksLikeAddress()` | regex | regex fast-reject, then the checksum |
+| `zmrig-os setup` / `doctor` | "not a valid Monero address" | the reason: `checksum does not match: at least one character is wrong` |
+| bot `/wallet`, dashboard form, roster | "does not look like a Monero address" | the same reason, before anything is queued |
+| fleet alert | — | a rig reporting an address it cannot be paid on raises one alert, once |
+
+`--allow-bad-wallet` exists because a login can be address shaped without being
+a Monero address: another CryptoNote coin, or a pool account name that happens
+to be 95 characters. Without it, a bad checksum under `rx/0` is a refusal — a
+rig that does not start is better than a rig that hashes for nobody — and for
+every other algorithm the check stays advisory, because this repository only
+claims to know Monero's format.
+
+The pool's tests were the only suite CI did not run. They run now, in a `pool`
+job, together with the fee audit: a change to the payout path could previously
+break the ledger, the address check or the share verifier and merge green.
+
+## The one address nobody checked was the pool's own
+
+Every login is checked, and the fee destination is not a login: it is a value in
+a config file, published at `/api/config` and on the status page, and every fee
+payment goes to it. One wrong character in it is still 95 base58 characters, so
+the shape check that guarded it passed, and the pool would have run happily
+collecting fees for a key nobody holds.
+
+`validateConfig` now decodes it before anything starts. Ledger mode still
+tolerates a placeholder — nothing leaves the box — but a string shaped like an
+address has to decode, checksum included, or the pool refuses to start and says
+which character class is wrong.
+
+## The image was missing the file that decodes addresses
+
+`pool/src/address.js` is a two-line re-export of `lib/address.js`, and
+`deploy/Dockerfile` copied `pool/` but not `lib/`. That was invisible while the
+require was lazy — on the login path — so the image built, started, answered
+`/api/config` and passed every check; the first rig to connect would have
+crashed it. Checking the fee address at startup turned it into a build-time
+failure, which is how it was found.
+
+The image copies `lib/`, a CI step runs the decoder inside the image (a real
+address decodes, a typo is refused), and a test walks every
+`require('../../…')` in `pool/src` and asserts `deploy/Dockerfile` copies that
+directory. Removing the `COPY` makes it fail, which is the only way to know a
+regression test is one.
+
+## One typo, one alert
+
+Every rig on a farm reports the same wallet, and they check in within seconds of
+each other, so a bad address in the shared config produced one alert per rig:
+eleven identical warnings about one problem, which is how a chat gets muted. The
+alert is keyed by the address now — rigs that have already been told stay quiet,
+the message that goes out says how many machines it affects (`💸 5 rigs all mine
+to an address that cannot be paid - …`), and it comes once per cooldown.
+
+Suppressing the repeat also suppressed the rest of that check-in for a while,
+which would have left every rig on such a farm unwatched apart from the first to
+speak; the test asserts a rig whose wallet warning was suppressed still reports
+its hashrate halving.
+
+Five bugs in the installed appliance, all of them quiet: each one made a rig look
+healthier than it was, and none of them printed a warning. Found by reading the
+boot path against the tests that claim to cover it.
+
+## The rollback dropped the kernel parameters
+
+An installed rig keeps a 1024-byte GRUB environment block with `zmrig_slot` in it.
+It also keeps `zmrig_extra`: `isolcpus=`, `nohz_full=`, `rcu_nocbs=` and the
+thermal cap, written there by `zmrig-os isolate` because none of them can be
+applied after boot. The initramfs's `write_grubenv` wrote a block containing the
+slot and nothing else, so the automatic rollback — the path that runs when nobody
+is watching — threw every other key away. The rig came back on the other slot,
+mining on every core, and the log said it had rolled back successfully.
+
+Both writers now build the block with `plan_grubenv_block` in `os/plan.sh`, which
+parses what is there, replaces one key, and pads back to exactly 1024 bytes. A key
+too large for the block is refused rather than written truncated.
+
+## `doctor` advised a reservation the machine could not afford
+
+The gigantic-page line ended with `zmrig-os hugepages 1g 3` whatever it was
+running on, because three is what a Monero dataset needs. On a 4 GB rig that is
+an instruction to take 3 GB of RAM permanently out of the machine and leave 1 GB
+for the kernel, the page cache and the shell — advice that turns a fast rig into
+a swapping one, printed by the tool whose job is to say whether the rig is
+healthy.
+
+`plan_gigantic_pages need_mb total_mb` answers the machine-shaped question: a
+page only when 2 GiB would still be left over. `doctor` prints the number when
+there is one and says the box cannot spare a page when there is not; with no
+`plan.sh` it prints neither, because a damaged image cannot work that out. Seven
+assertions in `os/tests/plan.sh` and two in `os/tests/control.sh`, the second
+running the real `doctor` against a faked 32 GB and a faked 4 GB machine.
+
+## An installed rig forgot how it had been set up
+
+`zmrig-os install` writes the config the installed system boots from, and it did
+that with its own copy of the config heredoc. The running system's copy learned
+`ISOLATE`, `HUGEPAGES` and `HUGEPAGES_1G`; the installer's never did. A stick
+prepared with `zmrig-os isolate 4` and then installed produced a rig with no
+isolation at all — mining on every core, on the machine whose owner had just
+asked it not to — and the log said the install had gone well. It is the same
+failure as the `zmrig_extra` one below, in a different file.
+
+There is one writer for the config (`conf_body`) and one for the environment
+block (`grubenv_set path key value`). The install uses them for the target's
+`/etc/zmrig/os.conf` and for `zmrig_extra` in its GRUB block, so the parameters
+the stick booted with are the parameters the disk boots with. The test asserts
+the two config files have *the same keys*, not that three particular ones are
+present: the next key somebody adds is the one a spot check misses.
+
+## The installed menu never read `zmrig_extra`
+
+Worse than the first one, because it was unconditional: the `grub.cfg` that
+`zmrig-os install` writes implemented `load_env` and then used `${zmrig_params}`
+only. `zmrig-os isolate 4` wrote the parameters, printed `next boot: isolcpus=…`,
+and the next boot ignored them — on every installed rig, from the first release
+that had `isolate`. Every entry now passes `${zmrig_extra}`, `set zmrig_extra=""`
+is in the header so the reference is defined with or without a block, and the
+generator is a function (`grub_cfg_for`) so `os/tests/control.sh` can assert the
+menu rather than the source file.
+
+## `zmrig.os.nostart=1` did not survive the boot
+
+The initramfs wrote the flag to `/run/zmrig/nostart`. OpenRC mounts a fresh tmpfs
+over `/run`, so by the time the supervisor looked, the flag was gone and the rig
+mined. The same file warns, three hundred lines earlier, that `/run` is exactly
+the wrong place for a marker that has to outlive the handover. It is now written
+to `/etc/zmrig/nostart` (overlay, one boot) as well, and the supervisor checks
+both.
+
+## Every rig reported a temperature of zero
+
+`thermal_now` prints `68 C` for people. The fleet payload parsed it with a
+digit test, which rejects the space, and fell back to `0`. So the server's
+`alert_temp` comparison was against zero for every rig in the fleet: the overheat
+alert could never fire, and `/devices` showed a column of `0 °C` that looked like
+a sensor problem. `thermal_c` returns the number, `fleet_body` uses it, and
+`os/tests/fleet.sh` proves 68 arrives at the real server code.
+
+## The supervisor's failure counter never reset
+
+`zmrig-os run` reboots after five failed starts in a row. The count only ever went
+up: a rig that restarted once a month rebooted after five months, and the log said
+"five failed starts" about a run of failures that had started in the spring. A
+start that lasts ten minutes now clears it (`plan_healthy_run`), and the restart
+delay doubles from 10 s to five minutes (`plan_restart_delay`) instead of
+reconnecting to the pool every ten seconds through an outage.
+
+## An update with no checksum is refused
+
+`verify_sha` returned success when the manifest had no `binary_sha256`, which
+means a truncated download, an error page behind a redirect, or a mirror serving
+the wrong file was installed as the miner and the supervisor was restarted into
+it. The automatic path now uses `verify_sha_required` and says so in one line;
+the interactive paths keep the optional behaviour, where an operator is present
+to decide.
+
+## 1 GiB pages are asked for, and the answer is reported
+
+RandomX reads a 2080 MB dataset in random 64-byte stripes. At 4 KiB that is a TLB
+miss per few accesses and about 28 % of the hashrate; at 2 MiB it is 1 040 entries
+spread over a TLB that holds roughly that many; at 1 GiB it is two. The mapper
+always tried 2 MiB. It now tries 1 GiB first, then the 2 MiB pool, then anonymous
+memory with `MADV_HUGEPAGE`, and the startup line says which one answered —
+`huge pages 2336 MB (explicit, 1 GiB pages)` against `(explicit, 2 MiB pages)`
+or `0 MB (THP fallback)`. The claim in the old output was "explicit", which was
+true of both and told nobody anything.
+
+What it cannot do is create the pool. Gigantic pages are contiguous physical
+memory carved out before the machine fragments, so this is a kernel parameter and
+a reboot, not a sysctl — on the validation host, with 3.9 GiB free and nothing
+else running, writing `nr_hugepages` under `hugepages-1048576kB` returns success
+and leaves the pool at 0. The new `zmrig-os hugepages` command makes it a
+decision: `zmrig-os hugepages` prints both pools and what the current algorithm
+needs, `zmrig-os hugepages 1g 3` writes `default_hugepagesz=1G hugepagesz=1G
+hugepages=3` into the GRUB environment block the next boot reads, and `zmrig-os
+hugepages off` removes it.
+
+Reserving both pools is now impossible, which is the bug this would have
+shipped: `hugepages=3` on the kernel line takes 3 GB of physically contiguous
+memory at boot, and the initramfs would then ask `/proc` for Monero's 1 168 × 2 MiB
+as well — 5.3 GB on a 4 GB machine, with the gigantic pool already held, so the
+second write either fails or wins by pushing the rest of the system into swap
+while the dataset is built. `reserve_pages` in the initramfs and `zmrig-os tune`
+both skip the 2 MiB reservation when the gigantic pool already covers what this
+run needs, and say so in the log.
+
+That block also carries `isolcpus=`, and the writer is now one function
+(`write_boot_params`) that composes both settings, because reserving pages and
+then isolating CPUs used to be two writers to one value — the same class of bug
+that cost every isolated rig its `isolcpus=` in 6.48.0. `zmrig --check` prints
+the pool and how many pages this run would take from it, and `doctor` reports it
+as information rather than a failure: not having a 1 GiB pool is normal, and the
+fallback to 2 MiB pages is where most of the gain already is.
+
+The extra 1-3 % is **not measured here** — no 1 GiB page can be reserved in this
+environment, so that path has never run on it. The fallback path has, and so has
+the composition of the kernel parameters.
+
+The pool's share verifier had two faults that only show up with the binary it
+ships with. `zmrig --verify-share` printed its fee banner on **stdout** before
+switching the log to stderr, and stdout is the protocol: the first share after a
+verifier was restarted came back as "unreadable verifier output" and was
+dropped. The binary now sets the sink before the banner, and the pool treats a
+`[timestamp]` line on that pipe as noise rather than as a reply.
+
+The second one is worse and would have shown up as a slow pool: the queue was
+only drained when a caller arrived, so with the default one verifier per core,
+shares queued behind a busy slot waited for the *next* share to arrive — and
+timed out. Measured after the fix: 103 shares/s on 2 vCPU with two verifiers,
+530 ms for the first (cache build).
+
+The fleet's version now has one home. The dashboard footer was printing 6.44.0
+and the Discord user agent 6.37 while the release was 6.48, because a constant in
+source only moves when somebody remembers; both now read `package.json` once, and
+a test fails on any version literal left in `fleet/src`.
+
+The measurement that goes with it: 2026-11-07, `--bench=3000`, alternating
+between the two configurations on the same host, 897–900 H/s on 4 KiB pages
+against 1090–1094 with a reserved 2 MiB pool, **+21.5 %**. A back-to-back pair
+earlier the same day read 678 against 913 and came out at +34.7 %; that was the
+sandbox's throughput moving 20 % between hours. Numbers from this host are only
+worth the difference between two runs that take turns.
+
+## Brotli was spending the wrong resource
+
+The quality policy charged the scarce resource — a tenth of a CPU on a free
+instance — to save bytes nobody is short of. Measured on the same three shapes
+(three runs, best of three): a 32 KB page at quality 11 takes 43 ms and saves
+0.1 KB against quality 10 at 14 ms; the 488 KB bundle at 11 takes 948 ms and
+saves 11 KB against 9 at 44 ms. The policy is now 11 below 8 KB, 10 to 64 KB, 9
+to 1 MB and 6 above, which compresses the whole 175-file site in 1.9 s instead of
+2.2 s and costs 2.7 % more bytes on a page — the trade a 0.1 CPU host wants.
+
+## The hosted site came back unstyled
+
+The committed `web/` is the GitHub Pages build, and in it every internal
+reference is `/ZMRIG/assets/...` — that is what `baseUrl` does. `serve/` answers
+from the root of its own domain, so the home page arrived with a stylesheet link
+to a path that does not exist there, and the CSS, both bundles, the icons and
+every internal link were `404`. The page still rendered, so nothing failed
+loudly: it was just a site with no stylesheet, and the documentation's own
+"why it is fast" numbers were measured on a build where the assets were never
+requested.
+
+`assets.rebase()` now reads the prefix out of the home page at boot and removes
+it from every text body in memory — 125 files, 4 072 references, 20 ms, once.
+Absolute URLs are deliberately untouched, because the canonical link and the
+`og:image` must keep pointing at the Pages site. A request that still carries the
+prefix (`/ZMRIG/docs/intro`, from a bookmark or from a link on the Pages site) is
+a `301` to the stripped path, and `/healthz` reports `site.rebased_from`, so the
+next deploy that lands the wrong build says so in a JSON field instead of in a
+screenshot. Building with `SITE_BASE_URL=/` still produces a build with nothing
+to rewrite.
+
+A test now follows every link in the committed build (`host/tests/site.test.js`,
+61 pages, 73 distinct same-origin references) and fails on a single 404. It is the
+test that was missing: the build's own links were never fetched by anything, which
+is why a site with no stylesheet passed every check in the repository.
+
+Two smaller things found while measuring it. The warm queue — the files
+compressed in the background after the socket opens — was `every page, then every
+asset`, sliced to 24; the site has 61 pages, so it never contained an asset, and
+the stylesheet and both bundles were compressed on first request on every deploy.
+It now takes the two home pages, then the files those pages actually reference
+(parsed out of their HTML, in document order), then the other pages. And the
+HTTP server had no opinion about idle sockets: Node closes one after 5 s, Render's
+proxy keeps it for 60, and a documentation page with thirty assets is enough to
+hand the process a socket it has already dropped. `keepAliveTimeout` is 65 s,
+`headersTimeout` 66 s, `requestTimeout` 30 s.
+
+## The MSR preset is no longer opt-in
+
+Disabling the CPU's hardware prefetchers is worth 5-15 % on bare metal, and it
+was behind a flag almost nobody passed: `--msr` had to be typed, `oneclick.sh`
+wrote `wrmsr: true` and an appliance user got it only if `MSR=on`. The default is
+now `auto`, which probes the machine the way `--check` always did — is there a
+preset for this CPU, does `/dev/cpu/0/msr` answer, can it be written — and then
+applies the preset or prints one line saying why not. Nothing is written on a
+machine that cannot take it, and the old values are still restored on exit.
+
+`--no-msr`, `"msr": false` and `MSR="off"` all still mean what they said; `safe`
+mode never touches a register whatever the setting is. `oneclick.sh` and
+`config/performance.json` now write `"msr": "auto"` instead of `"wrmsr": true`,
+so a config file copied between a laptop and a VPS stops promising a register
+write to whichever machine cannot do it.
+
+## Two settings the image was missing
+
+`scripts/tune-linux.sh` has set `kernel.numa_balancing=0` and
+`transparent_hugepage/defrag=defer` since 6.30. The appliance did neither: an
+installed rig was the one place NUMA balancing stayed on, migrating pages of a
+dataset that is walked uniformly at random, and khugepaged was free to start
+direct compaction against the threads building it. The sysctl file declares the
+first and the initramfs sets the second, before the dataset exists.
+
+## Also
+
+- The site's own title and footer said "1 % developer fee" a release after the
+  constant moved to 3 %. `scripts/verify-fee.sh` now reads
+  `site/docusaurus.config.js` as well, and fails on a stale rate there.
+- Shellcheck runs at `-S warning` in CI, for every script in the repository, in
+  the dialect each shebang asks for (`tests/lint/shellcheck.sh`, 56 scripts). That
+  found a `for` loop over a quoted string that only ever ran once, an `rm -rf` in
+  `scripts/publish-site.sh` that an empty `OWNED_DIRS` could have pointed at `/`,
+  three dead variables, and a keyword used as a variable name.
+- `os/make-initramfs.sh` counts the modules it staged instead of leaving the
+  count in a pipeline's subshell, so "no kernel modules staged" is reported from
+  a number.
+
+Tests: `os/tests/plan.sh` 113, `os/tests/control.sh` 240, `os/tests/fleet.sh` 27,
+`zmrig/tests/cli.sh` 49, `scripts/verify-fee.sh` 10, oneclick ×5,
+`tests/lint/shellcheck.sh` 56 scripts.
+
+# 6.47.0 — a fee that is stated, and the pages that prove it
+
+The developer fee is 3 % of Monero mining time. This is a user-visible change
+from 1 %, and it is stated in the same places the old number was, because the
+mechanism that makes the fee honest is not the size of it: the rate is one
+constant in `zmrig/src/fee.zig`, the banner is printed from that constant at
+compile time, `--check` prints it next to the destination address, the log prints
+it at startup, the API reports it, and `scripts/verify-fee.sh` fails the build if
+any of them disagree.
+
+## Why 3 %
+
+Because that is what the work costs, and because a number that is stated can be
+argued with. The fee pays for the parts that do not mine: CI builds and publishes
+every image, the fleet and the site need a host and somebody to watch it, and the
+benchmarks behind `doc/PERFORMANCE.md` take a machine and a day each. A rig at
+1 kH/s pays about a dollar a month at 3 %.
+
+Nothing about it is hidden, and it is still a setting:
+
+```bash
+zmrig ... --donate-level=0      # off
+zmrig ... --donate-level=1      # the old default
+zmrig-os setup --donate 5       # on an appliance, written to os.conf
+```
+
+The banner can no longer drift from the code: it is
+`std.fmt.comptimePrint` over `fee.default_percent`, so a rate change that forgets
+the banner is a compile error rather than a sentence nobody re-reads.
+
+## The audit now checks the prose too
+
+`scripts/verify-fee.sh` had seven checks; it has nine:
+
+* the pages state the same rate as the constant — `doc/FEE.md`, both site
+  languages and the README are read, and a page that never mentions the number
+  fails the build;
+* the appliance default (`DONATE` in `zmrig-os`) equals the binary's.
+
+That is the difference between a policy and a claim: before this, a fee change
+could update the constant, the binary and the log and quietly leave the
+documentation behind.
+
+## `doc/FEE.md` states what it costs
+
+A table of what 0, 1, 3, 5 and 10 percent are worth per month on a single rig,
+with the arithmetic shown, so the cost is read rather than discovered from a
+payout that came up short. The cadence is restated for the new rate: 60 s of
+Monero mining every 33 minutes, which is what the debt clock produces at 3 %.
+
+## Also in this release
+
+* `DONATE="3"` in `os/overlay/etc/zmrig/os.conf.example`, with the comment that
+  says it is a setting and not a rule, and `doc/OS.md` matching it.
+* The installer writes `"donate-level": 3` explicitly, so the value is visible in
+  `config.json` rather than implied.
+* Both site languages, the README badge, the summary table and every page that
+  quoted the old rate.
+
+Tests: the fee audit (9 checks, source and binary), `zmrig/tests/cli.sh`
+(default rate and a changed rate), `os/tests/control.sh` (the appliance args keep
+the rate on the command line), `tests/oneclick/config.sh` (the installer writes
+it).
+
+# 6.46.0 — one service, three jobs, on the one instance a free month allows
+
+A free Render workspace gets 750 instance hours per calendar month, shared by
+every free service, with no rollover. A 31-day month is 744 hours. So one
+always-on service fits and a second one does not: the workspace goes over the
+limit and Render suspends the free services until the next month. Two blueprints
+in the repository described two deployments, and the person applying both found
+out four weeks later.
+
+`host/server.js` is now the deployment: one process, one port, one health check,
+answering all three clients.
+
+| who | asks for | answered by |
+| --- | --- | --- |
+| people | `/`, `/vi/`, `/download`, `/iso/v3`, `/api/releases.json` | the committed build in `web/` |
+| rigs | `POST /v1/hello`, once a minute each | the device protocol |
+| the bots | nothing — they poll Telegram and Discord outwards | two long-poll loops |
+
+The site is `web/`, the committed output of `site/`, so a deploy installs nothing
+and spends no build minutes; the repository has no runtime dependencies at all.
+The dashboard is deliberately not mounted: the public front door is the
+documentation, and `cd fleet && npm start` is what serves the dashboard.
+
+`/healthz` answers for all three jobs, so a deploy that lost one of them is
+visible from the outside rather than from a user:
+
+```json
+{"ok":true,"bots":{"telegram":true,"discord":false},
+ "fleet":{"rigs":3,"known":4},
+ "site":{"root":"/opt/render/project/src/web","files":244},
+ "uptime_s":3600,"rss_mb":64}
+```
+
+A control plane that refuses to start without a bot token is right when it does
+nothing else, and wrong here: with no token and no roster the host serves the
+documentation and accepts check-ins, and says in the log that no bot is
+connected. Only a broken `PORT` stops it.
+
+## Compression moved from boot to the first request
+
+The site host used to compress every file at boot with Brotli at quality 11.
+That is a few milliseconds on a 2 vCPU development machine and minutes on the 0.1 CPU a free
+Render instance gets — minutes during which the health check fails and the deploy
+is rolled back. The same boot now takes **17 ms** for 244 routes and 6.84 MB.
+
+Each file is compressed the first time somebody asks for it, and kept. The
+quality follows the size (11 up to 32 KB, 9 up to 256 KB, 6 above it), because
+Brotli's cost grows far faster than its gain. A browser that accepts Brotli never
+causes a gzip copy to exist. `.br`/`.gz` sidecars written at deploy time are still
+preferred, so a build that ships them does no work at all, and a sidecar older
+than its file is still ignored. The pages most likely to be opened first are
+compressed just after the socket opens, one per tick, so a cold start answers
+immediately and the warm copy is there by the time somebody clicks.
+
+Measured here, 2 vCPU, keep-alive, 60 requests per route:
+
+| path | first request | p50 | p95 |
+| --- | ---: | ---: | ---: |
+| `/` | 31.0 ms | 0.34 ms | 1.12 ms |
+| `/docs/intro` | 33.5 ms | 0.31 ms | 0.45 ms |
+| `/download` | 62.7 ms | 0.29 ms | 1.02 ms |
+| `/vi/` | 22.1 ms | 0.26 ms | 0.49 ms |
+
+## The blueprints say one thing each
+
+* `render.yaml` (root) — the one service: bots, rigs and documentation.
+* `fleet/render.yaml` — the control plane alone, with the dashboard, for a
+  standalone run or a paid plan.
+* `deploy/render-pool.yaml` — the pool alone. The duplicate site service is gone
+  from it: the root blueprint already serves those bytes.
+
+Nothing here is stored on the host. The filesystem is ephemeral, `FLEET_STATE` is
+a scratch cache, and `FLEET_ROSTER` in the environment is what a restart comes
+back to.
+
+## Also in this release
+
+* `host/tests` — 7 checks over a real socket: a rig and a browser on the same port
+  are answered by different halves, the health check reports all three jobs, the
+  dashboard is not published, and a missing site does not stop the rigs. The new
+  CI job also boots the real process and asks it.
+* `serve` — 45 → 46 checks, with the lazy tables and the quality policy covered.
+* Documentation, both languages: `doc/WEB.md`, `doc/FLEET.md`,
+  `site/docs/appliance/web.md`, `site/i18n/vi/.../web.md`, and the fleet pages
+  that described the deployment.
+
+Tests: `host` 7, `serve` 46, `fleet` 84, `pool` 34, `proxy` 60, docs links 103,
+published pages 22, identity 25 — all passing.
+
+# 6.45.0 — the numbers the rig boots with and the numbers it is tuned with are one file
+
+Three programs had to agree on how much memory to reserve and which CPUs to keep
+for mining: the initramfs, which reserves pages before userspace exists, the
+control tool, which re-applies them at every boot, and the tuning script, which
+does the same on any Linux host. Each had its own copy of the arithmetic, and
+copies drift — a rig could boot with Monero's 2.3 GB reserved and then be tuned
+for Scala's 192 MB thirty seconds later.
+
+`os/plan.sh` is now that arithmetic, once: pure POSIX sh functions over their
+arguments and `/sys`, with no side effects, so the initramfs can call them before
+there is a shell and a test can call them on a fake tree. `plan_need_mb`,
+`plan_pages`, `plan_iso_cpus`, `plan_threads`, `plan_mask_hex`,
+`plan_housekeeping` and `plan_join_list`. The tuning script sources the same file
+and asks it, and takes `--algo`, `--mode`, `--threads` and `--pages` to be told
+what the config says instead of guessing.
+
+## Isolation that survives a reboot
+
+`zmrig-os isolate N` keeps N logical CPUs for mining — as whole SMT cores, from
+the top, never cpu0 — pins the miner to them with `--cpu-affinity`, moves the IRQ
+masks to what is left, and writes `isolcpus=`, `nohz_full=` and `rcu_nocbs=` into
+the GRUB environment block. That block holds more than one key now (`zmrig_slot`
+and `zmrig_extra`), and each write merges the 1024-byte block instead of
+replacing it: switching slots no longer forgets the kernel parameters, and
+changing the parameters no longer forgets the slot.
+
+The thread count follows the mask. A `balanced` rig on a machine where the miner
+may only run on three cores pins three threads, not seven: a pinned count larger
+than the mask is oversubscription, not throughput. `ISOLATE=0` hands the machine
+back to the `AFFINITY=auto` mask from 6.44.0, which is the default when nothing is
+isolated.
+
+## A tuner that is told what the rig is
+
+`HUGEPAGES` is documented and obeyed: empty sizes the pool from the algorithm,
+`0` turns the reservation off, a number is taken literally — `zmrig-os tune`
+passes the count straight through instead of replacing it with "2M". The
+reservation itself is capped at installed RAM minus 512 MB, so a 1 GB box gets a
+partial pool it can use rather than a write the kernel clamps to zero.
+
+`--algo` and `--mode` reach the tuner, so a Scala rig no longer reserves Monero's
+dataset, and `--mode eco` reserves for the threads eco actually runs. It also
+composes with 6.44.0's NUMA and interrupt steps: they are passed alongside.
+
+## Sensors: the die, not the guess
+
+`thermal_now` read whichever hwmon chip answered last, which on a desktop board
+is as likely to be a Super I/O as the CPU. It now reads in tiers — the CPU die
+(`coretemp`, `k10temp`, `zenpower`, `k8temp`, `x86_pkg_temp`), then the board
+(`nct6775`/`nct6683`/`nct6687`, `it87`, `asus`, `dell_smm`, `thinkpad`,
+`sp5100_tco`, `applesmc`), then anything else, and `acpitz` last, because it is a
+southbridge estimate that reads 10-20 °C below the die. Inside a tier it takes
+the hottest reading, not the last one read: a governor watching core 0 while
+core 5 cooks is not a governor.
+
+## Hardware compatibility
+
+The initramfs now carries the network drivers a rig actually has — `e1000e`,
+`igb`, `r8169`, `igc`, `atlantic`, `tg3`, `virtio_net`, USB tethering — and the
+eMMC/SD path (`mmc_core`, `mmc_block`, `sdhci`, `sdhci_pci`, `sdhci_acpi`), so a
+machine that boots from a USB stick can also reach a pool, and a small
+single-board machine can find its own storage.
+
+## The doctor answers in JSON
+
+`zmrig-os doctor --json` is one object with one entry per check and a non-zero
+exit when anything failed, which is what a monitoring agent needs instead of
+prose. `status` grew `hugepages` and `cpus` lines: the two numbers a "why is it
+slower than yesterday" question turns into. A damaged image that lost
+`os/plan.sh` still answers `doctor` and `status` — with a failed `plan` line —
+instead of dying on a missing function.
+
+## Forty rigs, one wallet, on the pool side
+
+6.43.0 summed the hashrate the fleet reports per wallet. This is the other half —
+what the pool itself does with a hundred connections on one address. The ledger
+already keyed by wallet, and now it says so: per-rig
+counters, `walletSummary()` over the same share records the payout uses, and
+`GET /api/worker/<wallet>` returning the balance, the summed hashrate and every
+rig behind it — including the rig that went quiet, listed with a zero rate. The
+rig map is capped and evicts the least recently seen, because a rig name is free
+text from a public connection. Wallet and rig rates use one shared window span,
+so the rigs add up to the wallet and the wallets add up to the pool.
+
+## Also
+
+* `zmrig-os quickstart --wallet … ` configures, tunes, enrols and starts in one
+  command, and reports whether the miner actually started.
+* `os/tests/plan.sh`: 84 tests over the memory and CPU arithmetic, including
+  fake `/sys` trees for SMT topology and sensor tiers. `control.sh` is 217, the
+  pool's unit tests 31.
+* `plan.sh` ships in the initramfs, the squashfs and the shellcheck list; the ISO
+  self-check knows about it.
+# 6.44.0 — the machine is asked what it can do
+
+RandomX's fast mode wants AVX2, AES-NI and 2 GB of memory for the dataset, and a
+machine missing any of them still hashes — several times slower. Until now the
+only way to find out was to mine and compare the rate to a number on the site.
+
+## What changed
+
+* **`zmrig-os hardware`** prints the CPU, the flags that matter, the memory and a
+  one-word verdict — `full`, `light`, `slow` or `small` — with a sentence saying
+  what to do about it. It exits non-zero on the last two, so a provisioner stops
+  on the box that will never be fast instead of adding it to the pile.
+* **`doctor` prints the verdict** on every boot, next to the rest of the checks.
+* Flags are read from **every processor's line**, not the first one's, so a hybrid
+  CPU or a truncated `cpuinfo` does not produce a wrong answer.
+* `ZMRIG_OS_PROC` joins `ZMRIG_OS_SYS`: both point the tool at a fixture tree, which
+  is how the four verdicts are tested on a machine that has one of them.
+
+## Also in this release
+
+* **The installer and the tuner now run in CI.** They were only ever run by hand:
+  `oneclick.sh`'s six decision tests, the shallow-clone branch switch, the tuner's
+  targets against a fake `/proc`, shellcheck, and the download helper. A silent
+  `update` regression had no way to be caught before this.
+* **`doc/FLEET.md` says what is hosted and what is not**, in one place: one
+  process — the page and the bots — no pool, no database, no storage, no accounts;
+  the documentation site is static and lives on GitHub Pages.
+* **Both site languages** explain the hardware verdict and put numbers on what
+  actually writes to the boot stick.
+
+Tests: `os/tests/control.sh` 200 → 213. Nothing here is a claim about hashrate;
+the verdicts are thresholds, and the code that computes them is what is tested.
+
+# 6.43.0 — one wallet, one number
+
+Six machines in a shed mine into one address, and until now the dashboard showed
+six hashrates and a total. The total was right and the useful number was missing:
+what the farm is worth at the pool is per address, because that is what the pool
+pays and what an exchange sees. The fleet now groups by wallet.
+
+## What changed
+
+* **Hashrate is added up per wallet.** The dashboard's overview has a "By wallet"
+  table — address, hashrate, share of the fleet right now, how many rigs, hottest,
+  how many are mining — and `/status` in the chat grows the same lines once there
+  is more than one address. One wallet, one row, and the breakdown hides itself
+  when there is nothing to break down.
+* **A silent rig stops contributing, but is still counted.** A rig last heard from
+  an hour ago has probably not stopped mining, but its last reading is not the
+  present, and adding it to a fresh number is a lie by omission. It still counts
+  as a rig of the farm, and the group says how many are online.
+* **A rig with no wallet is its own row, last.** A machine mining into the wrong
+  address is the mistake this view exists to make visible, so it is never folded
+  into somebody else's total — and a rig nobody owns is not counted at all.
+* **The roster takes `wallet` and `pool` at the top.** Six machines, one address:
+  writing it six times is six chances to mistype one and split the balance between
+  two addresses nobody is watching. A rig that sets its own keeps it, so a
+  borrowed machine still pays its owner. A bad top-level address is reported and
+  the rigs keep everything else.
+* New `fleet/src/farms.js`, and 10 more tests (fleet suite 74 → 84) covering the
+  sum, the two-wallet order, the offline rig, the walletless rig, the share when
+  everything is down, the unowned record, and both presentations.
+
+Everything here is derived from check-ins held in memory; nothing new is stored,
+on disk or anywhere else.
+
+# 6.42.0 — the miner gets the cores, not the hyperthreads
+
+`nproc` counts SMT siblings, and every thread rule in the image was written
+against it. On a 16-thread Ryzen `--mode balanced` asked for 15 mining threads on
+8 physical cores: two threads per core's L2, hotter and slower than 8. The image
+now reads the kernel's topology (`thread_siblings_list`) and sizes itself to
+physical cores, with `nproc` only as the fallback for a machine that reports none.
+
+## What changed on the rig
+
+* **Threads follow cores.** `balanced` asks for `cores - 1`, not `threads - 1`;
+  doctor's huge-page arithmetic and the mode targets use the same number.
+* **The miner is pinned.** `--cpu-affinity` is a mask of one bit per physical
+  core, so the scheduler cannot move a thread onto a sibling pair or bounce it
+  between cores. `AFFINITY=auto` (default) computes it, `off` drops the flag, any
+  other value is passed through as an XMRig mask, and `zmrig.os.affinity=` sets it
+  from the kernel command line.
+* **Interrupts move off the mining cores.** With four cores or more,
+  `zmrig-os tune` writes `0` to every writable `/proc/irq/*/smp_affinity_list` and
+  `1` to the unbound workqueue `cpumask`. On two cores it does nothing — there is
+  nowhere to steer to.
+* **NUMA balancing is off** in max, balanced, eco and safe, and left alone in
+  light, where the machine is somebody's desktop.
+* `zmrig-os topology` prints what the tool decided and why; `doctor` shows it as
+  one line, including the mask.
+
+`zmrig-os tune` also stopped depending on its caller having loaded the config, so
+running it by hand works.
+
+## What was verified, and what was not
+
+The decision is tested, not the hashrate: `os/tests/control.sh` builds an
+8-core/16-thread sysfs tree and asserts `-t 7` and `--cpu-affinity 0xff` come out
+of it, that `AFFINITY=off` removes the flag, that a machine with no topology
+falls back instead of pinning everything to one core, and that a two-core box
+keeps its interrupts spread. `tests/oneclick/tune-targets.sh` drives the tuner
+against a fake `/proc` and `/sys` and asserts which file gets which value. On the
+2-thread VM this was written on, `nproc` says 2 and `zmrig-os topology` says one
+physical core, mask `0x1`.
+
+The effect on hashrate has not been measured in this environment — there is no
+idle Ryzen here to measure it on — so no number is claimed for it.
+
+## Tests
+
+`zmrig-os` control **200** (was 66), tuning targets **7** (new), fleet 26, lint 3,
+docs links 101, site pages 22, identity 25.
+
+# 6.41.0 — a control plane that survives its own host
+
+Render's free plan gives 750 instance hours per workspace per month, one always-on
+service, and a filesystem that is empty after every deploy, restart and spin-down.
+The bot was written for a laptop: it kept the fleet in a JSON file, so every
+restart forgot who owned which rig. That is fixed by moving the fleet into the
+environment, where it never depended on a disk in the first place.
+
+## The roster
+
+`FLEET_ROSTER` is one JSON object naming every rig and, optionally, what it should
+be running:
+
+```json
+{"owner": "tg:123456789",
+ "rigs": {"ZMR-1A2B-3C4D-5E6F": {"label": "basement", "wallet": "46SQL...", "mode": "safe", "maxtemp": 72}}}
+```
+
+It can also live in `fleet/roster.json`; the environment wins when both exist.
+Nothing in it is secret — a Device ID is public and a wallet is an address — and a
+rig listed there is enrolled before it has ever checked in. The roster knows the
+ID and not the key, because the key never leaves the machine, so the first secret
+that hashes to that ID binds the record and every later request is held to it
+exactly as if the rig had enrolled itself in the chat.
+
+## Desired state, not messages
+
+On every check-in the server compares what the roster says a rig should be with
+what the rig says it is, and queues the difference. A queued command is a message
+that may never arrive; a roster entry is a fact that is re-checked a minute from
+now, and the minute after that. So a rig whose config was edited on the box, or
+whose mode change shed threads, is brought back without anybody noticing, and a
+restart of the service changes nothing because nothing was remembered.
+
+The correction is pushed at most once per rig per five minutes (a rig that refuses
+a command reports the old value for ever, and a robot shouting once a minute is
+not a control plane), never while a setup is already in flight, and immediately
+when the roster itself changes.
+
+## One service, and the arithmetic behind it
+
+A 31-day month is 744 hours, so exactly one always-on free service fits inside
+750. The root `render.yaml` therefore deploys the bot, the Discord bot and the
+dashboard as one process, and the pool blueprint moved to `deploy/render-pool.yaml`
+for whoever wants it on a different workspace. `FLEET_STATE` is now documented as
+what it is — a scratch cache — and `.github/workflows/keepalive.yml` asks
+`/healthz` twice an hour, which covers a fleet that is quiet, while a fleet that
+is checking in every minute keeps the service awake by itself.
+
+## The dashboard now has every command the chat has
+
+`/rename` and `/log <rig> [n]` were the two the browser could not do. A name is
+applied immediately rather than queued — the rig never learns its own name, so
+there is nothing to ask it — and the log form takes 5-80 lines like the chat,
+clamped rather than refused because it is a display setting.
+
+A rig the roster pins now says so, and lists the fields it pins. Without that,
+changing a value in the browser can look like it silently failed: it applies on
+one check-in and is corrected on the next, because the roster is re-read every
+minute. The page now explains the loop instead of leaving somebody to guess at it.
+
+## The USB stick, in the docs
+
+Someone mining continuously for a year will ask whether the stick survives it,
+so `docs/appliance/iso` now answers with what the image actually does: after boot
+nothing is written to the stick — the root filesystem is a read-only squashfs and
+the writable layer is a tmpfs — so a year of mining is a handful of reads a day.
+The section covers metal-bodied sticks, small capacity, clean power, few reboots,
+the two Ventoy habits that matter (`VTOY_DEFAULT_IMAGE`, and no persistence for
+this image), and the honest answer that an internal drive is more durable than any
+stick. It claims no lifetime in hours, because that depends on the controller and
+the room.
+
+Tests: fleet **73** (was 59) — three roster shapes, a broken roster reported
+rather than thrown, a correction queued once instead of once a minute, the same
+fleet surviving an emptied store, and the dashboard's rename, log length and
+roster badge.
+
+# 6.40.1 — a portable build that compiles the portable way
+
+The Render deploy failed with one line naming a source file:
+
+```
+error: compilation failed: /src/src/crypto/randomx/blake2/avx2/blake2b_avx2.c
+```
+
+Two things were wrong, and only one of them was in that file's neighbourhood.
+
+## The image had a compiler with no C library headers
+
+`deploy/Dockerfile` installed `g++` with `--no-install-recommends`. On Debian,
+`g++` *recommends* `libc6-dev` rather than depending on it, so the build stage
+had a compiler and no `string.h`. Every translation unit then failed at its first
+glibc include. The build reported **one** of them — whichever background compile
+finished last — which is why the message named a perfectly good source file and
+nothing else. It now installs `build-essential`, and a three-line probe compiles
+and runs before the engine is touched, so a broken toolchain fails in one line
+with the real error.
+
+That was also a reporting bug worth fixing on its own: `build.sh` now records
+every file that failed and prints the *first* lines of each compiler's stderr
+instead of the last 25 of one, because the tail of a failed compile is the note
+under the error and the line that matters is at the top.
+
+## A `--portable` build now builds portable
+
+RandomX picks its implementation at runtime from CPUID, so the AVX2, SSE4.1 and
+SSSE3 translation units are always compiled — but their instruction set was only
+ever enabled as a side effect of `-march=native`. A `--portable` build compiled
+AVX2 intrinsics with AVX2 off: gcc turns that into
+
+```
+warning: AVX vector return without AVX enabled changes the ABI [-Wpsabi]
+```
+
+which is not a warning to shrug at — it means the calling convention of those
+functions is not the one the rest of the build assumes. Clang refuses the same
+code outright. Each file now carries its own flags (`-mavx2`, `-msse4.1`,
+`-mssse3`), the flag set is part of the object-cache signature so a stale object
+cannot survive the change, and the same fix applies to the ISO images built with
+`--arch=x86-64-v2`, where AVX2 was never enabled either.
+
+Measured here: `./zmrig/build.sh --jobs 2 --portable` on Debian 12 / gcc 12
+builds clean with no `-Wpsabi` warning and the resulting binary passes
+`--self-test=light` (all six reference vectors). The Docker image itself is built
+in CI now, so the next person to break `deploy/Dockerfile` is told by a job
+called "Pool image" rather than by a failed deploy.
+
+Tests: `zmrig/build.sh` portable build + self-test, shellcheck, workflow parse.
+
+# 6.40.0 — the rig notices when it stops keeping its own number
+
+A measurement is a claim about the future, and a machine only sometimes keeps it.
+A heat sink fills with dust, one stick of RAM starts erroring, somebody leaves a
+background job running on the box. None of that announces itself, and all of it
+looks the same from the outside: a hashrate under the rate the same machine
+measured when it was tuned.
+
+## The measurement is now stored with its result
+
+`zmrig-os autotune` used to keep the thread count and throw the rate away. It now
+writes three more keys next to it — `MEASURED_THREADS`, `MEASURED_HS` and
+`TUNED_AT` — so the rig can answer "is this still what I measured?" instead of
+only "how many threads was I told to use?".
+
+`zmrig-os status` prints the pair, and it is the useful shape of both numbers:
+
+```
+measured      1234 H/s at 4 thread(s), 6 h ago
+hashrate      1231.4 H/s
+```
+
+## It re-measures itself, on a conservative rule
+
+The supervisor watches the two numbers every fifteen minutes. All five of these
+must hold before it acts, because a needless re-measure costs more hashrate than
+the drift it chases:
+
+| Condition | Why |
+| --- | --- |
+| the 15-minute rate, not the 10-second one | a dataset build, a pool reconnect or a burst of shares moves the short window |
+| below 75 % of the measured rate | a rig at 90 % is a rig having a normal day |
+| at least 250 H/s measured | on a small machine two runs of the same box differ by tens of percent |
+| at least 6 h since the last measurement | while it measures, the rig runs at the wrong count for about 90 s |
+| still the count the measurement chose | a number set by hand is that person's decision, in every mode |
+
+When it fires, the rig logs one line — what it saw, what it measured — and runs
+the measurement again through the same reload handshake as 6.39.0, so nothing is
+counted as a crash and nothing reboots. `zmrig-os doctor` reports the same
+comparison on demand, and `zmrig-os autotune --auto --retune` is the manual form.
+
+A count chosen by hand now clears the baseline it replaces, and so does a mode
+change: comparing a rig against a rate the old mode produced would be measuring
+the wrong machine.
+
+## Debug leftovers have a test now
+
+`tests/lint/no-debug.sh` fails on `set -x` in a boot script, `console.debug` in
+the agent, `echo DEBUG`, `dbg!(`, `--inspect` and a stray `TODO`/`FIXME` in
+anything this project ships. The scan found none — which is the point of writing
+it down: `set -x` in a boot script writes every variable, including the wallet,
+to a serial console, and nothing else here would notice.
+
+## The control plane sees it too
+
+The rig now reports the rate it measured (`measured` in the check-in payload), so
+the bot and the dashboard have a second hashrate rule: below half of the rate the
+rig measured on itself. The existing rule compares each check-in with the one a
+minute before and catches a rig that fell over just now; this one catches the rig
+that has been sliding for a week. The dashboard prints the baseline next to the
+live rate, and the alert names the difference:
+
+```
+🐌 rig-2 is at 640.0 H/s, 45% of the 1.4 kH/s it measured itself
+```
+
+## `CHANNEL="beta"` asked for a file that was never uploaded
+
+Found while checking that the merge into `BETA` really published something
+usable: the rolling beta is a *pre-release*, and `releases/latest` never points
+at a pre-release. A rig with `CHANNEL="beta"` was therefore asking
+`releases/latest/download/zmrig-os-beta-<arch>.json` — a 404 on a release that
+looked published. The publish job had the mirror-image bug: a push to `BETA`
+uploaded `zmrig-os-stable-*.json` to the `os-beta` tag, because the channel came
+from the dispatch input default rather than from the release being written.
+
+Both are fixed and both are tested: the beta channel names `os-beta` explicitly,
+and the workflow takes the channel from the tag it is publishing.
+
+Tests: control **182** (was 157), lint **3** (new), fleet 59 (was 58), upstream
+17, self-check.
+
+# 6.39.0 — the image measures itself, and knows what it is built from
+
+Three things a rig should never need a person for: choosing its own thread count,
+telling you which base it came from, and staying on the newest image without
+anybody remembering to rebuild it.
+
+## It tunes itself, while it mines
+
+On a rig that has never been measured, with `THREADS="auto"` and `AUTO_AUTOTUNE=1`
+(the default), the supervisor starts the miner immediately and ninety seconds
+later runs the measurement in the background. The winner is written to
+`os.conf` and the miner reloads — one restart, no reboot, and the rig was never
+idle waiting for a benchmark.
+
+Three details that make this safe rather than clever:
+
+* the machine is **tuned before it is measured** (huge pages, THP, governor,
+  swappiness). A benchmark on an untuned box gives every candidate the same
+  handicap and the number it picks is the best of a bad set;
+* the reload is a handshake (`$RUN/reload`), not `zmrig-os restart`. Restarting
+  would start a *second* supervisor around a miner the first one is still
+  waiting for, and the reload is not counted as a crash, so a healthy rig is not
+  walked towards the five-failures-then-reboot limit by its own tuning;
+* `zmrig-os mode …` clears the measurement, because `safe` sheds threads under
+  heat and `eco`/`light` start lower — a count taken in one mode is the wrong
+  answer in another. A count set by hand is never overwritten, and
+  `AUTO_AUTOTUNE=0` turns the whole thing off.
+
+`zmrig-os status` says where the number came from: `auto`, `auto (the machine is
+being measured)`, or the number.
+
+## Which base is this?
+
+Alpine Linux `latest-stable`, `linux-lts`, squashfs at zstd level 19, a
+busybox initramfs. That is the answer, and it now lives in three places instead
+of one of them being somebody's memory:
+
+* the build writes it into the image at `/etc/zmrig/base`, and `zmrig-os version`
+  prints it — a bug report carries its own base;
+* the release manifest carries `"alpine"` and `"squashfs"`, so the published
+  image says what it was built on;
+* `./os/upstream.sh` prints the same from the source, next to what each channel
+  published.
+
+`latest-stable` is deliberate: a pin means the image stops taking security fixes
+the day nobody is looking. The cost of that is the opposite question, and
+`os/upstream.sh --check` answers it by comparing the Alpine release the mirror
+serves today with the `alpine` field of the last published manifest — exit 0 when
+a rebuild would change something. The weekly build now runs that check first and
+skips both architectures when nothing moved, instead of producing an identical
+158 MB file every Monday.
+
+## Smaller, and faster to unpack
+
+* **initramfs**: zstd instead of gzip, but only when the kernel's own
+  `/boot/config-*` says `CONFIG_RD_ZSTD=y` — read from the package the image is
+  built with, not assumed, with gzip as the fallback. The kernel finds the
+  archive by magic bytes, so the installer and the smoke test look for either
+  name.
+* **root filesystem**: zstd level 19 instead of the default 15. Decompression
+  speed is the same at every zstd level; only the build takes longer.
+
+Measured by CI on the same two-architecture build, before and after: the
+uploaded artifact went from 155.93 MB to **150.56 MB** (`x86-64-v3`) and 155.85 MB
+to **150.47 MB** (`x86-64-v2`), and both still boot in QEMU. What is asserted
+locally is the decision itself — the codec comes from the kernel config, and
+`grub.cfg` names the file the build wrote.
+
+## Automation
+
+* the scheduled build asks `os/upstream.sh --check` and skips when upstream has
+  not moved;
+* `publish` now requires the ISO job to have actually succeeded, so a skipped
+  build cannot reach the upload step with an empty `dist/`;
+* the control-tool tests assert that every version string in the repository
+  agrees. They found one that did not: `zmrig-os` still reported 6.37.0 while the
+  miner said 6.38.0, which is exactly the drift that makes an updater offer an
+  update a rig already has.
+
+## Measured
+
+| | |
+| --- | ---: |
+| `os/tests/control.sh` | 157 passed (was 141) |
+| `tests/upstream/upstream.test.sh` | 17 passed (new) |
+| `os/build-iso.sh --self-check` | passed |
+| `fleet` `npm test` | 58 passed |
+| `serve` `npm test` | 45 passed |
+| `site` `npm test` | 67 passed |
+| `tests/docs/links.sh` / `pages.sh` / `identity.sh` | 99 / 22 / 25 |
+
+# 6.38.0 — a web host that serves the docs and the downloads, and releases that are links
+
+Two conveniences that were missing from 6.37.0: the site and the images now live
+on a host you control, and the release job proves its own links work before
+anybody clicks one.
+
+## `serve/` — the web host
+
+One Node process, no dependencies, no build step of its own. It serves the
+documentation Docusaurus produces, a download page built from the GitHub releases
+API, that data as JSON, and three links that never change:
+
+| path | |
+| --- | --- |
+| `/` · `/vi/` | the documentation, in both locales |
+| `/download` | stable and beta, sizes, checksums, `dd` and `sha256sum` |
+| `/api/releases.json` | the same data for a script |
+| `/iso/v3` `/iso/v2` `/iso/beta` | `302` to the newest asset on that channel |
+| `/healthz` | file count, bytes, RSS, uptime |
+
+That last group is the point: a Ventoy menu, a shell script or a note stuck to a
+rig can name `/iso/v3` for a year and keep landing on the current image.
+
+`render.yaml` gained a second service for it. The build compiles the documentation
+with `SITE_BASE_URL=/` (the host serves from its own root, not from `/ZMRIG/`),
+writes the Brotli and gzip copies once, and starts the server. No secret, no
+database, no dependency install for the server itself.
+
+### Why it is fast
+
+Every file is read into memory at boot — 238 routes, 6.31 MB, 1.63 MB compressed —
+so a request is a Map lookup and one `end()`: no `stat`, no `open`, no `readdir`.
+`ETag` on everything, and a conditional request is answered `304` before the body
+is touched. Fingerprinted assets are `immutable` for a year; HTML revalidates.
+Brotli takes the home page from 16 KB to 3.9 KB. The release feed is fetched once
+per ten minutes and the rendered page is cached against it.
+
+Measured here (2 vCPU, keep-alive, warm cache, 300 samples):
+
+| path | p50 | p95 |
+| --- | ---: | ---: |
+| `/` | 0.25 ms | 0.81 ms |
+| `/docs/intro` | 0.19 ms | 0.34 ms |
+| a fingerprinted asset | 0.35 ms | 0.63 ms |
+| eight at a time | 0.89 ms | 4.92 ms |
+
+Nothing has been measured on Render itself; a different CPU and a real network sit
+between these numbers and a user.
+
+When GitHub cannot be reached the page says so — and says *what to fix*, walking
+the `cause` chain Node hides behind `fetch failed` to name a DNS failure, a
+refused connection, a timeout or an intercepted TLS certificate — keeps the last
+known links, and `/iso/*` answers `404` instead of redirecting into nothing.
+Nothing 500s because a third party is down.
+
+Four things that were wrong and are not any more:
+
+* a `.br`/`.gz` sidecar older than the file it belongs to is ignored rather than
+  served, so a stale deploy artefact cannot pin a page to last build's content
+  under this build's `ETag`;
+* `Accept-Encoding` is read as the weighted list it is: `br;q=0` is a refusal,
+  and `identity;q=0` gets a compressed body instead of an empty `406`;
+* `/download` and `/api/releases.json` carry `Content-Security-Policy:
+  default-src 'none'` — they are one HTML file and no script at all — while the
+  documentation is left alone;
+* `/docs` answers `301 /docs/intro` on the host. The build ships a `docs.html`
+  stub whose meta refresh points at `/ZMRIG/docs/intro`, which is correct on
+  GitHub Pages and a 404 on a service that serves from its own root.
+
+`scripts/latest-iso.sh --host https://your-host` asks the web host instead of
+`api.github.com`, for a network where GitHub is blocked and your own service is
+not; the hash arrives with the document, so no second download is needed to print
+it. `serve/.env.example` lists every setting, and the README carries a deploy
+button.
+
+## Releases that are links
+
+The publish job already uploaded the images. Three things were wrong or missing:
+
+* the channel manifests were uploaded with a glob (`dist/zmrig-os-*-*.json`) that
+  also matched every `*.iso.json`, so each manifest was uploaded twice under two
+  names;
+* nothing checked that the asset URLs actually answered, so a broken upload was
+  discovered by the first person to follow the docs;
+* the release notes said what the image was, not where it was.
+
+Now the job asks GitHub for every asset over HTTPS after uploading and fails when
+one is missing or the size disagrees, and it rewrites the release notes with a
+table of direct links and checksums, plus the `releases/latest/download/...` URLs
+on stable releases (never on the rolling beta, where `latest` points somewhere
+else).
+
+## Shared release client
+
+`fleet/src/releases.js` and the host needed the same answers, so the client moved
+to `lib/releases.js`; `fleet/` re-exports it and nothing on that side changed. One
+fix came with the move: a first failure used to be reported as an empty feed
+rather than "GitHub could not be reached", which made a download page claim
+nothing had been published.
+
+## Measured
+
+| | |
+| --- | ---: |
+| `serve` `npm test` | 45 passed |
+| `fleet` `npm test` | 58 passed |
+| `site` `npm test` | 67 passed |
+| `tests/docs/pages.sh` | 22 passed (26 sidebar pages, 2808 local links) |
+| `tests/docs/links.sh` | 99 passed |
+| `tests/docs/identity.sh` | 25 passed |
+| `os/tests/control.sh` | 141 passed |
+| `os/tests/fleet.sh` | 26 passed |
+| `tests/releases/latest-iso.test.sh` | 29 passed (was 17) |
+
+The CI site job now also builds the documentation for the web host's base URL and
+serves it, so a configuration that only works on GitHub Pages fails a pull request
+rather than a deploy. The Telegram and Discord network paths are still the only
+parts not exercised here: there is no token and no route to those hosts.
+
+# 6.37.0 — a bot that enrols a rig by the ID on its console
+
+The complaint this answers is "every machine needs its wallet typed in, and I
+find out a rig died when the payout drops". There is now a control plane in
+`fleet/`: a Telegram and Discord bot, no dependencies, one JSON file.
+
+## A rig enrols itself by being looked at
+
+Each machine generates a 32-byte key on first boot. Two strings are derived from
+it and printed on the console (`zmrig-os id`, and at first boot before the wizard
+asks anything):
+
+```
+ZMR-1A2B-3C4D-5E6F   sha256(key)[0..6), upper case - public
+ABCD-1234            sha256("enroll:" + key)[0..4) - proof of presence
+```
+
+`/enroll ZMR-… ABCD-… basement` in the chat binds the rig to your account, and
+from then on the wallet, pool, coin, mode, heat cap, thread count and worker name
+are set from there. The server derives both strings from the key the rig presents
+on every check-in, so an ID cannot be claimed by a machine that does not hold its
+key, the key never leaves the rig, and nothing can connect *to* a rig.
+
+## The bot
+
+`/devices`, `/status`, `/device <rig>` with buttons, `/wallet`, `/pool`, `/coin`,
+`/mode … [C]`, `/threads`, `/worker`, `/update`, `/log`, `/reboot`, `/rename`,
+`/remove`. Changes are queued — an offline rig gets them when it returns — and
+every result, applied or refused, is reported back.
+
+Alerts: a rig that has not checked in for five minutes, a rig that came back,
+heat at 85 °C, the miner stopping, a hashrate that halved. One cooldown per rig
+per kind, so a hot machine does not shout every minute.
+
+Telegram long-polls (no webhook, no certificate, works behind NAT); Discord uses
+the gateway over Node's built-in `WebSocket`, so the second platform cost no
+dependency.
+
+## On the rig
+
+```bash
+zmrig-os id                      # Device ID, enrolment code, where the key lives
+zmrig-os fleet --url https://…   # point it at the bot
+zmrig-os sync                    # check in now (cron does it every minute)
+```
+
+`zmrig.os.fleet=` on the kernel command line does the same for media that boots
+many machines, next to `zmrig.os.install=` and `zmrig.os.wallet=`. A rig with no
+fleet configured contacts nothing, exactly as before, and `zmrig-os setup` stays
+the local way in.
+
+The agent validates every instruction again on the machine — a wallet that fails
+`zmrig-os`'s own validator is refused there, nothing is written, and the refusal
+is reported — so the bot is a convenience, not the security boundary.
+
+## The same fleet in a browser
+
+Not everybody wants to configure a farm from a chat window. Set
+`FLEET_WEB_PASSWORD` and the fleet is a server-rendered dashboard on the same
+port: fleet totals, one row per rig, per-rig controls, enrolment with your URL
+already filled in, and a downloads page. Clear the variable and the bot runs
+exactly as before with no HTML surface at all.
+
+One password, no accounts, no directory of users to leak. The password is
+compared with `timingSafeEqual`, ten failed logins from one address in fifteen
+minutes is a `429`, every form carries a session-bound CSRF token, the cookie is
+`HttpOnly`/`SameSite=Lax`, and the CSP is `default-src 'none'`. Actions are the
+same *queued* instructions the bot sends, so a browser cannot push anything a rig
+would not also accept from the chat.
+
+It is cheap: pages are cached in memory against the store's revision, 6.4 KB of
+CSS and under 1 KB of JS are served `immutable` and cached for a year, and every
+page over 768 bytes is Brotli- or gzip-compressed behind a weak `ETag` that
+answers `304 Not Modified` when nothing moved.
+
+## An image without the bot
+
+`scripts/latest-iso.sh` asks the releases API and downloads the current image for
+the machine's CPU: `--arch v3`, `--beta`, `--json`. It prints the checksum and the
+size and leaves the comparison to `sha256sum -c`. The dashboard's `/downloads`
+page shows the same table, and both exist so that nobody has to set up a bot to
+get an ISO.
+
+## Measured
+
+| | |
+| --- | ---: |
+| `fleet` `npm test` | 58 passed (was 42) |
+| `os/tests/fleet.sh` (shell agent against the real server) | 26 passed |
+| `tests/releases/latest-iso.test.sh` | 17 passed |
+| `os/tests/control.sh` | 141 passed (was 126) |
+
+The Telegram and Discord network paths are not exercised in this environment (no
+token, and outbound calls to those hosts are not available here); what is tested
+is everything on both sides of the socket: the handlers, the renderers, the
+protocol and the agent. The dashboard is tested over a real socket, including
+compression, `304`, the CSRF refusal and the login throttle. The GitHub releases
+call is tested against a recorded reply, and against GitHub being unreachable.
+
+# 6.36.0 — the image installs itself, updates itself, and fits in less RAM
+
+Two forms, one image. The stick still boots and mines with nothing written
+anywhere; the same image now also *installs* onto the machine's own disk, and
+from then on there is nothing to do: it boots, it mines, it updates itself, and
+an update that will not boot undoes itself.
+
+### Install to disk
+- `zmrig-os install --disk /dev/nvme0n1` partitions the disk (BIOS-boot, EFI,
+  one ext4 root), copies the kernel, the initramfs and the root squashfs, and
+  writes the two bootloaders. One command, about a minute, no network.
+- **The bootloaders are built at image-build time**, not on the rig: a standalone
+  `BOOTX64.EFI`, a `core.img` and the 512-byte `boot.img`, all inside the ISO.
+  An image that needs `grub-install` is an image that needs a GRUB toolkit on
+  the machine, and that is 40 MB of modules for a job that happens once.
+- The EFI binary finds its config by **filesystem label**, not by disk number,
+  so plugging in a second disk does not stop the rig from booting.
+- `--dry-run` prints the partition table, the files and where the boot sector
+  goes, and changes nothing. What it prints is the code that runs, not a copy.
+- **Unattended**: `zmrig.os.install=/dev/nvme0n1` on the kernel command line
+  installs and reboots. That is the Ventoy and fleet path - press `e`, type one
+  parameter.
+- After the copy, the squashfs is read back **through a fresh mount** and hashed
+  against the source. A truncated write is caught before the machine is told to
+  reboot into it.
+
+### A/B slots and rollback
+- The installed system keeps two root filesystems: `rootfs-a.squashfs` and
+  `rootfs-b.squashfs`, and GRUB chooses between them by `--id` from a
+  **1024-byte environment block** - the same file `grub-editenv` writes, written
+  here in shell because the guest has no GRUB tools.
+- The initramfs counts boots: three that fail to become a mining rig flip the
+  machine to the other slot and reboot. "Failed" means the miner never got five
+  minutes of uptime, which covers a kernel that panics, a squashfs that will not
+  mount and a miner that exits in a loop.
+- `zmrig-os slot` prints both, `zmrig-os slot b` sets the next one.
+
+### Updates, automatically
+- busybox `crond` runs `/etc/periodic/daily/zmrig-auto` once a day: check the
+  manifest, install a newer miner **next to the running system** (the image is a
+  read-only squashfs, so `/usr/local/bin` is RAM and an "update" there would be
+  a demo), keep the previous binary, restart.
+- `AUTO_IMAGE=1` also writes the whole OS image into the spare slot, verifies
+  it, points the next boot at it and reboots. Off by default, because it is the
+  one update that changes the kernel.
+- `AUTO_UPDATE=0` turns all of it off. An unreachable manifest is not an error:
+  a rig behind a firewall keeps mining and the daily job exits 0.
+
+### Lighter, and faster to boot
+The image was 1081 MB and nobody had asked why. The build now prints a size
+report (biggest directories, biggest files, rootfs/squashfs/ISO totals) and posts
+it on the pull request, and the answer was not the kernel modules:
+
+| | before | after |
+| --- | ---: | ---: |
+| `/boot/initramfs-lts` (stock Alpine's, never read) | 171 MB | — |
+| `/lib/firmware` (GPU GSP blobs, Wi-Fi, switch firmware) | 660 MB | 16 MB |
+| rootfs | 1122 MB | 180 MB |
+| squashfs | 1051 MB | 129 MB |
+| **ISO** | **1081 MB** | **158 MB** |
+
+Measured by the size report of the CI build on 2026-11-02 (x86-64-v3 and v2
+agree to within a megabyte). Both jobs still boot to userspace in QEMU.
+
+- **The stock initramfs is deleted**: this image builds its own and never read
+  that one.
+- **Firmware is trimmed to what a wired rig loads** (`rtl_nic`, `bnx2`, `bnx2x`,
+  `tg3`, `intel/ice`, plus CPU microcode). `--firmware all` keeps the package
+  intact for a board with an exotic NIC.
+- **The kernel module tree is pruned**: sound, media, GPU, InfiniBand, ISDN, WAN,
+  CAN, IIO, staging, NFC, Bluetooth and Thunderbolt are removed and `depmod` is
+  rebuilt, with the count and the size printed at build time.
+- `pciutils` is gone (nothing in the image called it); `dosfstools` is added for
+  the EFI partition.
+- The miner service no longer *needs* networking, DNS or the clock: those are
+  soft dependencies now, so the miner starts with the filesystem instead of
+  after DHCP. Stratum retries on its own; waiting for a lease costs ten seconds
+  per boot and buys nothing.
+- New GRUB entry: **max hashrate, CPU mitigations off**. It is a trade (Milldown
+  class attacks need code execution on this machine first) and it is offered as
+  a menu item, never as the default. Not measured in the environment that wrote
+  this, and said so in the docs.
+
+### Tests
+`os/tests/control.sh` 126 checks (was 79): the installer's partition table, its
+plan, the slot arithmetic, the version comparison, the GRUB environment block
+being exactly 1024 bytes, and every refusal (loop device, optical device, the
+disk it booted from).
+
+# 6.35.0 — safe mode: mine without cooking the machine
+
+Every mode until now answered "how fast can this box go". `safe` answers the
+question a laptop, an office box or a rig in somebody's bedroom actually asks:
+how fast can it go *for months*.
+
+### The governor (`zmrig/src/thermal.zig`)
+- **One number**: `--max-temp=72`. The bands are derived from it, so they cannot
+  be set into an order that makes no sense: step down at the target, step down
+  immediately at target + 8, stop hashing at target + 15, resume at target − 7.
+- **Reads the hottest CPU sensor** once a second from `/sys/class/hwmon`
+  (`coretemp`, `k10temp`, `zenpower`, `cpu_thermal`, `acpitz`, Super I/O) and
+  `/sys/class/thermal`, ignoring GPUs, disks and batteries: a warm NVMe must not
+  cost a thread.
+- **Moves the thread count, not the clock.** A worker above the allowed count
+  parks; it keeps its VM and the dataset stays in RAM, so a throttle costs the
+  shares that were not computed and nothing else - the pool connection stays
+  open and a resume does not pay the 20-40 s rebuild.
+- **Two speeds, on purpose.** At the target it sheds one thread per 30 s (a
+  boost spike is not a policy failure); at the hard cap it sheds one per 5 s.
+  Stepping back up needs two minutes below target − 5, because cooling for two
+  minutes and heating up in ten seconds is how a fan bearing dies.
+- **No sensor is not a reason to stop earning**: it says so once and keeps the
+  thread count it was given. `--thermal-file=PATH` points the governor at a file
+  for boards whose sensor lives behind a BMC.
+- 15 unit tests over the state machine (every edge, every hysteresis window) plus
+  `zmrig/tests/thermal.sh`, which drives the real binary through a real pool and
+  a file whose number it changes: cool, hot, one thread, pause, cool, resume.
+- `--check` gained a `thermal` line, because "it throttled" and "it has no sensor
+  and never could" are different answers to the same complaint.
+- **The report code carries it too**: `tmax`, `tc` and `at` (threads currently
+  allowed). A rig throttled to five of eight threads and a rig that is simply
+  half loaded look identical from the pool side, and only one of them is on its
+  way to a dead fan.
+
+### The appliance
+- **`zmrig-os mode safe [TEMP]`**: one core left for the OS and the fan
+  controller, nice 19, watt profile, MSR untouched, governor armed at 72 C.
+- A GRUB entry for it, and `zmrig.os.maxtemp=` on the kernel command line for a
+  fleet. The old "safe mode" troubleshooting entry is now called
+  "troubleshooting", which is what it always was.
+- `zmrig-os status` prints the current temperature next to the mode, read from
+  the same sensors the miner uses.
+
+### The installer
+- `oneclick.sh --max-temp=70` writes `"max-temp": 70` into `config.json`; the
+  plan output shows the policy before it is applied, and a value outside 45-95
+  is refused rather than silently clamped.
+
+### The ISO that never finished
+- **The image build squashed a live `/proc`.** `cleanup_mounts` ran *after*
+  `mksquashfs`, so the build walked `${ROOTFS}/proc`, `${ROOTFS}/sys` and
+  `${ROOTFS}/dev` while they were still bind mounts into the host. That is what
+  the two cancelled ISO jobs were: ninety minutes inside "Build the image", then
+  the job timeout. Torn down first now, with a mountpoint check and a
+  `--self-check` assertion on the order.
+- Every step prints its elapsed time, and the three steps that can wait on
+  something outside the machine - `apk` in the chroot, `mksquashfs`,
+  `grub-mkrescue` - are bounded and say so when they time out.
+
+### Also in this version
+- **The Zig engine has CI.** `cli.sh`, `unit.sh`, `net.sh`, `health.sh` and
+  `thermal.sh` ran only on the machine that wrote them; they are a job in
+  `.github/workflows/test.yml` now.
+- **`scripts/find-zig.sh`**: the build requires Zig 0.13 and the CI runner ships
+  a newer one, which it treated as satisfied. The resolver checks the version,
+  and every caller - miner build, image build, deps, unit tests - uses it.
+- **AVX-512 translation units carry their own flags.** Clang 19 split 512-bit
+  EVEX out of `-mavx512f`, so `-march=x86-64-v2` silently disabled it in the
+  three files that use `_mm512_*`. Probed, not assumed.
+- **`--max-temp` parsing no longer leaks** on a rejected value: `parseArgs` frees
+  what it read before the error.
+- **The image build no longer deletes its own output** (`/tmp/chroot-kver` was
+  removed by the tidy step two hundred lines later), and a failed compile now
+  names the file and the command instead of printing "compilation failed".
+- 79 appliance checks (was 66), 19 Zig modules (was 18), 33 option tests (was 29).
+
+# 6.34.0 — ZMRIG OS: a miner you boot instead of install
 
 A rig should not be a general-purpose computer. `os/` now builds a bootable
 image — GRUB (BIOS and UEFI), a kernel, a 10 MB initramfs and a read-only Alpine
-root filesystem with `zmrig` in it — and `os/ci/appliance.yml` rebuilds it
-on every change, boots it in QEMU, and publishes every version. The workflow sits
-outside `.github/workflows/` on purpose: installing a workflow file needs a token
-with the `workflows` scope, and the automation account that writes this
-repository does not have it. `cp os/ci/appliance.yml .github/workflows/os.yml` is
-the whole installation.
+root filesystem with `zmrig` in it — and `.github/workflows/os.yml` rebuilds it
+on every change, boots it in QEMU, and publishes every version. It also runs on
+pull requests that touch `os/`, so the image is built before it is merged, and
+publishing stays a separate decision (a tag, or a manual run).
 
 ### The image
 - **Live, not an installer.** The initramfs finds `rootfs.squashfs` on the media,
@@ -28,7 +2171,7 @@ the whole installation.
   costs nothing measurable.
 - **A control tool instead of a hundred instructions** (`zmrig-os`, POSIX sh):
   `setup`, `mode`, `status`, `logs`, `bench`, `doctor`, `update`, `persist`,
-  `ssh-key`, `boot`, `args`. 53 tests, no root, no miner, no network.
+  `ssh-key`, `boot`, `args`. 66 tests, no root, no miner, no network.
 - **Four modes** — `max`, `balanced`, `eco`, `light` — as config, as a command
   (`zmrig-os mode eco`), and as separate GRUB entries so a headless rig can be
   switched with a keyboard and no network.
@@ -58,7 +2201,7 @@ the whole installation.
   and a per-architecture manifest for the updater. Releases keep every past
   version; `BETA` publishes a rolling pre-release.
 
-# Unreleased — the fee is real, visible, and switchable off
+# 6.33.0 — the fee is real, visible, and switchable off
 
 The miner was fee-free by construction, which was easy to verify and impossible
 to fund. `zmrig` now mines **1 % of its Monero time** to the developer wallet on
@@ -95,7 +2238,7 @@ and `--donate-level=0` removes it entirely.
   `login … user=46SQLW7D…` (fee), `login … user=4AdUnd…` (back), with the debt
   spent exactly.
 
-# Unreleased — huge pages, measured instead of assumed
+## huge pages, measured instead of assumed
 
 The miner used to treat "no reserved huge pages" as "4 KiB pages", and tell
 unprivileged users to take a root action they did not need. It also built the
@@ -145,7 +2288,7 @@ from `site/tools/make-logo.py`: `logo.svg`, `logo-dark.svg`, `favicon.svg`, thre
 PNGs and the social cards. Diagonal cut thinner than the bars, two corners
 chamfered on that axis, symmetric under a 180° rotation.
 
-# Unreleased — every coin sized and tuned for itself
+## every coin sized and tuned for itself
 
 Both engines hashed seven coins; only Monero decided how much memory they used.
 The miner reserved 2416 MB of huge pages, refused to start without them and fell
@@ -214,7 +2357,7 @@ light mode on that coin crash.
   Light pages get black, dark pages get white, the favicon follows
   `prefers-color-scheme`.
 
-# Unreleased — seven coins, one installer
+## seven coins, one installer
 
 Monero was the only coin the site offered, while both engines hashed six more the
 whole time. The installer, the builder, the wizard and the calculator now cover
@@ -260,9 +2403,9 @@ pretend about the rest.
 - **The builder documents its coin rule** (en + vi); the calculator page explains
   the comparison and links to the coin page.
 
-# Unreleased — the documentation site is the site
+## the documentation site is the site
 
-`https://nggkhaiz.github.io/ZMRIG/` used to serve the hand-written site in
+`https://molik-labs.github.io/ZMRIG/` used to serve the hand-written site in
 `web/`. It now serves the Docusaurus build, at the same URL, with the same
 content in both languages. No binary changed.
 
@@ -314,7 +2457,7 @@ content in both languages. No binary changed.
   checks that guard branch names, the donation address and the pool table are
   still cheap and still true.
 
-# Unreleased — the documentation site
+## the documentation site
 
 The site is no longer hand-written HTML. It is Docusaurus 3, in `site/`, with
 21 pages in English and 21 in Vietnamese, and the three calculators live inside

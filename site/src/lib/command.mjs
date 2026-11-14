@@ -8,8 +8,8 @@
 // the tests assert behaviour, not prose.
 //
 // Rules encoded here, each one a bug or a near miss at some point:
-//   * `--engine auto` and `--profile auto` mean "let the installer decide", and
-//     the installer decides only when the flag is absent. So: no flag.
+//   * `--engine auto` lets the installer decide. The throughput-first profile
+//     is explicit so battery state can never silently lower hashrate.
 //   * The C++ engine has no WebSocket client and no proxy support. Asking for
 //     either forces zmrig instead of writing a config nothing can run.
 //   * A TLS pool is `tls://host:port`; the scheme is part of the value, because
@@ -19,9 +19,10 @@
 
 import { POOLS, findPool } from "./pools.mjs";
 import { COINS, coinOrDefault, findCoin } from "./coins.mjs";
+import { moneroProblem } from "./monero.mjs";
 
 export const RAW_URL =
-  "https://raw.githubusercontent.com/NggKhaiz/ZMRIG/BETA/oneclick.sh";
+  "https://raw.githubusercontent.com/MoLik-Labs/ZMRIG/BETA/oneclick.sh";
 
 const SAFE = /^[A-Za-z0-9._:@%+=,/\-]+$/;
 
@@ -33,12 +34,22 @@ export function shellQuote(value) {
 
 // CryptoNote addresses are base58: no 0, O, I or l. Monero's are exact — 95
 // characters starting with 4 (primary) or 8 (subaddress), 106 for an integrated
-// address. The other coins get the checks this file can be sure of (alphabet,
-// plausible length) plus a prefix *warning* when the coin's prefix is known: a
-// wrong prefix is worth saying out loud, but blocking somebody's valid address
-// because this file guessed a prefix wrongly would be worse than the miss. The
-// pool checks the checksum; nothing here pretends to.
+// address — and they carry a four-byte Keccak-256 checksum, which `monero.mjs`
+// verifies with the same decoder the pool and the bot use. That matters most
+// here: this is the first place a wallet is pasted, and a character count accepts
+// one typo in fifty. The other coins get the checks this file can be sure of
+// (alphabet, plausible length) plus a prefix *warning* when the coin's prefix is
+// known: a wrong prefix is worth saying out loud, but blocking somebody's valid
+// address because this file guessed a prefix wrongly would be worse than the
+// miss. Their pools check the checksum; nothing here pretends to.
 const BASE58 = /^[1-9A-HJ-NP-Za-km-z]+$/;
+
+// Monero only: the checksum, decoded. `moneroProblem` returns null for anything
+// that is wrong for a reason the checks below already describe.
+function checksumProblem(text, coinId) {
+  if (coinId !== "xmr" && coinId !== "monero") return null;
+  return moneroProblem(text);
+}
 
 export function walletState(value, coin) {
   const text = String(value || "").trim();
@@ -50,12 +61,23 @@ export function walletState(value, coin) {
   }
 
   if (rule.strict) {
+    // The decoder knows more than the prefix table does, so it is asked first:
+    // a stagenet address is a real address on another chain, and saying "this
+    // starts with the wrong character" would send its owner looking for a typo
+    // that is not there. Both refusals below are about the checksum, which is
+    // the failure a character count cannot see and a payout cannot survive.
+    const checksum = checksumProblem(text, c.id);
+    if (checksum && rule.lengths.includes(text.length)) {
+      return { status: checksum.status, ok: false, length: text.length, coin: c.id, reason: checksum.reason };
+    }
+
     if (
       rule.prefixes &&
       !rule.prefixes.some((prefix) => text.startsWith(prefix))
     ) {
       return { status: "prefix", ok: false, length: text.length, coin: c.id };
     }
+
     if (rule.lengths.includes(95) && text.length === 95) {
       return { status: "valid", ok: true, length: 95, coin: c.id };
     }
@@ -130,7 +152,7 @@ function normalise(state) {
       .trim()
       .slice(0, 32),
     engine: s.engine === "xmrig" || s.engine === "zmrig" ? s.engine : "auto",
-    profile: s.profile === "free" || s.profile === "watt" ? s.profile : "auto",
+    profile: s.profile === "watt" || s.profile === "auto" ? s.profile : "free",
     pool: String(s.pool || "moneroocean"),
     host: String(s.host || "").trim(),
     failover: (s.failover || []).filter(Boolean),
@@ -229,7 +251,7 @@ export function build(state) {
     args.push("--ws-path", wsPath);
   }
 
-  if (s.profile !== "auto") args.push("--profile", s.profile);
+  args.push("--profile", s.profile);
   if (s.proxy) args.push("--proxy", s.proxyUrl || "socks5://127.0.0.1:9050");
   if (s.connectTo) args.push("--connect-to", s.connectTo);
   // MSR is written by default on a root install; the flag exists for hosts
@@ -257,7 +279,7 @@ export function build(state) {
   if (coin.algo !== "rx/0") planArgs.push("--algo", coin.algo);
   if (failover.length) planArgs.push("--failover", failover.join(","));
   if (engine !== "auto") planArgs.push("--engine", engine);
-  if (s.profile !== "auto") planArgs.push("--profile", s.profile);
+  planArgs.push("--profile", s.profile);
 
   const plan = s.clone
     ? `sudo ./oneclick.sh ${quoteArgs(planArgs)}`

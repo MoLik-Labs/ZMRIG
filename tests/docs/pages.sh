@@ -210,7 +210,10 @@ sitemap_bad=0
 sitemap_n=0
 while IFS= read -r url; do
     sitemap_n=$((sitemap_n + 1))
-    path=${url#https://nggkhaiz.github.io/ZMRIG/}
+    # Host-agnostic on purpose: the project moved from a user account to an
+    # organisation once, and a test that hardcodes the host turns a rename into
+    # a broken sitemap check instead of a broken sitemap.
+    path=$(printf '%s' "$url" | sed 's|^https://[^/]*/ZMRIG/||')
     path=${path%%#*}
     path=${path%/}
     [ -z "$path" ] && path=index

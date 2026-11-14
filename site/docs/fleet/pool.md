@@ -1,7 +1,7 @@
 ---
 title: Run your own pool
 description: A Monero pool in Node.js with no dependencies — the 1 % fee and what it buys, a five-minute local run, free hosting options, and the operating rules.
-image: https://nggkhaiz.github.io/ZMRIG/img/og-en.png
+image: https://molik-labs.github.io/ZMRIG/img/og-en.png
 ---
 
 # Run your own pool
@@ -17,7 +17,7 @@ miners point at it exactly as they would at any other pool.
 | --- | --- |
 | Pool fee | **1.0 %** of each block, taken before splitting, rounded **down** |
 | Hidden fees | none |
-| Miner developer fee | 1 % of Monero mining time on the Zig engine (`--donate-level=0` turns it off); the C++ engine takes nothing |
+| Miner developer fee | 3 % of Monero mining time on the Zig engine (`--donate-level=0` turns it off); the C++ engine takes nothing |
 | Payout threshold | 0.01 XMR, plus the network fee |
 
 The fee appears in the `login` reply the miner prints, in `/api/config`, and on
@@ -74,9 +74,17 @@ curl -s 127.0.0.1:8080/api/worker/4YourMoneroAddress
 
 ## Free hosting
 
+The blueprint at the root of the repository deploys the fleet and the
+documentation — bots, check-ins and pages on one port — and not this. A free workspace is allowed **750 instance hours a month**
+for all of its services together, and one always-on service already spends about
+744 of them; a second one puts the workspace over the limit and Render suspends
+the free services until the next month. The pool blueprint therefore lives at
+`deploy/render-pool.yaml`: apply it in a different workspace, or in this one if
+the bot is not hosted here.
+
 | Where | How | Notes |
 | --- | --- | --- |
-| Render | `render.yaml` (Docker) | single port, WebSocket only; a free instance sleeps after 15 minutes idle |
+| Render | `deploy/render-pool.yaml` (Docker) | single port, WebSocket only; a free instance sleeps after 15 minutes idle |
 | Fly.io | `fly.toml` + a 1 GB volume | real TCP on 3333; `monerod` does not fit in 256 MB |
 | Cloudflare Workers | `pool/worker/` | WebSocket ⇄ TCP bridge, no Durable Object needed |
 | Vercel | static page only | a function cannot hold a stratum connection |
@@ -104,10 +112,37 @@ zmrig -o pool.example.com:3333 -u 4YourMoneroAddress.rig1 -t 4
   arrives from `monerod`.
 - The audit log is append-only — rotate it with `logrotate`, never edit it.
 - Change the fee wallet with `OPERATOR_ADDRESS`; the default lives in
-  `pool/src/operator.js`.
+  `pool/src/operator.js`. The address is decoded at startup (base58, network
+  byte, Keccak-256 checksum), not shape-matched: one wrong character still looks
+  like an address, and the fee wallet never logs in, so nothing else would
+  notice.
 - `--check` refuses configurations that cannot pay correctly: a fee outside
-  0–10 %, an unknown mode, a PPLNS window that is too short.
+  0–10 %, an unknown mode, a PPLNS window that is too short, a fee address that
+  does not decode.
+- Every share is re-hashed by the pool before it is paid (`verify_shares`), one
+  long-lived `zmrig --verify-share` per core so the 256 MB cache is built once
+  per round. `pool/tests/bench-verify.mjs` measures it on your machine; on a
+  2 vCPU test box with two verifiers and 200 shares per round the first share
+  costs 0.58 s (cache build) and the steady state is 46 shares/s — a rig at
+  1 kH/s on difficulty 300 submits about 3.3 shares/s, so that box verifies
+  roughly a dozen of them.
+- `VERIFIER_MODE=fast` builds the 2 GiB dataset once and reads it per share:
+  **2.9 ms a share instead of 22 ms** (349 shares/s per verifier), measured on
+  the same box, for 2336 MB of RAM *per verifier process* and 21 s of startup.
+  It is opt-in, and the pool adds that up against `/proc/meminfo` at startup —
+  `fast` with the default two verifiers is 4.6 GiB, which a 4 GB VPS does not
+  have. A verifier that cannot get the dataset falls back to the light cache and
+  logs why. Details and the full table are in `pool/README.md`.
+- More than one share at a time is `VERIFIER_THREADS` (threads inside one
+  process, one dataset) rather than `VERIFIER_CONCURRENCY` (more processes, one
+  dataset each). Measured warm on the same box: one process with two threads
+  does **87 shares/s in light mode and 626 in fast mode**, against 74 and a
+  4.6 GiB bill for two processes.
+- `/stratum` faces the internet, so its framing is bounded: a frame over 1 MiB
+  closes the connection, a **message** over 256 KiB closes it too (a per-frame
+  limit alone leaves a client free to send continuation frames for ever), and a
+  second data frame inside an open message is a protocol error.
 
 Payouts via `monero-wallet-rpc`, the API and the security notes are in
 `pool/README.md`, and the deployment steps you must run yourself are in
-[`doc/SETUP.md`](https://github.com/NggKhaiz/ZMRIG/blob/master/doc/SETUP.md).
+[`doc/SETUP.md`](https://github.com/MoLik-Labs/ZMRIG/blob/master/doc/SETUP.md).

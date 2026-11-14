@@ -1,0 +1,52 @@
+# Render blueprint for the control plane on its own, with the dashboard.
+#
+# Deploy: New -> Blueprint -> this repository -> pick fleet/render.yaml, then set
+# the secrets (they are marked `sync: false`, so Render asks for them and never
+# reads them from the repository).
+#
+# The default deployment is not this file: the root render.yaml starts
+# `host/server.js`, which is the same fleet plus the documentation site on one
+# port and without the dashboard. See doc/WEB.md. Use this one when you want the
+# dashboard and are not serving the pages from the same instance -- and note that
+# applying both to one free workspace spends two services' worth of the 750
+# monthly instance hours.
+#
+# Free instances sleep after 15 minutes without traffic, and a sleeping bot does
+# not answer. Either add a free uptime pinger against /healthz every 5 minutes,
+# or run it on a paid instance; the README has both lines in full.
+services:
+  - type: web
+    name: zmrig-fleet
+    runtime: node
+    plan: free
+    region: frankfurt
+    rootDir: fleet
+    # A YAML value with a colon inside it has to be quoted as a whole; the inner
+    # quotes do not protect it, and the blueprint is rejected at parse time.
+    buildCommand: 'echo "no build: zero dependencies"'
+
+    startCommand: node src/index.js
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: DISCORD_BOT_TOKEN
+        sync: false
+      - key: FLEET_ADMIN_IDS
+        sync: false
+      # The dashboard at /. Leave it empty to run the bot only.
+      - key: FLEET_WEB_PASSWORD
+        sync: false
+      - key: DISCORD_ADMIN_IDS
+        sync: false
+      - key: FLEET_PUBLIC_URL
+        sync: false
+      - key: FLEET_STATE
+        value: /var/data/fleet.json
+      - key: FLEET_INTERVAL
+        value: 60
+      - key: FLEET_ALERT_TEMP
+        value: 85
+      - key: NODE_VERSION
+        value: 22
