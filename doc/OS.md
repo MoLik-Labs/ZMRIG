@@ -360,8 +360,11 @@ every change with the sensor name, because "which sensor was at 84 °C" is the
 question asked six months later.
 
 Only CPU sensors are read (`coretemp`, `k10temp`, `zenpower`, `cpu_thermal`,
-`acpitz`, Super I/O), so a warm NVMe never costs a thread. A machine with no
-sensor at all says so once and keeps the thread count it was given.
+`acpitz`, Super I/O). Explicitly labelled GPU, NVMe, battery, skin, ambient,
+wireless, charger, memory and chipset zones are ignored; unknown firmware labels
+remain eligible so vendor-specific CPU zones are not lost. A warm NVMe never
+costs a thread. A machine with no sensor at all says so once and keeps the thread
+count it was given.
 
 ## Measuring this machine
 

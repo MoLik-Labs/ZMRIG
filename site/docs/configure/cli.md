@@ -207,11 +207,14 @@ the difference between "it throttled" and "it has no sensor and never could":
 ```
 
 The sensors are the CPU ones only — `coretemp`, `k10temp`, `zenpower`,
-`cpu_thermal`, `acpitz` and the Super I/O chips — so a warm NVMe or a warm GPU
-never costs a thread. A machine with no sensor at all says so once and keeps
-mining at the thread count it was given: an unreadable thermometer is not a
-reason to stop earning. `--thermal-file=PATH` points the governor at a file
-instead, for a board whose sensor is exposed by the BMC.
+`cpu_thermal`, `acpitz` and the Super I/O chips. Thermal zones explicitly named
+for a GPU, NVMe, battery, skin, ambient air, wireless, charger, memory or chipset
+are ignored; unknown firmware labels remain eligible so a vendor-specific CPU
+zone is not lost. A warm NVMe or GPU never costs a thread. A machine with no
+sensor at all says so once and keeps mining at the thread count it was given: an
+unreadable thermometer is not a reason to stop earning. `--thermal-file=PATH`
+points the governor at a file instead, for a board whose sensor is exposed by
+the BMC.
 
 ## Threads, measured rather than guessed
 

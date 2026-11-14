@@ -96,6 +96,9 @@ jobs:
       - name: Self-check (files, syntax, exec bits)
         run: bash os/build-iso.sh --self-check
 
+      - name: Initramfs staging (gzip fallback and zstd)
+        run: bash os/tests/boot-artifacts.sh
+
       - name: Control tool
         run: bash os/tests/control.sh
 
