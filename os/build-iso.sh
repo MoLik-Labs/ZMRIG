@@ -197,8 +197,10 @@ if [ "$SELF_CHECK" = "1" ]; then
         "${HERE}/init" \
         "${HERE}/chroot-setup.sh" \
         "${HERE}/make-initramfs.sh" \
+        "${HERE}/usb-config.sh" \
         "${HERE}/stage-initramfs.sh" \
         "${HERE}/tests/boot-artifacts.sh" \
+        "${HERE}/tests/usb-config.sh" \
         "${HERE}/smoke-qemu.sh" \
         "${HERE}/deps.sh" \
         "${HERE}/overlay/usr/local/bin/zmrig-os" \
@@ -219,7 +221,8 @@ if [ "$SELF_CHECK" = "1" ]; then
     done
 
     for f in "${HERE}/init" "${HERE}/chroot-setup.sh" "${HERE}/make-initramfs.sh" \
-             "${HERE}/stage-initramfs.sh" "${HERE}/tests/boot-artifacts.sh" "${HERE}/plan.sh" \
+             "${HERE}/stage-initramfs.sh" "${HERE}/tests/boot-artifacts.sh" \
+             "${HERE}/tests/usb-config.sh" "${HERE}/usb-config.sh" "${HERE}/plan.sh" \
              "${HERE}/overlay/usr/local/bin/zmrig-os" \
              "${HERE}/overlay/usr/local/lib/zmrig/firstboot.sh" \
              "${HERE}/overlay/etc/init.d/zmrig-wifi"; do
@@ -517,8 +520,10 @@ step "building the initramfs"
 # belongs to the kernel package, and a base-system tarball has no kernel at all.
 mkdir -p "${ISODIR}/boot/grub" "${ISODIR}/zmrig"
 cp "${HERE}/init" "${ROOTFS}/tmp/init"
+cp "${HERE}/usb-config.sh" "${ROOTFS}/tmp/usb-config.sh"
 cp "${HERE}/make-initramfs.sh" "${ROOTFS}/tmp/make-initramfs.sh"
 chmod 755 "${ROOTFS}/tmp/init" "${ROOTFS}/tmp/make-initramfs.sh"
+chmod 644 "${ROOTFS}/tmp/usb-config.sh"
 
 # Which compressor the kernel can unpack is a fact in its own config file, which
 # Alpine ships in /boot, so ask it instead of assuming. zstd is ~25 % smaller

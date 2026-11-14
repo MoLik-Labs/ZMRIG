@@ -94,7 +94,7 @@ if [ "${devtmpfs_missing:-0}" = "1" ]; then
     mount -t tmpfs tmpfs /dev
     mdev -s 2>/dev/null || true
 fi
-mkdir -p /run /tmp /media /newroot /root-ro /overlay
+mkdir -p /run /tmp /media /usb-config /newroot /root-ro /overlay
 mount -t tmpfs -o mode=0755 tmpfs /run
 mkdir -p /run/zmrig
 
@@ -107,6 +107,7 @@ mkdir -p /run/zmrig
 for mod in loop squashfs overlay isofs sr_mod sd_mod usb-storage uas ahci libahci \
            ata_piix nvme virtio_blk virtio_pci virtio_scsi virtio_net \
            mmc_core mmc_block sdhci sdhci_pci sdhci_acpi \
+           exfat ntfs3 \
            xhci-pci ehci-pci uhci-hcd \
            e1000 e1000e igb r8169 igc atlantic tg3 usbnet cdc_ether r8152 ax88179_178a; do
     modprobe -q "$mod" 2>/dev/null || true
@@ -139,7 +140,7 @@ find_rootfs() {
         dev="/dev/$name"
         [ -e "$dev" ] || continue
 
-        for fs in iso9660 vfat ext4; do
+        for fs in iso9660 vfat ext4 exfat ntfs3; do
             if mount -t "$fs" -o ro "$dev" /media 2>/dev/null; then
                 case "$SLOT" in a) other_slot=b ;; *) other_slot=a ;; esac
                 for candidate in "rootfs-${SLOT}.squashfs" rootfs.squashfs "rootfs-${other_slot}.squashfs"; do
@@ -470,6 +471,40 @@ if [ -f /media/zmrig/wpa_supplicant.conf ]; then
     cp /media/zmrig/wpa_supplicant.conf /newroot/etc/wpa_supplicant/wpa_supplicant.conf
     chmod 600 /newroot/etc/wpa_supplicant/wpa_supplicant.conf 2>/dev/null || true
     log "config: Wi-Fi profile from boot media"
+fi
+
+# Ventoy presents the selected ISO as a virtual CD while its exFAT/NTFS data
+# partition remains a separate USB block device. Search that removable volume
+# read-only for a small, explicit set of provisioning filenames; never source
+# or execute anything from the USB. The helper is also unit-tested outside boot.
+if [ -r /usb-config.sh ]; then
+    . /usb-config.sh
+    usb_json_path=$(usb_config_copy /media /newroot/etc/zmrig/usb-config.json 2>/dev/null || true)
+    if [ -n "$usb_json_path" ]; then
+        log "config: JSON from boot media ($usb_json_path)"
+    else
+        for usb_sysdev in /sys/class/block/*; do
+            [ -e "$usb_sysdev" ] || continue
+            [ -r "$usb_sysdev/partition" ] || continue
+            usb_name=$(basename "$usb_sysdev")
+            usb_dev="/dev/$usb_name"
+            [ "$usb_dev" = "$MEDIA_DEV" ] && continue
+            [ -e "$usb_dev" ] || continue
+            usb_realpath=$(readlink -f "$usb_sysdev" 2>/dev/null || true)
+            usb_path_is_usb "$usb_realpath" || continue
+
+            for usb_fs in exfat vfat ntfs3 ext4; do
+                if mount -t "$usb_fs" -o ro "$usb_dev" /usb-config 2>/dev/null; then
+                    usb_json_path=$(usb_config_copy /usb-config /newroot/etc/zmrig/usb-config.json 2>/dev/null || true)
+                    umount /usb-config 2>/dev/null || true
+                    if [ -n "$usb_json_path" ]; then
+                        log "config: JSON from removable USB ${usb_dev} (${usb_fs}/${usb_json_path})"
+                        break 2
+                    fi
+                fi
+            done
+        done
+    fi
 fi
 
 if [ -n "$WALLET$POOL$WORKER$MODE$MAXTEMP$FLEET$INSTALL$AFFINITY$ALGO$ISOLATE$HUGEPAGES" ]; then

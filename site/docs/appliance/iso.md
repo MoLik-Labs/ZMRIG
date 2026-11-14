@@ -69,6 +69,19 @@ that arms the governor.
 The wizard does not appear when a wallet is already known. `zmrig.os.nostart=1`
 boots the machine without mining, which is what a repair stick wants.
 
+### Import a wallet JSON from Ventoy USB
+
+For unattended Ventoy setup, place `rig.json` in the root of the Ventoy data
+partition, beside the ISO, then boot the image. ZMRIG OS scans removable USB
+partitions read-only (including Ventoy's usual exFAT, plus FAT32, NTFS and ext4)
+and imports the first recognized file: `zmrig.json`, `rig.json`, `wallet.json`,
+`config.json`, or `zmrig/rig.json` / `zmrig/config.json` (maximum 64 KiB).
+The JSON needs a `wallet` string; `pool`, `worker`, `mode`, `algo`, `threads`, `donate`, and
+`safe_temp` are optional. It is validated by the normal setup path before the
+miner uses it. No Ventoy persistence plugin is needed; the JSON stays on your
+USB and is read without modifying that partition. A malformed file or invalid
+wallet is reported and the on-screen setup remains available.
+
 ## One command, no questions
 
 The wizard asks one question at a time, which is right at a keyboard. Over ssh,

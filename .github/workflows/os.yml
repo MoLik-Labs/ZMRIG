@@ -81,6 +81,7 @@ jobs:
             os/overlay/usr/local/bin/zmrig-os \
             os/overlay/usr/local/lib/zmrig/firstboot.sh \
             os/overlay/etc/init.d/zmrig-wifi \
+            os/usb-config.sh os/tests/usb-config.sh \
             os/init os/plan.sh os/chroot-setup.sh os/make-initramfs.sh os/upstream.sh
 
       # The same check over every script in the repository, not only the ones
@@ -99,6 +100,9 @@ jobs:
 
       - name: Initramfs staging (gzip fallback and zstd)
         run: bash os/tests/boot-artifacts.sh
+
+      - name: Ventoy USB JSON discovery
+        run: sh os/tests/usb-config.sh
 
       - name: Control tool
         run: bash os/tests/control.sh

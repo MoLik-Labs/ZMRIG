@@ -69,6 +69,19 @@ bật bộ điều tiết.
 Khi đã có ví thì wizard không hiện nữa. `zmrig.os.nostart=1` khởi động máy mà
 không đào — đúng thứ một USB cứu hộ cần.
 
+### Đọc JSON ví từ USB Ventoy
+
+Để cài đặt Ventoy không cần bàn phím, đặt `rig.json` ở thư mục gốc phân vùng dữ
+liệu Ventoy, cạnh file ISO, rồi khởi động ảnh. ZMRIG OS quét phân vùng USB ở chế
+độ chỉ đọc (có exFAT thường dùng của Ventoy, cùng FAT32, NTFS và ext4), rồi lấy
+file hợp lệ đầu tiên theo tên: `zmrig.json`, `rig.json`, `wallet.json`,
+`config.json`, hoặc `zmrig/rig.json` / `zmrig/config.json` (tối đa 64 KiB). JSON
+cần trường `wallet` dạng chuỗi; `pool`, `worker`, `mode`, `algo`, `threads`, `donate` và
+`safe_temp` là tùy chọn. Cấu hình được kiểm tra qua luồng setup bình thường trước
+khi miner dùng. Không cần bật Ventoy persistence; file JSON vẫn nằm trên USB và
+phân vùng không bị sửa. Nếu file sai hoặc ví không hợp lệ, máy báo lỗi và vẫn có
+thể dùng setup trên màn hình.
+
 ## Một lệnh, không hỏi gì
 
 Wizard hỏi từng câu một, đúng cho người ngồi trước bàn phím. Còn khi ssh vào máy,

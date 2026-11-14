@@ -911,7 +911,11 @@ zmrig-os setup --json rig.json
 
 The file is parsed as JSON (not sourced as shell), and the wallet is checked
 before the config is written. Keep the JSON file private because it contains the
-wallet address. For an encrypted WPA2 Wi-Fi network, configure a client profile
+wallet address. For Ventoy, place `rig.json` beside the ISO at the root of its USB
+data partition: the initramfs scans USB partitions read-only (exFAT, FAT32, NTFS,
+ext4) and accepts `zmrig.json`, `rig.json`, `wallet.json`, `config.json`, or
+`zmrig/rig.json` / `zmrig/config.json` (up to 64 KiB). No Ventoy persistence
+plugin is required. For an encrypted WPA2 Wi-Fi network, configure a client profile
 with `zmrig-os wifi --ssid 'Network name' --password 'your-passphrase'`. The
 passphrase is converted to a WPA PSK before it is saved. Wi-Fi uses `wlan0`,
 `wpa_supplicant` and DHCP; the wired interface remains available. On a live
