@@ -14,9 +14,13 @@ start() {
     [ -d /sys/class/net/wlan0 ] || { ebegin "Wi-Fi interface wlan0 not present; skipping"; eend 0; return 0; }
 
     ebegin "Starting WPA supplicant on wlan0"
-    start-stop-daemon --start --background --make-pidfile --pidfile "$WPA_PID" \
-        --exec /usr/sbin/wpa_supplicant -- -i wlan0 -c "$PROFILE"
-    eend $? || return 1
+    if start-stop-daemon --start --background --make-pidfile --pidfile "$WPA_PID" \
+        --exec /usr/sbin/wpa_supplicant -- -i wlan0 -c "$PROFILE"; then
+        eend 0
+    else
+        eend 1
+        return 1
+    fi
 
     # udhcpc retries in the background until the access point is associated.
     /sbin/udhcpc -b -i wlan0 -p "$DHCP_PID" >/dev/null 2>&1 || true

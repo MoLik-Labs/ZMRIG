@@ -1311,7 +1311,7 @@ cmd_setup() {
 
 
 cmd_wifi() {
-    local ssid="" password="" conf="$ROOT/etc/wpa_supplicant/wpa_supplicant.conf" generated data_device data_mount="${ROOT}/mnt/zmrig-data"
+    local ssid="" password="" conf="$ROOT/etc/wpa_supplicant/wpa_supplicant.conf" raw generated data_device data_mount="${ROOT}/mnt/zmrig-data"
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --ssid) ssid="${2:?--ssid needs a network name}"; shift ;;
@@ -1332,8 +1332,9 @@ cmd_wifi() {
     chmod 700 "$(dirname "$conf")"
     # wpa_passphrase emits the original password as a comment; strip comments
     # before saving so the persistent profile contains only the derived PSK.
-    generated=$(wpa_passphrase "$ssid" "$password" | sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d') ||
-        die "could not create the Wi-Fi profile"
+    raw=$(wpa_passphrase "$ssid" "$password") || die "could not create the Wi-Fi profile"
+    generated=$(printf '%s\n' "$raw" | sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d')
+    unset raw
     printf 'ctrl_interface=/run/wpa_supplicant\nupdate_config=0\n%s\n' "$generated" > "$conf"
     chmod 600 "$conf"
     # The initramfs restores this hashed profile from the boot medium or the
