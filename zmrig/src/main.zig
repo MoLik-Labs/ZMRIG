@@ -1793,42 +1793,70 @@ fn runAutotune(
     try out.print("autotune: profile {s}, {d} logical cpu, {d} physical cores\n", .{
         topology.profileName(profile), logical, physical,
     });
-    try out.print("autotune: {d} candidate(s), {d} s of hashing each, dataset builds once per candidate\n\n", .{
-        list.len, opts.autotune_seconds,
+    const rounds = 3;
+    try out.print("autotune: {d} candidate(s), {d} rounds of {d} s each, dataset rebuilt per trial\n", .{
+        list.len, rounds, opts.autotune_seconds,
     });
-    try out.print("{s:>8}  {s:>12}  {s}\n", .{ "threads", "hashrate", "verdict" });
+    try out.print("autotune: order rotates each round; winner is based on median rate (2% minimum gain)\n\n", .{});
+    try out.print("{s:>8}  {s:>12}  {s:>9}  {s}\n", .{ "threads", "median", "spread", "verdict" });
+
+    var samples = [_][rounds]f64{[_]f64{0} ** rounds} ** 8;
+    var sample_counts = [_]usize{0} ** 8;
+
+    // Repeated, rotated trials prevent a single scheduler stall or a change in
+    // shared-vCPU frequency from selecting the winner. Dataset construction is
+    // part of each trial's setup, not its hash-rate sample; the benchmark owns
+    // that lifecycle and still measures exactly `autotune_seconds` per trial.
+    // This is deliberately an explicit, slower command: it runs only when the
+    // operator asks for a per-machine recommendation, never on mining startup.
+    for (0..rounds) |round| {
+        for (0..list.len) |offset| {
+            const index = (offset + round) % list.len;
+            const threads = list[index];
+
+            var trial_opts = opts.*;
+            trial_opts.threads = threads;
+            trial_opts.bench_hashes = 0;
+
+            const measure = benchmark(allocator, &trial_opts, opts.autotune_seconds, 0) catch |e| {
+                try out.print("round {d}, {d} thread(s): {s}\n", .{ round + 1, threads, @errorName(e) });
+                continue;
+            };
+
+            samples[index][sample_counts[index]] = measure.rate;
+            sample_counts[index] += 1;
+            try out.print("round {d}, {d} thread(s): {d:.3} H/s\n", .{ round + 1, threads, measure.rate });
+        }
+    }
 
     var best = autotune.Trial{ .threads = 0, .rate = 0 };
     const margin = 0.02;
 
-    for (list) |threads| {
-        // One fixed-duration trial per candidate. `benchmark` builds its own
-        // dataset, so the wall clock per candidate is dataset init (~16 s) plus
-        // the requested sample window. A zero hash limit disables early stop:
-        // using `threads * 2000` here made fast CPUs finish well before the
-        // advertised autotune duration and gave candidates unequal samples.
-        var trial_opts = opts.*;
-        trial_opts.threads = threads;
-        trial_opts.bench_hashes = 0;
-
-        const measure = benchmark(allocator, &trial_opts, opts.autotune_seconds, 0) catch |e| {
-            try out.print("{d:>8}  {s:>12}  {s}\n", .{ threads, "-", @errorName(e) });
+    for (list, 0..) |threads, index| {
+        const count = sample_counts[index];
+        if (count < 2) {
+            try out.print("{d:>8}  {s:>12}  {s:>9}  insufficient samples ({d}/3)\n", .{
+                threads, "-", "-", count,
+            });
             continue;
-        };
+        }
 
-        // The short autotune window is intentionally measured as a single
-        // equal-length average. `steady_rate` is a rolling window and can be
-        // based on only a few samples here; taking its maximum over the average
-        // biases the winner upward on whichever candidate got lucky.
-        const trial = autotune.Trial{ .threads = threads, .rate = measure.rate };
+        var ordered = samples[index];
+        const measured = ordered[0..count];
+        const rate = autotune.median(measured);
+        const min_rate = measured[0];
+        const max_rate = measured[count - 1];
+        const spread = if (rate > 0) (max_rate - min_rate) / rate * 100.0 else 0;
+        const trial = autotune.Trial{ .threads = threads, .rate = rate };
         const better = autotune.isBetter(trial, best, margin);
 
         var rate_buf: [32]u8 = undefined;
-        const scaled = util.scaleHashrate(trial.rate);
-
-        try out.print("{d:>8}  {s:>12}  {s}\n", .{
+        var spread_buf: [16]u8 = undefined;
+        const scaled = util.scaleHashrate(rate);
+        try out.print("{d:>8}  {s:>12}  {s:>8}  {s}\n", .{
             threads,
             std.fmt.bufPrint(&rate_buf, "{d:.3} {s}", .{ scaled.value, scaled.unit }) catch "?",
+            std.fmt.bufPrint(&spread_buf, "{d:.1}%", .{spread}) catch "?",
             if (better) "best so far" else if (best.threads == 0) "-" else "no gain (noise)",
         });
 

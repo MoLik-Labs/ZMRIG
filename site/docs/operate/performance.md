@@ -360,9 +360,13 @@ profile free: 1 thread(s) of 2 logical cpu (2 physical cores)
 ```
 
 An explicit `-t` is never lowered, and `--autotune` searches inside the quota
-instead of measuring a throttled number as if it were the machine's best. The
-container image applies the same cap, so `docker run … args` shows the count the
-miner will really use.
+instead of measuring a throttled number as if it were the machine's best. It
+measures every candidate in three equal-duration rounds, rotates the candidate
+order between rounds, and compares median rates (requiring at least a 2% win
+before recommending a different thread count). Each trial rebuilds the dataset,
+so this one-time command can take a few minutes on slower CPUs; it does not run
+when mining starts. The container image applies the same cap, so `docker run …
+args` shows the count the miner will really use.
 
 ## Measuring it yourself
 
