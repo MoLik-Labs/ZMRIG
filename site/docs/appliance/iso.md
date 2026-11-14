@@ -87,6 +87,26 @@ tends to skip. `--coin` picks the algorithm the memory reservation is sized for,
 A wrong argument is refused before anything is written: a pool without a port, an
 address that is not an address, a mode that does not exist.
 
+A wallet can also be provisioned from JSON instead of pasted at the console:
+
+```json
+{ "wallet": "4...", "pool": "gulf.moneroocean.stream:10001", "worker": "rig-07", "mode": "max" }
+```
+
+```bash
+zmrig-os setup --json rig.json
+zmrig-os wifi --ssid 'Network name' --password 'your-WPA2-passphrase'
+```
+
+The JSON is parsed as data, and the wallet is validated before saving. The Wi-Fi
+command supports WPA2 on `wlan0`; the password is stored only as a derived WPA
+PSK. A live read-only ISO keeps settings for that boot only unless you prepare an
+ext4 data partition with `zmrig-os persist /dev/sdX1` and add
+`zmrig.os.data=/dev/sdX1` to the GRUB kernel line; that command formats the chosen
+device. Installed rigs persist the profile automatically. Adapter firmware
+varies, so use `--firmware all` when a less-common chipset needs a blob outside
+the selected common Wi-Fi firmware set.
+
 ## Keeping the kernel off the mining cores
 
 A mining thread that gets scheduled onto the CPU taking the pool's interrupts

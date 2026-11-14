@@ -1,0 +1,35 @@
+#!/sbin/openrc-run
+# Optional WPA2 client profile. Wired networking remains untouched; when a
+# profile and wlan0 exist, wpa_supplicant associates and udhcpc obtains a lease.
+
+name="ZMRIG Wi-Fi"
+description="WPA2 client and DHCP on wlan0"
+
+PROFILE=/etc/wpa_supplicant/wpa_supplicant.conf
+WPA_PID=/run/wpa_supplicant-wlan0.pid
+DHCP_PID=/run/udhcpc-wlan0.pid
+
+start() {
+    [ -s "$PROFILE" ] || return 0
+    [ -d /sys/class/net/wlan0 ] || { ebegin "Wi-Fi interface wlan0 not present; skipping"; eend 0; return 0; }
+
+    ebegin "Starting WPA supplicant on wlan0"
+    start-stop-daemon --start --background --make-pidfile --pidfile "$WPA_PID" \
+        --exec /usr/sbin/wpa_supplicant -- -i wlan0 -c "$PROFILE"
+    eend $? || return 1
+
+    # udhcpc retries in the background until the access point is associated.
+    /sbin/udhcpc -b -i wlan0 -p "$DHCP_PID" >/dev/null 2>&1 || true
+}
+
+stop() {
+    [ -f "$DHCP_PID" ] && start-stop-daemon --stop --pidfile "$DHCP_PID" --retry TERM/5/KILL/1 >/dev/null 2>&1 || true
+    [ -f "$WPA_PID" ] && start-stop-daemon --stop --pidfile "$WPA_PID" --retry TERM/5/KILL/1 >/dev/null 2>&1 || true
+    rm -f "$DHCP_PID" "$WPA_PID"
+}
+
+depend() {
+    need localmount
+    use modules
+    before networking
+}

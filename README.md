@@ -254,10 +254,10 @@ boot rolls back to the other slot on the third try instead of needing a visit.
 - **Updates are verified and automatic:** a daily job installs a sha256-checked
   static binary *next to* the running system, so it survives a reboot; on an
   installed disk the OS image can update too, into the spare slot.
-- **158 MB, and quick to boot:** the stock initramfs (171 MB, unused), the
-  GPU/Wi-Fi firmware (660 MB) and the sound/video/GPU drivers are not in it, and
-  the miner no longer waits for DHCP before it starts. Measured by the build's
-  own size report: the same image was 1081 MB before.
+- **Compact and quick to boot:** the unused stock initramfs and unrelated GPU,
+  sound and video drivers are omitted; common Wi-Fi firmware is retained for
+  laptop setup. The miner starts independently of DHCP, and each build reports
+  its actual rootfs and ISO size.
 - **It measures itself.** On a rig that has never been measured the miner starts
   at once; ninety seconds later the supervisor times every candidate thread count
   while mining, writes the winner and reloads the miner once. Tuned first (huge

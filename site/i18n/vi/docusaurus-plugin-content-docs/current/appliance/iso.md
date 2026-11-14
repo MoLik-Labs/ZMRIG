@@ -88,6 +88,25 @@ khi đào.
 Tham số sai bị từ chối trước khi ghi bất cứ thứ gì: pool thiếu cổng, chuỗi không
 phải địa chỉ ví, chế độ không tồn tại.
 
+Có thể chuẩn bị ví bằng JSON trên máy khác thay vì dán ở console:
+
+```json
+{ "wallet": "4...", "pool": "gulf.moneroocean.stream:10001", "worker": "rig-07", "mode": "max" }
+```
+
+```bash
+zmrig-os setup --json rig.json
+zmrig-os wifi --ssid 'Tên mạng' --password 'mật-khẩu-WPA2'
+```
+
+JSON được đọc như dữ liệu, và ví được kiểm tra trước khi lưu. Lệnh Wi-Fi hỗ trợ
+WPA2 trên `wlan0`; mật khẩu chỉ được lưu dưới dạng WPA PSK đã dẫn xuất. ISO live
+chỉ đọc chỉ giữ cấu hình trong lần khởi động đó, trừ khi tạo phân vùng dữ liệu
+ext4 bằng `zmrig-os persist /dev/sdX1` rồi thêm `zmrig.os.data=/dev/sdX1` vào dòng
+kernel GRUB; lệnh đó sẽ format thiết bị đã chọn. Máy đã cài tự giữ profile.
+Firmware tùy chipset, hãy dùng `--firmware all`
+nếu adapter lạ cần blob ngoài tập Wi-Fi phổ biến được chọn sẵn.
+
 ## Giữ nhân hệ điều hành ra khỏi lõi đào
 
 Một luồng đào bị scheduler đẩy sang CPU đang phục vụ ngắt của pool thì mất nhiều

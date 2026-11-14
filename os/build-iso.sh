@@ -37,8 +37,8 @@ ORIG_ARGS=("$@")
 ALPINE_VER="${ALPINE_VER:-latest-stable}"
 ALPINE_MIRROR="${ALPINE_MIRROR:-https://dl-cdn.alpinelinux.org/alpine}"
 KERNEL_PKG="${KERNEL_PKG:-linux-lts}"
-# minimal drops the GPU/Wi-Fi/Infiniband firmware blobs and the stock initramfs;
-# `all` keeps the package intact for a board with a NIC that needs one of them.
+# minimal keeps common wired/Wi-Fi firmware and drops unrelated blobs plus the
+# stock initramfs; `all` preserves every installed firmware blob.
 FIRMWARE="${FIRMWARE:-minimal}"
 ARCH_LEVEL="${ARCH_LEVEL:-x86-64-v3}"
 CHANNEL="${CHANNEL:-stable}"
@@ -170,7 +170,7 @@ ZMRIG OS ${VERSION} (${ARCH_LEVEL}, channel ${CHANNEL}, kernel ${KERNEL_PKG})
   1. fetch Alpine ${ALPINE_VER} x86_64 minirootfs into ${CACHE}
   2. build zmrig: zmrig/build.sh --static --arch=${ARCH_LEVEL}
   3. chroot: apk add alpine-base ${KERNEL_PKG} openrc e2fsprogs util-linux curl
-            ca-certificates chrony openssh pciutils ifupdown-ng dhcpcd zstd
+            ca-certificates chrony openssh pciutils ifupdown-ng dhcpcd jq wpa_supplicant zstd
   4. overlay: /usr/local/bin/zmrig{,-os}, /usr/local/lib/zmrig/tune-linux.sh,
      /etc/init.d/zmrig{,-firstboot}, /etc/sysctl.d/99-zmrig.conf, sshd (keys only)
   5. squashfs: mksquashfs rootfs -comp zstd -Xcompression-level ${SQUASHFS_LEVEL:-19} -b 1M
@@ -221,7 +221,8 @@ if [ "$SELF_CHECK" = "1" ]; then
     for f in "${HERE}/init" "${HERE}/chroot-setup.sh" "${HERE}/make-initramfs.sh" \
              "${HERE}/stage-initramfs.sh" "${HERE}/tests/boot-artifacts.sh" "${HERE}/plan.sh" \
              "${HERE}/overlay/usr/local/bin/zmrig-os" \
-             "${HERE}/overlay/usr/local/lib/zmrig/firstboot.sh"; do
+             "${HERE}/overlay/usr/local/lib/zmrig/firstboot.sh" \
+             "${HERE}/overlay/etc/init.d/zmrig-wifi"; do
         syntax "$f"
     done
 
@@ -496,7 +497,7 @@ printf '%s\n' "$VERSION" > "${ROOTFS}/etc/zmrig/version"
 printf '%s\n' "$ARCH_LEVEL" > "${ROOTFS}/etc/zmrig/arch"
 
 # OpenRC has to know about the two services before the image is sealed.
-for svc in zmrig zmrig-firstboot crond; do
+for svc in zmrig zmrig-firstboot zmrig-wifi crond; do
     chroot "$ROOTFS" rc-update add "$svc" default >/dev/null 2>&1 ||
         die "rc-update add $svc failed"
 done

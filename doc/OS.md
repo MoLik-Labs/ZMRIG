@@ -172,16 +172,18 @@ version with the `alpine` field inside the last published manifest.
   `zmrig/build.sh --static`, so the miner cannot be broken by a libc update and
   the same file runs on any distribution.
 - **Sized deliberately**: `/boot/initramfs-lts` (the package's 171 MB initramfs,
-  which this image never reads) is deleted, `/lib/firmware` keeps only what a
-  wired rig loads (`rtl_nic`, `bnx2`, `bnx2x`, `tg3`, `intel/ice`, microcode —
-  660 MB becomes 16 MB), and `sound`, `media`, `gpu`, `infiniband`, `isdn`, `wan`,
+  which this image never reads) is deleted, `/lib/firmware` keeps common wired
+  NIC blobs plus Intel/Realtek/Qualcomm/MediaTek Wi-Fi families and CPU microcode
+  (unneeded blobs still go; `--firmware all` keeps everything), and `sound`, `media`, `gpu`, `infiniband`, `isdn`, `wan`,
   `can`, `iio`, `staging`, `nfc`, `bluetooth` and `thunderbolt` modules are
-  deleted with `depmod` rebuilt. Measured: rootfs 1122 → 180 MB, ISO 1081 →
-  158 MB. `--firmware all` keeps the whole set for an unusual NIC, and the build
-  prints a size report every run (`dist/size-report.txt`, posted on the PR).
+  deleted with `depmod` rebuilt. Earlier wired-only builds measured 1122 → 180 MB
+  for the rootfs and 1081 → 158 MB for the ISO; those figures predate the common
+  Wi-Fi firmware subset and are not current image sizes. `--firmware all` keeps
+  the whole set for an unusual adapter, and each build reports its actual size.
 - **Services**: `zmrig` (the miner, via `zmrig-os run`), `zmrig-firstboot` (the
   wizard on the console when no wallet is configured), `crond` (the daily update
-  job), `networking`, `chronyd`, `sshd`, `syslog`, `mdev`/`hwdrivers`. The miner
+  job), `networking`, the optional `zmrig-wifi` WPA2/DHCP client, `chronyd`, `sshd`,
+  `syslog`, `mdev`/`hwdrivers`. The miner
   service *uses* networking, DNS and the clock rather than needing them: it starts
   with the filesystem and stratum reconnects, so a DHCP lease is no longer on the
   critical path to the first share.
@@ -883,3 +885,40 @@ The image is rebuilt by the same workflow whenever `os/`, `zmrig/` or
 - No MSR inside a VM. The hypervisor rejects the write and the miner stays on
   the portable path; `zmrig-os doctor` says so instead of failing.
 - No telemetry, no phone-home, no account.
+
+## JSON wallet setup and Wi-Fi
+
+A rig profile can be prepared on another machine and imported without typing a
+95-character address at the console. `wallet` is required; the other values are
+optional and use the same validation as the setup wizard:
+
+```json
+{
+  "wallet": "4...",
+  "pool": "gulf.moneroocean.stream:10001",
+  "worker": "rig-07",
+  "mode": "max",
+  "algo": "auto",
+  "threads": "auto",
+  "donate": 3,
+  "safe_temp": 72
+}
+```
+
+```sh
+zmrig-os setup --json rig.json
+```
+
+The file is parsed as JSON (not sourced as shell), and the wallet is checked
+before the config is written. Keep the JSON file private because it contains the
+wallet address. For an encrypted WPA2 Wi-Fi network, configure a client profile
+with `zmrig-os wifi --ssid 'Network name' --password 'your-passphrase'`. The
+passphrase is converted to a WPA PSK before it is saved. Wi-Fi uses `wlan0`,
+`wpa_supplicant` and DHCP; the wired interface remains available. On a live
+read-only image, settings last only for that boot unless the image is installed
+or an ext4 data partition is prepared with `zmrig-os persist /dev/sdX1` and
+`zmrig.os.data=/dev/sdX1` is added to the GRUB kernel line (the persist command
+formats the selected device). An installed image stores the hashed profile beside
+its config. Firmware availability depends on the chipset;
+`--firmware all` keeps every firmware blob when the default selected set does not
+cover a particular adapter.

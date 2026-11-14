@@ -446,14 +446,30 @@ fi
 
 if [ -n "$DATA" ]; then
     if mount -t ext4 -o rw "$DATA" /media 2>/dev/null; then
+        printf '%s' "$DATA" > /newroot/etc/zmrig/data-device 2>/dev/null || true
         if [ -f /media/etc/zmrig/os.conf ]; then
             cp /media/etc/zmrig/os.conf /newroot/etc/zmrig/os.conf
             log "config: os.conf from $DATA (persistent)"
+        fi
+        if [ -f /media/etc/zmrig/wpa_supplicant.conf ]; then
+            mkdir -p /newroot/etc/wpa_supplicant
+            cp /media/etc/zmrig/wpa_supplicant.conf /newroot/etc/wpa_supplicant/wpa_supplicant.conf
+            chmod 600 /newroot/etc/wpa_supplicant/wpa_supplicant.conf 2>/dev/null || true
+            log "config: Wi-Fi profile from $DATA (persistent)"
         fi
         umount /media
     else
         log "warning: $DATA could not be mounted; the config will not persist"
     fi
+fi
+
+# A profile stored beside the live/installed image takes precedence over the
+# data-partition copy. It contains a derived WPA PSK, never a clear-text passphrase.
+if [ -f /media/zmrig/wpa_supplicant.conf ]; then
+    mkdir -p /newroot/etc/wpa_supplicant
+    cp /media/zmrig/wpa_supplicant.conf /newroot/etc/wpa_supplicant/wpa_supplicant.conf
+    chmod 600 /newroot/etc/wpa_supplicant/wpa_supplicant.conf 2>/dev/null || true
+    log "config: Wi-Fi profile from boot media"
 fi
 
 if [ -n "$WALLET$POOL$WORKER$MODE$MAXTEMP$FLEET$INSTALL$AFFINITY$ALGO$ISOLATE$HUGEPAGES" ]; then
