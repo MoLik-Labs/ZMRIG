@@ -32,3 +32,43 @@ usb_config_copy() { # mounted filesystem root, destination -> prints chosen rela
     done
     return 1
 }
+
+usb_config_scan() { # sys_block_root dev_root boot_device mountpoint destination
+    local sys_root="$1" dev_root="$2" boot_device="$3" mountpoint="$4"
+    local destination="$5" sysdev name dev realpath fs mount_opts relative
+
+    USB_CONFIG_DEVICE=""
+    USB_CONFIG_FS=""
+    USB_CONFIG_PATH=""
+
+    for sysdev in "$sys_root"/*; do
+        [ -e "$sysdev" ] || continue
+        [ -r "$sysdev/partition" ] || continue
+        name=$(basename "$sysdev")
+        dev="${dev_root}/${name}"
+        [ "$dev" = "$boot_device" ] && continue
+        [ -e "$dev" ] || continue
+        realpath=$(readlink -f "$sysdev" 2>/dev/null || true)
+        usb_path_is_usb "$realpath" || continue
+
+        for fs in exfat vfat ntfs3 ext4; do
+            # Never execute binaries or device nodes from provisioning media.
+            # noload also prevents ext4 journal replay on the source stick.
+            case "$fs" in
+                ext4) mount_opts=ro,nosuid,nodev,noexec,noload ;;
+                *)    mount_opts=ro,nosuid,nodev,noexec ;;
+            esac
+            if mount -t "$fs" -o "$mount_opts" "$dev" "$mountpoint" 2>/dev/null; then
+                relative=$(usb_config_copy "$mountpoint" "$destination" 2>/dev/null || true)
+                umount "$mountpoint" 2>/dev/null || true
+                if [ -n "$relative" ]; then
+                    USB_CONFIG_DEVICE="$dev"
+                    USB_CONFIG_FS="$fs"
+                    USB_CONFIG_PATH="$relative"
+                    return 0
+                fi
+            fi
+        done
+    done
+    return 1
+}
