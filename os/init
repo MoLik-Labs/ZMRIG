@@ -494,7 +494,13 @@ if [ -r /usb-config.sh ]; then
             usb_path_is_usb "$usb_realpath" || continue
 
             for usb_fs in exfat vfat ntfs3 ext4; do
-                if mount -t "$usb_fs" -o ro "$usb_dev" /usb-config 2>/dev/null; then
+                # Never execute binaries or device nodes from provisioning media.
+                # noload also prevents ext4 journal replay on the source stick.
+                case "$usb_fs" in
+                    ext4) usb_mount_opts=ro,nosuid,nodev,noexec,noload ;;
+                    *)    usb_mount_opts=ro,nosuid,nodev,noexec ;;
+                esac
+                if mount -t "$usb_fs" -o "$usb_mount_opts" "$usb_dev" /usb-config 2>/dev/null; then
                     usb_json_path=$(usb_config_copy /usb-config /newroot/etc/zmrig/usb-config.json 2>/dev/null || true)
                     umount /usb-config 2>/dev/null || true
                     if [ -n "$usb_json_path" ]; then

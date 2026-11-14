@@ -80,7 +80,21 @@ The JSON needs a `wallet` string; `pool`, `worker`, `mode`, `algo`, `threads`, `
 `safe_temp` are optional. It is validated by the normal setup path before the
 miner uses it. No Ventoy persistence plugin is needed; the JSON stays on your
 USB and is read without modifying that partition. A malformed file or invalid
-wallet is reported and the on-screen setup remains available.
+wallet is reported and the on-screen setup remains available. For example, save
+this as plain UTF-8 `rig.json` (replace the wallet placeholder; do not include
+comments or a trailing comma):
+
+```json
+{
+  "wallet": "YOUR_MONERO_WALLET_ADDRESS",
+  "pool": "gulf.moneroocean.stream:10001",
+  "worker": "rig-01",
+  "mode": "max"
+}
+```
+
+Use one supported file per USB to avoid ambiguity; `zmrig.json` has priority if
+more than one supported filename is present.
 
 ## One command, no questions
 

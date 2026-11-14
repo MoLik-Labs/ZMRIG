@@ -82,6 +82,20 @@ khi miner dùng. Không cần bật Ventoy persistence; file JSON vẫn nằm tr
 phân vùng không bị sửa. Nếu file sai hoặc ví không hợp lệ, máy báo lỗi và vẫn có
 thể dùng setup trên màn hình.
 
+Ví dụ file UTF-8 `rig.json` (thay ví mẫu; không thêm comment hay dấu phẩy cuối):
+
+```json
+{
+  "wallet": "DIA_CHI_VI_MONERO_CUA_BAN",
+  "pool": "gulf.moneroocean.stream:10001",
+  "worker": "rig-01",
+  "mode": "max"
+}
+```
+
+Chỉ nên để một file tên được hỗ trợ trên USB để tránh nhầm lẫn. Nếu có nhiều
+file, `zmrig.json` được ưu tiên.
+
 ## Một lệnh, không hỏi gì
 
 Wizard hỏi từng câu một, đúng cho người ngồi trước bàn phím. Còn khi ssh vào máy,
