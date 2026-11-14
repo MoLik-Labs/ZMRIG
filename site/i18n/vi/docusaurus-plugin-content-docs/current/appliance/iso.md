@@ -69,6 +69,19 @@ bật bộ điều tiết.
 Khi đã có ví thì wizard không hiện nữa. `zmrig.os.nostart=1` khởi động máy mà
 không đào — đúng thứ một USB cứu hộ cần.
 
+### Đọc JSON ví từ USB Ventoy
+
+Để cài đặt Ventoy không cần bàn phím, đặt `rig.json` ở thư mục gốc phân vùng dữ
+liệu Ventoy, cạnh file ISO, rồi khởi động ảnh. ZMRIG OS quét phân vùng USB ở chế
+độ chỉ đọc (có exFAT thường dùng của Ventoy, cùng FAT32, NTFS và ext4), rồi lấy
+file hợp lệ đầu tiên theo tên: `zmrig.json`, `rig.json`, `wallet.json`,
+`config.json`, hoặc `zmrig/rig.json` / `zmrig/config.json` (tối đa 64 KiB). JSON
+cần trường `wallet` dạng chuỗi; `pool`, `worker`, `mode`, `algo`, `threads`, `donate` và
+`safe_temp` là tùy chọn. Cấu hình được kiểm tra qua luồng setup bình thường trước
+khi miner dùng. Không cần bật Ventoy persistence; file JSON vẫn nằm trên USB và
+phân vùng không bị sửa. Nếu file sai hoặc ví không hợp lệ, máy báo lỗi và vẫn có
+thể dùng setup trên màn hình.
+
 ## Một lệnh, không hỏi gì
 
 Wizard hỏi từng câu một, đúng cho người ngồi trước bàn phím. Còn khi ssh vào máy,
@@ -87,6 +100,25 @@ khi đào.
 
 Tham số sai bị từ chối trước khi ghi bất cứ thứ gì: pool thiếu cổng, chuỗi không
 phải địa chỉ ví, chế độ không tồn tại.
+
+Có thể chuẩn bị ví bằng JSON trên máy khác thay vì dán ở console:
+
+```json
+{ "wallet": "4...", "pool": "gulf.moneroocean.stream:10001", "worker": "rig-07", "mode": "max" }
+```
+
+```bash
+zmrig-os setup --json rig.json
+zmrig-os wifi --ssid 'Tên mạng' --password 'mật-khẩu-WPA2'
+```
+
+JSON được đọc như dữ liệu, và ví được kiểm tra trước khi lưu. Lệnh Wi-Fi hỗ trợ
+WPA2 trên `wlan0`; mật khẩu chỉ được lưu dưới dạng WPA PSK đã dẫn xuất. ISO live
+chỉ đọc chỉ giữ cấu hình trong lần khởi động đó, trừ khi tạo phân vùng dữ liệu
+ext4 bằng `zmrig-os persist /dev/sdX1` rồi thêm `zmrig.os.data=/dev/sdX1` vào dòng
+kernel GRUB; lệnh đó sẽ format thiết bị đã chọn. Máy đã cài tự giữ profile.
+Firmware tùy chipset, hãy dùng `--firmware all`
+nếu adapter lạ cần blob ngoài tập Wi-Fi phổ biến được chọn sẵn.
 
 ## Giữ nhân hệ điều hành ra khỏi lõi đào
 

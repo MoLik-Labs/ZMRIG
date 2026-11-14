@@ -6,6 +6,7 @@ set -eu
 
 CONF=/etc/zmrig/os.conf
 STAMP=/etc/zmrig/.identity-shown
+USB_JSON=/etc/zmrig/usb-config.json
 
 # The Device ID is the first thing an owner needs, and it is on the machine, not
 # in a manual: printed once, on the console, before anything else asks for
@@ -16,6 +17,18 @@ if [ ! -f "$STAMP" ]; then
         [ -w "$CONSOLE" ] || CONSOLE=/dev/console
         printf '\n%s\n\n' "$ID" > "$CONSOLE" 2>&1 || true
         : > "$STAMP" 2>/dev/null || true
+    fi
+fi
+
+# A JSON file found on a Ventoy/removable USB is an explicit provisioning
+# request. It is data parsed by jq, never shell; errors fall through to the
+# interactive wizard when a console is available.
+if [ -s "$USB_JSON" ]; then
+    printf '\nImporting rig settings from USB JSON: %s\n' "$USB_JSON"
+    if /usr/local/bin/zmrig-os setup --json "$USB_JSON" --yes; then
+        exit 0
+    else
+        printf 'USB JSON import failed; check the file and wallet, or configure at the console.\n' > /dev/console 2>&1 || true
     fi
 fi
 

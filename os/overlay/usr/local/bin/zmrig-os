@@ -11,6 +11,8 @@
 #   zmrig-os sync                # check in, apply what the bot queued
 #   zmrig-os setup               # the wizard: wallet, pool, mode, start
 #   zmrig-os setup --wallet 4... --pool host:port --mode max --start
+#   zmrig-os setup --json rig.json  # import a wallet and rig settings
+#   zmrig-os wifi --ssid NAME --password PASS  # configure WPA2 Wi-Fi
 #   zmrig-os quickstart --wallet 4... [--pool host:port] [--coin xmr] [--mode max]
 #                                # setup + tune + fleet + start, in one command
 #   zmrig-os mode balanced       # max | balanced | eco | light | safe
@@ -1145,10 +1147,12 @@ supervise() {
 # --------------------------------------------------------------- commands
 
 cmd_setup() {
-    local wallet="" pool="" mode="" threads="" worker="" donate="" maxtemp="" start=0 interactive=1
+    local wallet="" pool="" mode="" threads="" worker="" donate="" maxtemp="" json_file="" pool_host pool_port start=0 interactive=1
 
     while [ $# -gt 0 ]; do
         case "$1" in
+            --json) json_file="${2:?--json needs a file}"; shift ;;
+            --json=*) json_file="${1#*=}" ;;
             --wallet)  wallet="${2:?}"; shift ;;
             --wallet=*) wallet="${1#*=}" ;;
             --pool)    pool="${2:?}"; shift ;;
@@ -1177,6 +1181,27 @@ cmd_setup() {
     done
 
     load_conf
+
+    # JSON is parsed by jq, not sourced as shell. It is a convenient way to move
+    # a known-good wallet/pool profile onto a rig without a long console entry.
+    if [ -n "$json_file" ]; then
+        [ -r "$json_file" ] || die "cannot read JSON config: $json_file"
+        command -v jq >/dev/null 2>&1 || die "JSON import needs jq (included in the image)"
+        jq -e 'type == "object" and (.wallet | type == "string" and length > 0)' "$json_file" >/dev/null 2>&1 ||
+            die "JSON config must be an object with a non-empty string 'wallet' field"
+        json_value() {
+            jq -r --arg key "$1" 'if (has($key) | not) or .[$key] == null then "" else .[$key] | if type == "string" or type == "number" then tostring else error("must be text or a number") end end' "$json_file" 2>/dev/null ||
+                die "invalid JSON field '$1' (expected text or a number)"
+        }
+        wallet=$(json_value wallet)
+        [ -z "$(json_value pool)" ] || pool=$(json_value pool)
+        [ -z "$(json_value worker)" ] || worker=$(json_value worker)
+        [ -z "$(json_value mode)" ] || mode=$(json_value mode)
+        [ -z "$(json_value threads)" ] || threads=$(json_value threads)
+        [ -z "$(json_value donate)" ] || donate=$(json_value donate)
+        [ -z "$(json_value safe_temp)" ] || maxtemp=$(json_value safe_temp)
+        [ -z "$(json_value algo)" ] || ALGO=$(json_value algo)
+    fi
 
     # Non-interactive when any value was given on the command line, or when the
     # caller asked for it. A fleet boot passes everything through the kernel
@@ -1244,9 +1269,32 @@ cmd_setup() {
     fi
     [ -n "$donate" ] && DONATE="$donate"
 
+    # Keep profile fields on one line and safe for the quoted KEY="VALUE"
+    # writer. A newline or quote in a pool string must never create a new config
+    # key; worker names are reduced to the pool-safe alphabet separately.
+    case "$POOL" in
+        *[!A-Za-z0-9._:-]*) die "pool must be a host or address followed by :port" ;;
+    esac
+    case "$POOL" in *:*) pool_host=${POOL%:*}; pool_port=${POOL##*:} ;; *) die "pool must include a port, for example pool.example:10001" ;; esac
+    [ -n "$pool_host" ] || die "pool host cannot be empty"
+    case "$pool_port" in ''|*[!0-9]*) die "pool port must be a number from 1 to 65535" ;; esac
+    pool_port=$(conf_number POOL_PORT "$pool_port" 1 65535 0)
+    [ "$pool_port" != 0 ] || die "pool port must be 1..65535"
+    POOL="${pool_host}:${pool_port}"
+    WORKER=$(conf_token WORKER "$WORKER" "$(hostname 2>/dev/null || echo rig)")
+    [ -n "$threads" ] || threads="$THREADS"
+    case "$threads" in auto) THREADS=auto ;; *) THREADS=$(conf_number THREADS "$threads" 1 128 0); [ "$THREADS" != 0 ] || die "threads must be auto or 1..128" ;; esac
+    [ -n "$donate" ] || donate="$DONATE"
+    DONATE=$(conf_number DONATE "$donate" 0 10 -1)
+    [ "$DONATE" != -1 ] || die "donate must be 0..10"
+
     case "$MODE" in
         max|balanced|eco|light|safe) ;;
         *) die "unknown mode: $MODE (max, balanced, eco, light, safe)" ;;
+    esac
+    case "$ALGO" in
+        auto|rx/0|rx/2|rx/wow|rx/arq|rx/graft|rx/sfx|rx/yada|panthera) ;;
+        *) die "unsupported algorithm in setup: $ALGO" ;;
     esac
 
     save_conf
@@ -1258,6 +1306,65 @@ cmd_setup() {
 
     if [ "$start" = "1" ]; then
         cmd_boot
+    fi
+}
+
+
+cmd_wifi() {
+    local ssid="" password="" conf="$ROOT/etc/wpa_supplicant/wpa_supplicant.conf" raw generated data_device data_mount="${ROOT}/mnt/zmrig-data"
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --ssid) ssid="${2:?--ssid needs a network name}"; shift ;;
+            --ssid=*) ssid="${1#*=}" ;;
+            --password) password="${2:?--password needs a WPA passphrase}"; shift ;;
+            --password=*) password="${1#*=}" ;;
+            -h|--help) say "usage: zmrig-os wifi --ssid NAME --password WPA2_PASSPHRASE"; return 0 ;;
+            *) die "unknown wifi option: $1" ;;
+        esac
+        shift
+    done
+    [ -n "$ssid" ] && [ -n "$password" ] || die "usage: zmrig-os wifi --ssid NAME --password WPA2_PASSPHRASE"
+    [ "${#ssid}" -le 32 ] || die "Wi-Fi network name must be at most 32 bytes"
+    [ "${#password}" -ge 8 ] && [ "${#password}" -le 63 ] || die "WPA2 passphrase must be 8..63 characters"
+    command -v wpa_passphrase >/dev/null 2>&1 || die "wpa_passphrase is not installed"
+    is_root || die "run as root"
+    mkdir -p "$(dirname "$conf")"
+    chmod 700 "$(dirname "$conf")"
+    # wpa_passphrase emits the original password as a comment; strip comments
+    # before saving so the persistent profile contains only the derived PSK.
+    raw=$(wpa_passphrase "$ssid" "$password") || die "could not create the Wi-Fi profile"
+    generated=$(printf '%s\n' "$raw" | sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d')
+    unset raw
+    printf 'ctrl_interface=/run/wpa_supplicant\nupdate_config=0\n%s\n' "$generated" > "$conf"
+    chmod 600 "$conf"
+    # The initramfs restores this hashed profile from the boot medium or the
+    # dedicated data partition. A live read-only ISO cannot store it: use
+    # `zmrig-os persist` / the ZMRIGDATA device parameter, or install the OS.
+    if is_installed && [ -w "$MEDIA" ]; then
+        mkdir -p "${MEDIA}/zmrig" 2>/dev/null || true
+        cp "$conf" "${MEDIA}/zmrig/wpa_supplicant.conf" 2>/dev/null || warn "could not persist the Wi-Fi profile to the boot disk"
+        chmod 600 "${MEDIA}/zmrig/wpa_supplicant.conf" 2>/dev/null || true
+    fi
+    if [ -r "$(P /etc/zmrig/data-device)" ]; then
+        data_device=$(cat "$(P /etc/zmrig/data-device)" 2>/dev/null || true)
+        case "$data_device" in
+            /dev/*)
+                mkdir -p "$data_mount"
+                if mount -t ext4 -o rw "$data_device" "$data_mount" 2>/dev/null; then
+                    mkdir -p "${data_mount}/etc/zmrig"
+                    cp "$conf" "${data_mount}/etc/zmrig/wpa_supplicant.conf" &&
+                        chmod 600 "${data_mount}/etc/zmrig/wpa_supplicant.conf" || warn "could not persist the Wi-Fi profile to $data_device"
+                    umount "$data_mount" 2>/dev/null || warn "could not unmount $data_device"
+                else
+                    warn "could not mount the configured data device $data_device"
+                fi
+                ;;
+            *) warn "ignoring invalid persistent data device marker" ;;
+        esac
+    fi
+    say "Wi-Fi profile saved for '$ssid' (password is stored as a WPA PSK)"
+    if [ -x "$(P /etc/init.d/zmrig-wifi)" ]; then
+        "$(P /etc/init.d/zmrig-wifi)" restart >/dev/null 2>&1 || warn "profile saved; Wi-Fi did not connect yet"
     fi
 }
 
@@ -2756,6 +2863,11 @@ EOF2
     # mode, plus the marker that makes /etc/zmrig persistent.
     mkdir -p "${rootfs_mnt}/etc/zmrig"
     conf_to_media "${rootfs_mnt}/etc/zmrig/os.conf"
+    if [ -s "$(P /etc/wpa_supplicant/wpa_supplicant.conf)" ]; then
+        run cp "$(P /etc/wpa_supplicant/wpa_supplicant.conf)" "${rootfs_mnt}/zmrig/wpa_supplicant.conf" ||
+            die "cannot copy the Wi-Fi profile to the installed system"
+        run chmod 600 "${rootfs_mnt}/zmrig/wpa_supplicant.conf"
+    fi
 
     run sync
     run umount "$esp_mnt" || die "cannot unmount $esp_mnt"
@@ -3204,8 +3316,16 @@ cmd_persist() {
     run mount "$device" "$mnt" || die "mount failed"
     run mkdir -p "${mnt}/etc/zmrig"
     run cp "$CONF" "${mnt}/etc/zmrig/os.conf" 2>/dev/null || true
+    if [ -s "$(P /etc/wpa_supplicant/wpa_supplicant.conf)" ]; then
+        run mkdir -p "${mnt}/etc/zmrig"
+        run cp "$(P /etc/wpa_supplicant/wpa_supplicant.conf)" "${mnt}/etc/zmrig/wpa_supplicant.conf"
+        run chmod 600 "${mnt}/etc/zmrig/wpa_supplicant.conf" 2>/dev/null || true
+    fi
     run umount "$mnt"
-    say "config copied; the image will mount it at /etc/zmrig on the next boot"
+    if [ "$DRYRUN" != "1" ]; then
+        printf '%s\n' "$device" > "${ETC}/data-device"
+    fi
+    say "config copied; add zmrig.os.data=$device to the GRUB kernel line so the live image mounts it on boot"
 }
 
 cmd_ssh_key() {
@@ -3832,6 +3952,7 @@ main() {
 
     case "$cmd" in
         setup)    cmd_setup "$@" ;;
+        wifi)     cmd_wifi "$@" ;;
         mode)     cmd_mode "$@" ;;
         isolate)  cmd_isolate "$@" ;;
         hugepages|huge) cmd_hugepages "$@" ;;
