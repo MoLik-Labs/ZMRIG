@@ -2,7 +2,10 @@
 # Optional WPA2 client profile. Wired networking remains untouched; when a
 # profile and wlan0 exist, wpa_supplicant associates and udhcpc obtains a lease.
 
+# shellcheck disable=SC2034 # OpenRC reads service metadata from these variables.
 name="ZMRIG Wi-Fi"
+# shellcheck disable=SC2034
+# OpenRC reads the description as service metadata.
 description="WPA2 client and DHCP on wlan0"
 
 PROFILE=/etc/wpa_supplicant/wpa_supplicant.conf
