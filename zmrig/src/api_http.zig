@@ -286,6 +286,25 @@ fn handle(server: *Server, stream: std.net.Stream) void {
     respond(stream, "404 Not Found", "application/json", "{\"status\":\"error\",\"error\":\"not found\"}\n");
 }
 
+/// Compare token bytes without returning on the first mismatch. Token length is
+/// configuration and already known to the caller, but matching content should
+/// not leak through a byte-by-byte timing oracle on a LAN-exposed API.
+fn constantTimeEql(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+
+    var difference: u8 = 0;
+    for (a, b) |left, right| difference |= left ^ right;
+
+    return difference == 0;
+}
+
+test "API token comparison checks all same-length bytes" {
+    try std.testing.expect(constantTimeEql("correct horse", "correct horse"));
+    try std.testing.expect(!constantTimeEql("xorrect horse", "correct horse"));
+    try std.testing.expect(!constantTimeEql("correct horsf", "correct horse"));
+    try std.testing.expect(!constantTimeEql("short", "correct horse"));
+}
+
 fn authorised(head: []const u8, token: []const u8) bool {
     var lines = std.mem.splitSequence(u8, head, "\r\n");
     _ = lines.next(); // request line
@@ -305,7 +324,7 @@ fn authorised(head: []const u8, token: []const u8) bool {
         else
             value;
 
-        return std.mem.eql(u8, candidate, token);
+        return constantTimeEql(candidate, token);
     }
 
     return false;
@@ -333,10 +352,40 @@ fn respondV2(server: *Server, stream: std.net.Stream, with_body: bool) void {
     respondBody(stream, "200 OK", "application/json", body, with_body);
 }
 
+/// Return one complete JSON string literal. Pool labels and rig identifiers are
+/// user-controlled config; interpolating them between quotes makes a valid
+/// worker name such as `rig"1` corrupt the whole monitoring response (and can
+/// inject fields into dashboards that consume it).
+fn escapedJsonString(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
+    return std.json.stringifyAlloc(allocator, value, .{});
+}
+
+test "API JSON string encoding cannot escape its field" {
+    const input = "rig\"\\name\n\t\x01雪";
+    const encoded = try escapedJsonString(std.testing.allocator, input);
+    defer std.testing.allocator.free(encoded);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, encoded, .{});
+    defer parsed.deinit();
+
+    switch (parsed.value) {
+        .string => |decoded| try std.testing.expectEqualStrings(input, decoded),
+        else => return error.ExpectedJsonString,
+    }
+}
+
 fn summaryV2(server: *Server, buffer: []u8) ![]const u8 {
     const info = server.info;
-    const uptime = @divTrunc(std.time.milliTimestamp() - info.started_ms, 1000);
+    const worker_id_json = try escapedJsonString(server.allocator, info.worker_id);
+    defer server.allocator.free(worker_id_json);
+    const version_json = try escapedJsonString(server.allocator, info.version);
+    defer server.allocator.free(version_json);
     const algo = if (info.miner.engine.algo) |current| current.label() else "auto";
+    const algo_json = try escapedJsonString(server.allocator, algo);
+    defer server.allocator.free(algo_json);
+    const pool_json = try escapedJsonString(server.allocator, info.pool_url);
+    defer server.allocator.free(pool_json);
+    const uptime = @divTrunc(std.time.milliTimestamp() - info.started_ms, 1000);
     const huge_pages = info.miner.hugePages();
     const paused = info.miner.shared.paused.load(.acquire);
     const highest = @max(info.view.peak(), info.view.rate60s());
@@ -348,16 +397,16 @@ fn summaryV2(server: *Server, buffer: []u8) ![]const u8 {
     return std.fmt.bufPrint(buffer,
         \\{{
         \\  "id": "zmrig",
-        \\  "worker_id": "{s}",
+        \\  "worker_id": {s},
         \\  "uptime": {d},
-        \\  "version": "{s}",
+        \\  "version": {s},
         \\  "kind": "miner",
         \\  "ua": "zmrig/{s}",
-        \\  "algo": "{s}",
+        \\  "algo": {s},
         \\  "paused": {s},
         \\  "donate_level": {d},
         \\  "connection": {{
-        \\    "pool": "{s}",
+        \\    "pool": {s},
         \\    "uptime": {d},
         \\    "failures": {d},
         \\    "tls": {s}
@@ -382,14 +431,14 @@ fn summaryV2(server: *Server, buffer: []u8) ![]const u8 {
         \\}}
         \\
     , .{
-        info.worker_id,
+        worker_id_json,
         uptime,
+        version_json,
         info.version,
-        info.version,
-        algo,
+        algo_json,
         if (paused) "true" else "false",
         info.donate_percent,
-        info.pool_url,
+        pool_json,
         info.view.connectionUptime(),
         failed,
         if (std.mem.indexOf(u8, info.pool_url, "wss://") != null or std.mem.indexOf(u8, info.pool_url, "tls://") != null) "true" else "false",
@@ -408,8 +457,16 @@ fn summaryV2(server: *Server, buffer: []u8) ![]const u8 {
 
 fn summary(server: *Server, buffer: []u8) ![]const u8 {
     const info = server.info;
-    const uptime = @divTrunc(std.time.milliTimestamp() - info.started_ms, 1000);
+    const worker_id_json = try escapedJsonString(server.allocator, info.worker_id);
+    defer server.allocator.free(worker_id_json);
+    const version_json = try escapedJsonString(server.allocator, info.version);
+    defer server.allocator.free(version_json);
     const algo = if (info.miner.engine.algo) |current| current.label() else "auto";
+    const algo_json = try escapedJsonString(server.allocator, algo);
+    defer server.allocator.free(algo_json);
+    const pool_json = try escapedJsonString(server.allocator, info.pool_url);
+    defer server.allocator.free(pool_json);
+    const uptime = @divTrunc(std.time.milliTimestamp() - info.started_ms, 1000);
     const huge_pages = info.miner.hugePages();
     const paused = info.miner.shared.paused.load(.acquire);
     const highest = @max(info.view.peak(), info.view.rate60s());
@@ -418,23 +475,23 @@ fn summary(server: *Server, buffer: []u8) ![]const u8 {
     const failed = info.failed.load(.monotonic);
 
     return std.fmt.bufPrint(buffer,
-        \\{{"id":"zmrig","worker_id":"{s}","uptime":{d},"version":"{s}","kind":"miner","ua":"zmrig/{s}",
-        \\"algo":"{s}","paused":{s},"donate_level":{d},
-        \\"connection":{{"pool":"{s}","uptime":{d},"failures":{d},"tls":{s}}},
+        \\{{"id":"zmrig","worker_id":{s},"uptime":{d},"version":{s},"kind":"miner","ua":"zmrig/{s}",
+        \\"algo":{s},"paused":{s},"donate_level":{d},
+        \\"connection":{{"pool":{s},"uptime":{d},"failures":{d},"tls":{s}}},
         \\"hashrate":{{"total":[{d:.1},{d:.1},{d:.1}],"highest":{d:.1}}},
         \\"hugepages":[{d},{d}],
         \\"cpu":{{"threads":{d}}},
         \\"results":{{"shares_good":{d},"shares_total":{d},"hashes_total":{d},"error_log":[]}}}}
         \\
     , .{
-        info.worker_id,
+        worker_id_json,
         uptime,
+        version_json,
         info.version,
-        info.version,
-        algo,
+        algo_json,
         if (paused) "true" else "false",
         info.donate_percent,
-        info.pool_url,
+        pool_json,
         info.view.connectionUptime(),
         failed,
         if (std.mem.indexOf(u8, info.pool_url, "wss://") != null or std.mem.indexOf(u8, info.pool_url, "tls://") != null) "true" else "false",

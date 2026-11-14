@@ -202,10 +202,13 @@ khác biệt giữa "nó đã hạ tải" và "nó không có cảm biến và k
 ```
 
 Chỉ cảm biến của CPU được dùng — `coretemp`, `k10temp`, `zenpower`, `cpu_thermal`,
-`acpitz` và các chip Super I/O — nên NVMe hay GPU ấm không làm mất một thread
-nào. Máy không có cảm biến thì nói một lần rồi vẫn đào với số thread được giao:
-một nhiệt kế hỏng không phải lý do để ngừng kiếm tiền. `--thermal-file=PATH`
-trỏ bộ điều tiết sang một file khác, cho board mà cảm biến nằm sau BMC.
+`acpitz` và các chip Super I/O. Các thermal zone được ghi rõ là GPU, NVMe, pin,
+da, không khí xung quanh, Wi-Fi, bộ sạc, RAM hoặc chipset sẽ bị bỏ qua; nhãn
+firmware lạ vẫn được chấp nhận để không bỏ sót zone CPU riêng của từng hãng.
+NVMe hay GPU nóng không làm mất thread nào. Máy không có cảm biến thì nói một lần
+rồi vẫn đào với số thread được giao: nhiệt kế hỏng không phải lý do để ngừng kiếm
+tiền. `--thermal-file=PATH` trỏ bộ điều tiết sang file khác, cho board có cảm
+biến nằm sau BMC.
 
 ## Số thread: đo, không đoán
 

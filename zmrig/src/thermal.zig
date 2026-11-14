@@ -394,6 +394,34 @@ fn scanHwmon(sys_root: []const u8, best: *?Reading) void {
     }
 }
 
+// Thermal zones are named by firmware, not by the device they measure. Many
+// systems expose GPU, NVMe, battery and skin zones alongside the CPU zone; using
+// the hottest of all of them throttles a cool CPU because an unrelated part is
+// warm. Keep unknown zone types (some firmware labels the CPU zone opaquely),
+// but reject types that unambiguously identify another component.
+const non_cpu_zone_terms = [_][]const u8{
+    "gpu", "nvme", "ssd", "disk", "battery", "skin", "ambient",
+    "wifi", "wlan", "charger", "memory", "ddr", "pch",
+};
+
+fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    if (needle.len == 0 or needle.len > haystack.len) return false;
+
+    for (0..haystack.len - needle.len + 1) |i| {
+        if (std.ascii.eqlIgnoreCase(haystack[i .. i + needle.len], needle)) return true;
+    }
+
+    return false;
+}
+
+fn isNonCpuThermalZone(zone_type: []const u8) bool {
+    for (non_cpu_zone_terms) |term| {
+        if (containsIgnoreCase(zone_type, term)) return true;
+    }
+
+    return false;
+}
+
 fn scanThermal(sys_root: []const u8, best: *?Reading) void {
     var path_buf: [256]u8 = undefined;
     const root = std.fmt.bufPrint(&path_buf, "{s}/class/thermal", .{sys_root}) catch return;
@@ -423,6 +451,8 @@ fn scanThermal(sys_root: []const u8, best: *?Reading) void {
             offer(best, @as(f32, @floatFromInt(milli)) / 1000, entry.name);
             continue;
         };
+
+        if (isNonCpuThermalZone(zone)) continue;
 
         offer(best, @as(f32, @floatFromInt(milli)) / 1000, zone);
     }
@@ -654,6 +684,14 @@ test "the --thermal-file reader accepts degrees and millidegrees" {
     try testing.expect(readPlainFile(try std.fmt.bufPrint(&buf, "{s}/missing", .{dir_path})) == null);
 }
 
+test "thermal zone labels exclude known non-CPU devices case insensitively" {
+    try testing.expect(isNonCpuThermalZone("GPU-thermal"));
+    try testing.expect(isNonCpuThermalZone("nvme"));
+    try testing.expect(isNonCpuThermalZone("BATTERY"));
+    try testing.expect(!isNonCpuThermalZone("x86_pkg_temp"));
+    try testing.expect(!isNonCpuThermalZone("acpitz"));
+}
+
 test "readSys walks a fake sysfs and picks the hottest CPU sensor" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -673,6 +711,15 @@ test "readSys walks a fake sysfs and picks the hottest CPU sensor" {
     try tmp.dir.writeFile(.{ .sub_path = "class/thermal/thermal_zone0/temp", .data = "48000\n" });
     try tmp.dir.writeFile(.{ .sub_path = "class/thermal/thermal_zone0/type", .data = "acpitz\n" });
 
+    // Firmware also exposes non-CPU zones here. They must not beat a CPU
+    // sensor, even when the GPU or SSD is hotter than the critical threshold.
+    try tmp.dir.makePath("class/thermal/thermal_zone1");
+    try tmp.dir.writeFile(.{ .sub_path = "class/thermal/thermal_zone1/temp", .data = "95000\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "class/thermal/thermal_zone1/type", .data = "GPU-thermal\n" });
+    try tmp.dir.makePath("class/thermal/thermal_zone2");
+    try tmp.dir.writeFile(.{ .sub_path = "class/thermal/thermal_zone2/temp", .data = "99000\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "class/thermal/thermal_zone2/type", .data = "nvme\n" });
+
     const root = try tmp.dir.realpathAlloc(testing.allocator, ".");
     defer testing.allocator.free(root);
 
@@ -680,6 +727,20 @@ test "readSys walks a fake sysfs and picks the hottest CPU sensor" {
 
     try testing.expectEqual(@as(f32, 61.5), reading.celsius);
     try testing.expect(std.mem.eql(u8, reading.label(), "k10temp/Tctl"));
+}
+
+test "readSys does not mistake a hot GPU thermal zone for a CPU sensor" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("class/thermal/thermal_zone0");
+    try tmp.dir.writeFile(.{ .sub_path = "class/thermal/thermal_zone0/temp", .data = "97000\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "class/thermal/thermal_zone0/type", .data = "gpu-thermal\n" });
+
+    const root = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(root);
+
+    try testing.expect(readSys(root) == null);
 }
 
 test "readSys returns null on a machine with no sensors at all" {

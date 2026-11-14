@@ -26,6 +26,9 @@ set -euo pipefail
 
 ROOT=$(cd -- "$(dirname -- "${0}")/.." && pwd)
 HERE="${ROOT}/os"
+# Keep codec staging in a small unit-tested helper: deleting stale files after
+# copying can silently remove the gzip fallback the GRUB menu needs.
+source "${HERE}/stage-initramfs.sh"
 ORIG_ARGS=("$@")
 
 # "latest-stable" is a symlink the Alpine CDN maintains; pinning a version
@@ -194,6 +197,8 @@ if [ "$SELF_CHECK" = "1" ]; then
         "${HERE}/init" \
         "${HERE}/chroot-setup.sh" \
         "${HERE}/make-initramfs.sh" \
+        "${HERE}/stage-initramfs.sh" \
+        "${HERE}/tests/boot-artifacts.sh" \
         "${HERE}/smoke-qemu.sh" \
         "${HERE}/deps.sh" \
         "${HERE}/overlay/usr/local/bin/zmrig-os" \
@@ -214,7 +219,7 @@ if [ "$SELF_CHECK" = "1" ]; then
     done
 
     for f in "${HERE}/init" "${HERE}/chroot-setup.sh" "${HERE}/make-initramfs.sh" \
-             "${HERE}/plan.sh" \
+             "${HERE}/stage-initramfs.sh" "${HERE}/tests/boot-artifacts.sh" "${HERE}/plan.sh" \
              "${HERE}/overlay/usr/local/bin/zmrig-os" \
              "${HERE}/overlay/usr/local/lib/zmrig/firstboot.sh"; do
         syntax "$f"
@@ -245,6 +250,17 @@ if [ "$SELF_CHECK" = "1" ]; then
         printf '  ok    every boot entry asks for the initramfs the build wrote\n'
     else
         printf '  BAD   grub.cfg names an initramfs the build may not write\n'
+        fail=1
+    fi
+
+    # The archive staging helper is the production path, not just a standalone
+    # test fixture. Keeping cleanup/copy in one helper prevents deleting the
+    # gzip fallback after it has been copied.
+    if grep -q '^stage_initramfs' "${HERE}/build-iso.sh" &&
+        grep -Fq '"${ISODIR}/boot" "${INITRAMFS_EXT}"' "${HERE}/build-iso.sh"; then
+        printf '  ok    both initramfs codecs use the tested staging helper\n'
+    else
+        printf '  BAD   the image build bypasses the tested initramfs staging helper\n'
         fail=1
     fi
 
@@ -517,8 +533,10 @@ chroot "$ROOTFS" /bin/sh /tmp/make-initramfs.sh /tmp/init "/tmp/initramfs.cpio.$
 # name, so the name here is for the person reading the image.
 INITRAMFS_EXT="gz"
 [ "$INITRAMFS_CODEC" = "zst" ] && INITRAMFS_EXT="zst"
-cp "${ROOTFS}/tmp/initramfs.cpio.${INITRAMFS_EXT}" "${ISODIR}/boot/initramfs.${INITRAMFS_EXT}"
-rm -f "${ISODIR}/boot/initramfs.gz"
+stage_initramfs \
+    "${ROOTFS}/tmp/initramfs.cpio.${INITRAMFS_EXT}" \
+    "${ISODIR}/boot" "${INITRAMFS_EXT}" || die "cannot stage the ${INITRAMFS_EXT} initramfs"
+[ -s "${ISODIR}/boot/initramfs.${INITRAMFS_EXT}" ] || die "staged initramfs is missing"
 say "initramfs.${INITRAMFS_EXT}: $(du -h "${ISODIR}/boot/initramfs.${INITRAMFS_EXT}" | cut -f1) (${INITRAMFS_CODEC})"
 
 # What this image is built from, on the image itself. "Which Alpine is this?"
