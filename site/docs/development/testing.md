@@ -36,7 +36,7 @@ as `degraded`.
 
 ## Safety build
 
-`./zmrig/tests/safety.sh` builds a separate `ReleaseSafe` binary, then feeds it malformed config files and hostile command lines. The installed binary stays `ReleaseFast`; the safety build exists to make undefined inputs fail loudly in tests. `safety.sh` passes seven checks against a separate `ReleaseSafe` build: malformed config shapes, NUL paths, a config-plus-CLI merge with no allocation leaks, and hostile command lines.
+`./zmrig/tests/safety.sh` builds a separate `ReleaseSafe` binary, then feeds it malformed config files and hostile command lines. The installed binary stays `ReleaseFast`; the safety build exists to make invalid runtime behavior fail loudly in tests. `safety.sh` passes seven checks against a separate `ReleaseSafe` build: malformed config shapes, NUL paths, a config-plus-CLI merge with no allocation leaks, and hostile command lines.
 
 ## Network suite — 30 cases
 
