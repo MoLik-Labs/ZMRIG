@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/assets/js/runtime~main.ed21c059.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/runtime~main.18054290.js" defer="defer"></script>
 <script src="/ZMRIG/assets/js/main.74a5eeb9.js" defer="defer"></script>
 </head>
 <body>
@@ -236,8 +236,10 @@ uses it as a ceiling on the default thread count:</p>
 <p>An explicit <code>-t</code> is never lowered, and <code>--autotune</code> searches inside the quota
 instead of measuring a throttled number as if it were the machine&#x27;s best. It
 measures every candidate in three equal-duration rounds, rotates the candidate
-order between rounds, and compares median rates (requiring at least a 2% win
-before recommending a different thread count). Each trial rebuilds the dataset,
+order between rounds, and compares median rates. To replace the incumbent, a
+candidate must be at least 2% faster by median and beat it by more than 2% in a
+majority of at least two valid same-round comparisons; one lucky sample alone
+cannot change the recommendation. Each trial rebuilds the dataset,
 so this one-time command can take a few minutes on slower CPUs; it does not run
 when mining starts. The container image applies the same cap, so <code>docker run … args</code> shows the count the miner will really use.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="measuring-it-yourself">Measuring it yourself<a href="#measuring-it-yourself" class="hash-link" aria-label="Direct link to Measuring it yourself" title="Direct link to Measuring it yourself" translate="no">​</a></h2>

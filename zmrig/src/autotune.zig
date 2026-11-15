@@ -91,14 +91,41 @@ pub fn candidates(profile: topology.Profile, logical: usize, physical: usize, ou
 
 /// Is `candidate` a real improvement over `best`?
 ///
-/// Hashrate samples on a quiet machine land within about 1 % of each other; a
-/// difference smaller than that is noise and must not be written into a config
-/// that then runs for months. 2 % is the margin used here, which is above the
-/// measured noise floor of every A/B in doc/PERFORMANCE.md.
+/// 2 % is the minimum per-round gain required to replace a candidate. The
+/// selector also requires that gain in a majority of same-round comparisons;
+/// one lucky sample cannot write a different thread count into a long-lived
+/// config. This is a conservative decision rule, not a claim about every
+/// machine's noise floor.
 pub fn isBetter(candidate: Trial, best: Trial, margin: f64) bool {
     if (best.rate <= 0) return candidate.rate > 0;
 
     return candidate.rate > best.rate * (1.0 + margin);
+}
+
+/// Does the candidate beat the incumbent by `margin` in a majority of the
+/// same rounds? Zero entries represent trials that failed and are ignored.
+/// Pairing by round helps cancel slow frequency/load drift between trials.
+pub fn repeatableWin(candidate: []const f64, incumbent: []const f64, margin: f64) bool {
+    const count = @min(candidate.len, incumbent.len);
+    var compared: usize = 0;
+    var wins: usize = 0;
+
+    for (0..count) |round| {
+        if (candidate[round] <= 0 or incumbent[round] <= 0) continue;
+        compared += 1;
+        if (candidate[round] > incumbent[round] * (1.0 + margin)) wins += 1;
+    }
+
+    return compared >= 2 and wins * 2 > compared;
+}
+
+/// A candidate replaces an existing recommendation only when its median clears
+/// the margin and its same-round wins are repeatable.
+pub fn shouldReplace(candidate: Trial, incumbent: Trial, candidate_rounds: []const f64, incumbent_rounds: []const f64, margin: f64) bool {
+    if (!isBetter(candidate, incumbent, margin)) return false;
+    if (incumbent.rate <= 0) return true;
+
+    return repeatableWin(candidate_rounds, incumbent_rounds, margin);
 }
 
 /// Median of a slice, used instead of a mean so one stalled sample (a dataset
@@ -221,6 +248,44 @@ test "a 2 percent win is required before a config is replaced" {
     const empty = Trial{ .threads = 1, .rate = 0 };
     try testing.expect(isBetter(Trial{ .threads = 1, .rate = 1 }, empty, margin));
     try testing.expect(!isBetter(Trial{ .threads = 1, .rate = 0 }, empty, margin));
+}
+
+test "a tuning winner must beat the incumbent in most paired rounds" {
+    const testing = std.testing;
+
+    const margin = 0.02;
+    const incumbent = [_]f64{ 1000, 800, 900 };
+    const repeatable = [_]f64{ 1050, 850, 950 };
+    try testing.expect(repeatableWin(&repeatable, &incumbent, margin));
+
+    // A strong median from one unusually fast run is not a stable win.
+    const one_outlier = [_]f64{ 2000, 700, 800 };
+    try testing.expect(!repeatableWin(&one_outlier, &incumbent, margin));
+
+    // Failed trials (encoded as zero) do not become wins, and no valid pair
+    // means there is no evidence to replace the incumbent.
+    const one_valid = [_]f64{ 1100, 0, 0 };
+    try testing.expect(!repeatableWin(&one_valid, &incumbent, margin));
+    const none_valid = [_]f64{ 0, 0, 0 };
+    try testing.expect(!repeatableWin(&none_valid, &incumbent, margin));
+}
+
+test "the median gain alone cannot replace a noisy incumbent" {
+    const testing = std.testing;
+
+    const margin = 0.02;
+    const incumbent = Trial{ .threads = 2, .rate = 10_000 };
+    const candidate = Trial{ .threads = 4, .rate = 10_300 };
+    const incumbent_rounds = [_]f64{ 1_000, 10_000, 100_000 };
+    const candidate_rounds = [_]f64{ 200_000, 9_500, 10_300 };
+
+    // The median is 3% better, but the candidate wins just one of three paired
+    // rounds; it must not overwrite a persistent thread recommendation.
+    try testing.expect(isBetter(candidate, incumbent, margin));
+    try testing.expect(!shouldReplace(candidate, incumbent, &candidate_rounds, &incumbent_rounds, margin));
+
+    const repeatable_rounds = [_]f64{ 1_030, 10_300, 103_000 };
+    try testing.expect(shouldReplace(candidate, incumbent, &repeatable_rounds, &incumbent_rounds, margin));
 }
 
 test "the median ignores a single stalled sample" {

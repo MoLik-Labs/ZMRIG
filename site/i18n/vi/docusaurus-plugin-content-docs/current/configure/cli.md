@@ -231,8 +231,10 @@ autotune-best-rate=999.750
 autotune-rate-unit=H/s
 ```
 
-Ứng viên phải nhanh hơn kết quả tốt nhất ít nhất 2 % thì mới đổi số thread; mức
-chênh nhỏ hơn được xem là nhiễu đo.
+Ứng viên phải nhanh hơn kết quả tốt nhất ít nhất 2 % theo trung vị và cũng phải
+thắng hơn 2 % trong đa số của ít nhất hai cặp vòng hợp lệ thì mới đổi số thread.
+Quy tắc này loại đề xuất chỉ nhờ một lượt may mắn; nếu độ dao động lớn, hãy đo lại
+khi máy yên hơn hoặc tăng thời lượng `--autotune=SECONDS`.
 
 Lời khuyên đó viết đúng cách mà file cấu hình thật sự đọc — `cpu.threads`, chứ
 không phải `threads` ở đầu file: khoá đó bị bỏ qua (và miner nói ra ở stderr nếu

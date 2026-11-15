@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.1744f0c3.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/runtime~main.91deee0f.js" defer="defer"></script>
 <script src="/ZMRIG/vi/assets/js/main.ba468f8b.js" defer="defer"></script>
 </head>
 <body>
@@ -95,8 +95,10 @@ trung vị. Mỗi vòng dựng lại dataset, nên tìm kiếm có thể mất v
 chậm. Output in kết quả từng vòng, bảng trung vị/độ dao động và đề xuất máy đọc
 được ở cuối:</p>
 <div class="language-text codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-text codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token plain">autotune-best-threads=2</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">autotune-best-rate=999.750</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">autotune-rate-unit=H/s</span><br></div></code></pre></div></div>
-<p>Ứng viên phải nhanh hơn kết quả tốt nhất ít nhất 2 % thì mới đổi số thread; mức
-chênh nhỏ hơn được xem là nhiễu đo.</p>
+<p>Ứng viên phải nhanh hơn kết quả tốt nhất ít nhất 2 % theo trung vị và cũng phải
+thắng hơn 2 % trong đa số của ít nhất hai cặp vòng hợp lệ thì mới đổi số thread.
+Quy tắc này loại đề xuất chỉ nhờ một lượt may mắn; nếu độ dao động lớn, hãy đo lại
+khi máy yên hơn hoặc tăng thời lượng <code>--autotune=SECONDS</code>.</p>
 <p>Lời khuyên đó viết đúng cách mà file cấu hình thật sự đọc — <code>cpu.threads</code>, chứ
 không phải <code>threads</code> ở đầu file: khoá đó bị bỏ qua (và miner nói ra ở stderr nếu
 tìm thấy nó).</p>

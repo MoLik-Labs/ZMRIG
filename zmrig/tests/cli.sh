@@ -238,15 +238,16 @@ else
     record FAIL "-t overrides the profile" "-t 1 did not win"
 fi
 
-# `--autotune` is a local measurement: it must not demand a pool. It now takes
-# three rotated samples per candidate and exposes the median/spread summary.
+# `--autotune` is a local measurement: it must not demand a pool. It takes
+# three rotated samples, exposes the median/spread and states its paired-round gate.
 autotune_output=$("$BIN" --autotune=1 --mode=light 2>&1)
 autotune_rc=$?
 if [ "$autotune_rc" -eq 0 ] \
    && printf '%s\n' "$autotune_output" | grep -qF 'round 3,' \
    && printf '%s\n' "$autotune_output" | grep -qF 'median' \
-   && printf '%s\n' "$autotune_output" | grep -qF 'spread'; then
-    record PASS "--autotune runs 3 rounds without a pool" "median and spread reported"
+   && printf '%s\n' "$autotune_output" | grep -qF 'spread' \
+   && printf '%s\n' "$autotune_output" | grep -qF 'majority of paired rounds'; then
+    record PASS "--autotune runs 3 rounds without a pool" "median, spread and paired-round gate reported"
 else
     record FAIL "--autotune runs 3 rounds without a pool" "exit $autotune_rc: $(printf '%s\n' "$autotune_output" | tail -4 | tr '\n' ' ')"
 fi

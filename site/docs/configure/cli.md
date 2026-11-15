@@ -237,8 +237,11 @@ autotune-best-rate=999.750
 autotune-rate-unit=H/s
 ```
 
-A candidate must beat the current best by at least 2 % before the thread count
-changes; smaller differences are treated as measurement noise.
+A candidate must beat the current best by at least 2 % by median and also win
+by more than 2 % in a majority of at least two valid same-round comparisons
+before the thread count changes. This rejects a recommendation driven by one
+lucky trial; large spreads still mean the machine should be measured again when
+it is quieter or with a longer `--autotune=SECONDS` window.
 
 The advice is written in the spelling the config file actually reads —
 `cpu.threads`, not a `threads` at the top of the file, which is ignored (the

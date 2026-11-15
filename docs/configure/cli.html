@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/assets/js/runtime~main.ed21c059.js" defer="defer"></script>
+<script src="/ZMRIG/assets/js/runtime~main.18054290.js" defer="defer"></script>
 <script src="/ZMRIG/assets/js/main.74a5eeb9.js" defer="defer"></script>
 </head>
 <body>
@@ -97,8 +97,11 @@ median hashrates. Each round rebuilds the dataset, so on a slow CPU the search
 can take several minutes. The output includes each round and the median/spread
 table; the final machine-readable recommendation looks like this:</p>
 <div class="language-text codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#bfc7d5;--prism-background-color:#292d3e"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-text codeBlock_bY9V thin-scrollbar" style="color:#bfc7d5;background-color:#292d3e"><code class="codeBlockLines_e6Vv"><div class="token-line" style="color:#bfc7d5"><span class="token plain">autotune-best-threads=2</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">autotune-best-rate=999.750</span><br></div><div class="token-line" style="color:#bfc7d5"><span class="token plain">autotune-rate-unit=H/s</span><br></div></code></pre></div></div>
-<p>A candidate must beat the current best by at least 2 % before the thread count
-changes; smaller differences are treated as measurement noise.</p>
+<p>A candidate must beat the current best by at least 2 % by median and also win
+by more than 2 % in a majority of at least two valid same-round comparisons
+before the thread count changes. This rejects a recommendation driven by one
+lucky trial; large spreads still mean the machine should be measured again when
+it is quieter or with a longer <code>--autotune=SECONDS</code> window.</p>
 <p>The advice is written in the spelling the config file actually reads —
 <code>cpu.threads</code>, not a <code>threads</code> at the top of the file, which is ignored (the
 miner says so on stderr if it finds one).</p>

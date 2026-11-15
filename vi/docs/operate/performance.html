@@ -8,7 +8,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/ZMRIG/img/favicon-192.png">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b0b0c" media="(prefers-color-scheme: dark)"><link rel="stylesheet" href="/ZMRIG/vi/assets/css/styles.c6cca0d9.css">
-<script src="/ZMRIG/vi/assets/js/runtime~main.1744f0c3.js" defer="defer"></script>
+<script src="/ZMRIG/vi/assets/js/runtime~main.91deee0f.js" defer="defer"></script>
 <script src="/ZMRIG/vi/assets/js/main.ba468f8b.js" defer="defer"></script>
 </head>
 <body>
@@ -230,8 +230,9 @@ trần cho số luồng mặc định:</p>
 <p><code>-t</code> do người dùng đặt thì không bao giờ bị hạ, và <code>--autotune</code> chỉ tìm trong phạm
 vi hạn mức thay vì đo một con số bị throttle rồi coi đó là tốt nhất của máy. Mỗi
 cấu hình số luồng được đo ba vòng với cùng thời lượng; thứ tự ứng viên được xoay
-giữa các vòng và so sánh bằng hashrate trung vị (chỉ đề xuất đổi luồng khi hơn ít
-nhất 2%). Mỗi lượt phải dựng lại dataset, nên lệnh chạy một lần này có thể mất vài
+giữa các vòng và so sánh hashrate trung vị. Chỉ thay cấu hình hiện tại khi trung
+vị cao hơn ít nhất 2% và ứng viên thắng hơn 2% trong đa số của ít nhất hai cặp
+vòng hợp lệ; một lượt may mắn không đủ để đổi đề xuất. Mỗi lượt phải dựng lại dataset, nên lệnh chạy một lần này có thể mất vài
 phút trên CPU chậm; nó không chạy lúc miner khởi động. Image container áp dụng
 đúng trần đó, nên <code>docker run … args</code> in ra số luồng miner thật sự dùng.</p>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="tự-đo">Tự đo<a href="#tự-đo" class="hash-link" aria-label="Đường dẫn trực tiếp đến Tự đo" title="Đường dẫn trực tiếp đến Tự đo" translate="no">​</a></h2>

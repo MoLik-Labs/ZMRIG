@@ -1797,7 +1797,7 @@ fn runAutotune(
     try out.print("autotune: {d} candidate(s), {d} rounds of {d} s each, dataset rebuilt per trial\n", .{
         list.len, rounds, opts.autotune_seconds,
     });
-    try out.print("autotune: order rotates each round; winner is based on median rate (2% minimum gain)\n\n", .{});
+    try out.print("autotune: order rotates each round; winner needs a median gain and >2% in a majority of paired rounds\n\n", .{});
     try out.print("{s:>8}  {s:>12}  {s:>9}  {s}\n", .{ "threads", "median", "spread", "verdict" });
 
     var samples = [_][rounds]f64{[_]f64{0} ** rounds} ** 8;
@@ -1823,13 +1823,16 @@ fn runAutotune(
                 continue;
             };
 
-            samples[index][sample_counts[index]] = measure.rate;
+            // Preserve the round slot: candidates are deliberately rotated,
+            // so paired same-round comparisons cancel some host-load drift.
+            samples[index][round] = measure.rate;
             sample_counts[index] += 1;
             try out.print("round {d}, {d} thread(s): {d:.3} H/s\n", .{ round + 1, threads, measure.rate });
         }
     }
 
     var best = autotune.Trial{ .threads = 0, .rate = 0 };
+    var best_index: ?usize = null;
     const margin = 0.02;
 
     for (list, 0..) |threads, index| {
@@ -1841,14 +1844,24 @@ fn runAutotune(
             continue;
         }
 
-        var ordered = samples[index];
-        const measured = ordered[0..count];
+        var ordered: [rounds]f64 = [_]f64{0} ** rounds;
+        var valid: usize = 0;
+        for (samples[index]) |sample| {
+            if (sample <= 0) continue;
+            ordered[valid] = sample;
+            valid += 1;
+        }
+        const measured = ordered[0..valid];
         const rate = autotune.median(measured);
         const min_rate = measured[0];
-        const max_rate = measured[count - 1];
+        const max_rate = measured[valid - 1];
         const spread = if (rate > 0) (max_rate - min_rate) / rate * 100.0 else 0;
         const trial = autotune.Trial{ .threads = threads, .rate = rate };
-        const better = autotune.isBetter(trial, best, margin);
+        const median_better = autotune.isBetter(trial, best, margin);
+        const better = if (best_index) |incumbent_index|
+            autotune.shouldReplace(trial, best, &samples[index], &samples[incumbent_index], margin)
+        else
+            median_better;
 
         var rate_buf: [32]u8 = undefined;
         var spread_buf: [16]u8 = undefined;
@@ -1857,10 +1870,13 @@ fn runAutotune(
             threads,
             std.fmt.bufPrint(&rate_buf, "{d:.3} {s}", .{ scaled.value, scaled.unit }) catch "?",
             std.fmt.bufPrint(&spread_buf, "{d:.1}%", .{spread}) catch "?",
-            if (better) "best so far" else if (best.threads == 0) "-" else "no gain (noise)",
+            if (better) "best so far" else if (median_better) "gain not repeatable" else if (best.threads == 0) "-" else "no gain (noise)",
         });
 
-        if (better) best = trial;
+        if (better) {
+            best = trial;
+            best_index = index;
+        }
     }
 
     if (best.threads == 0) {
@@ -1895,7 +1911,7 @@ fn runAutotune(
     if (best.threads == candidate_threads) {
         try out.print("the default heuristic already picks {d} thread(s) on this machine\n", .{candidate_threads});
     } else {
-        try out.print("the default heuristic picks {d} thread(s): this machine was leaving hashrate on the table\n", .{candidate_threads});
+        try out.print("the default heuristic picks {d} thread(s); measured winner differs - check the spread before pinning\n", .{candidate_threads});
     }
 
     // The config file reads `cpu.threads` (XMRig's schema) and nothing else, so

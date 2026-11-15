@@ -356,8 +356,9 @@ profile free: 1 thread(s) of 2 logical cpu (2 physical cores)
 `-t` do người dùng đặt thì không bao giờ bị hạ, và `--autotune` chỉ tìm trong phạm
 vi hạn mức thay vì đo một con số bị throttle rồi coi đó là tốt nhất của máy. Mỗi
 cấu hình số luồng được đo ba vòng với cùng thời lượng; thứ tự ứng viên được xoay
-giữa các vòng và so sánh bằng hashrate trung vị (chỉ đề xuất đổi luồng khi hơn ít
-nhất 2%). Mỗi lượt phải dựng lại dataset, nên lệnh chạy một lần này có thể mất vài
+giữa các vòng và so sánh hashrate trung vị. Chỉ thay cấu hình hiện tại khi trung
+vị cao hơn ít nhất 2% và ứng viên thắng hơn 2% trong đa số của ít nhất hai cặp
+vòng hợp lệ; một lượt may mắn không đủ để đổi đề xuất. Mỗi lượt phải dựng lại dataset, nên lệnh chạy một lần này có thể mất vài
 phút trên CPU chậm; nó không chạy lúc miner khởi động. Image container áp dụng
 đúng trần đó, nên `docker run … args` in ra số luồng miner thật sự dùng.
 
