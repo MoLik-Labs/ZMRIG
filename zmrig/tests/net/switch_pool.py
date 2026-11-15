@@ -142,7 +142,13 @@ class Pool:
         later(self.args.away, away)
         later(self.args.back, back)
 
-        self.deadline = time.time() + self.args.duration
+        # `--duration` remains the overall default deadline, but switching
+        # back starts a fresh bounded window: uncached RandomX dataset builds
+        # can be much slower on oversubscribed CI runners than on a quiet host.
+        self.deadline = max(
+            time.time() + self.args.duration,
+            start + self.args.back + self.args.post_back_timeout,
+        )
         recorded = 0
         while time.time() < self.deadline:
             line = self.readline()
@@ -175,6 +181,8 @@ class Pool:
             with open(self.args.shares, "a") as handle:
                 handle.write(json.dumps(entry) + "\n")
             log("SHARE job=job-3 nonce=%s" % params.get("nonce"))
+            if recorded >= self.args.record:
+                break
 
         log("DONE, %d share(s) recorded for verification" % recorded)
 
@@ -185,6 +193,7 @@ def main():
     parser.add_argument("--away", type=float, default=18)
     parser.add_argument("--back", type=float, default=40)
     parser.add_argument("--duration", type=float, default=60)
+    parser.add_argument("--post-back-timeout", type=float, default=180)
     parser.add_argument("--record", type=int, default=1)
     # Difficulty 1: every hash is a share, so the test does not depend on luck.
     parser.add_argument("--target", default="f753e3a5")

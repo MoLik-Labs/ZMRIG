@@ -87,25 +87,19 @@ run_case() { # name, extra miner flag, expected "no rebuild"
     local name="$1" flag="$2" expect_cache="$3"
     local shares="$WORK/$name.jsonl" log="$WORK/$name.log"
     local before="$FAILED"
-    local away=18 back=36
-    [ "$QUICK" = 1 ] && { away=14 back=26; }
-    # The window after the switch back has to outlast a rebuild, or the
-    # `--no-dataset-cache` case stops hashing before it can submit the share
-    # that proves it is hashing *correctly*. A 2 GiB RandomX dataset took ~49 s
-    # on a four-thread CI VM in a real failure, so give the uncached case 90 s
-    # beyond the switch; cached reuse keeps the shorter 45 s margin.
-    local margin=45
-    [ "$expect_cache" = 0 ] && margin=90
-    local duration=$((back + margin))
-    if [ "$QUICK" = 1 ]; then
-        margin=40
-        [ "$expect_cache" = 0 ] && margin=80
-        duration=$((back + margin))
-    fi
+    local away=18 back=36 post_back=180
+    [ "$QUICK" = 1 ] && { away=14 back=26 post_back=120; }
+    # Dataset initialization can take far longer on a shared CI runner than on
+    # a quiet 2-core host. Keep the pool alive until it records a real share
+    # after the return, with a hard post-switch deadline as the failure bound.
+    # The pool exits as soon as that proof arrives, so healthy cases do not pay
+    # the full wait.
+    local duration=$((back + post_back))
     : > "$shares"
 
     python3 "$POOL" --port "$PORT" --away "$away" --back "$back" \
-        --duration "$duration" --shares "$shares" > "$WORK/$name.pool" 2>&1 &
+        --duration "$duration" --post-back-timeout "$post_back" \
+        --shares "$shares" > "$WORK/$name.pool" 2>&1 &
     local pool_pid=$!
     sleep 1
 
