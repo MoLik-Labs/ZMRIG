@@ -452,7 +452,7 @@ Số thread là con số duy nhất khác nhau theo từng máy, và heuristic t
 định 2 MiB L3 cho mỗi thread. Hãy để máy tự trả lời:
 
 ```bash
-zmrig-os autotune 8     # 8 giây mỗi ứng viên, số thread thắng được ghi vào config
+zmrig-os autotune 8     # đo 3 x 8 giây mỗi ứng viên + dựng lại dataset
 ```
 
 Kết quả được ghi vào `os.conf`; `THREADS="auto"` quay lại heuristic. Lệnh này

@@ -1870,7 +1870,12 @@ fn runAutotune(
 
     var rate_buf: [32]u8 = undefined;
     const scaled = util.scaleHashrate(best.rate);
-    const candidate_threads = miner_mod.defaultThreads(logical);
+    // Match the actual profile and quota used to build the candidate list.
+    // Comparing against `defaultThreads(logical)` always described the free
+    // profile, so watt mode or a constrained cgroup could be reported as
+    // "leaving hashrate on the table" even when autotune chose the configured
+    // default exactly.
+    const candidate_threads = topology.threadsFor(profile, searchable, physical);
 
     try out.print("\nbest: {d} thread(s) at {s} {s}\n", .{
         best.threads,

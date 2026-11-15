@@ -475,7 +475,7 @@ Thread count is the one number that differs per box, and the cache heuristic
 assumes 2 MiB of L3 per thread. Let the machine answer instead:
 
 ```bash
-zmrig-os autotune 8     # 8 s per candidate, winning count pinned in the config
+zmrig-os autotune 8     # 3 x 8 s measurements per candidate + dataset rebuilds
 ```
 
 The result is written to `os.conf`; `THREADS="auto"` returns to the heuristic.

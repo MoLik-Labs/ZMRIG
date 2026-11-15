@@ -53,7 +53,7 @@ See the same list without touching the machine:
     profile        free  (default: maximum hashrate regardless of battery state)
     mode           auto (fast when RAM allows)
     huge pages     none yet, the installer reserves what the dataset needs
-    autotune       8 s per candidate, winner written to config.json
+    autotune       3 x 8 s per candidate + dataset builds; winner written to config.json
     service        zmrig.service (systemd)
 ```
 

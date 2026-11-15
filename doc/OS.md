@@ -375,7 +375,7 @@ heuristic behind it assumes 2 MiB of L3 per thread — right for a stock Ryzen,
 wrong for a small or uneven cache. The image can measure it instead:
 
 ```bash
-zmrig-os autotune 8        # 8 s per candidate, then pin the winner in os.conf
+zmrig-os autotune 8        # 3 x 8 s measurements per candidate + dataset rebuilds
 ```
 
 It reuses the current mode, drops `-t`, tunes the machine first (huge pages, THP,

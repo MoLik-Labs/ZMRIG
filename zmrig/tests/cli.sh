@@ -238,11 +238,34 @@ else
     record FAIL "-t overrides the profile" "-t 1 did not win"
 fi
 
-# `--autotune` is a local measurement: it must not demand a pool.
-if "$BIN" --autotune=1 --mode=light >/dev/null 2>&1; then
-    record PASS "--autotune runs without a pool" ""
+# `--autotune` is a local measurement: it must not demand a pool. It now takes
+# three rotated samples per candidate and exposes the median/spread summary.
+autotune_output=$("$BIN" --autotune=1 --mode=light 2>&1)
+autotune_rc=$?
+if [ "$autotune_rc" -eq 0 ] \
+   && printf '%s\n' "$autotune_output" | grep -qF 'round 3,' \
+   && printf '%s\n' "$autotune_output" | grep -qF 'median' \
+   && printf '%s\n' "$autotune_output" | grep -qF 'spread'; then
+    record PASS "--autotune runs 3 rounds without a pool" "median and spread reported"
 else
-    record FAIL "--autotune runs without a pool" "exited $?"
+    record FAIL "--autotune runs 3 rounds without a pool" "exit $autotune_rc: $(printf '%s\n' "$autotune_output" | tail -4 | tr '\n' ' ')"
+fi
+
+# The final default comparison must use the candidate profile and the quota,
+# not the free-profile logical CPU count. A one-CPU cgroup on this 2-vCPU test
+# host has exactly one watt-profile candidate; autotune must report that the
+# quota-capped heuristic agrees.
+quota_root=$(mktemp -d)
+printf '100000 100000\n' >"$quota_root/cpu.max"
+quota_output=$(ZMRIG_CGROUP_ROOT="$quota_root" "$BIN" --autotune=1 --mode=light --profile=watt --no-color 2>&1)
+quota_rc=$?
+rm -rf "$quota_root"
+if [ "$quota_rc" -eq 0 ] \
+   && printf '%s\n' "$quota_output" | grep -qF '1 candidate(s)' \
+   && printf '%s\n' "$quota_output" | grep -qF 'default heuristic already picks 1 thread(s)'; then
+    record PASS "autotune reports the quota-capped default" "one candidate, one default thread"
+else
+    record FAIL "autotune reports the quota-capped default" "exit $quota_rc: $(printf '%s\n' "$quota_output" | tail -4 | tr '\n' ' ')"
 fi
 
 expect_exit 1 "--autotune=bogus is rejected" -- "$BIN" --autotune=bogus

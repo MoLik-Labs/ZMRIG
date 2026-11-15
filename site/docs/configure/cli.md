@@ -223,23 +223,22 @@ VPS with 54 MB of L3 that is two threads, which is also the best measured value:
 814 H/s with two, 408 H/s with one.
 
 ```bash
-zmrig --autotune=8        # no pool required, 8 s per candidate
+zmrig --autotune=8        # no pool; 3 x 8 s per candidate, plus dataset rebuilds
 ```
+
+It runs three equal-duration rounds, rotates the candidate order, and compares
+median hashrates. Each round rebuilds the dataset, so on a slow CPU the search
+can take several minutes. The output includes each round and the median/spread
+table; the final machine-readable recommendation looks like this:
 
 ```text
-   threads     hashrate  verdict
-         1   499.625 H/s  best so far
-         2   999.750 H/s  best so far
-best: 2 thread(s) at 999.750 H/s
 autotune-best-threads=2
-
-keep it:
-  "cpu": {"threads": 2}
-  or on the command line: -t 2
+autotune-best-rate=999.750
+autotune-rate-unit=H/s
 ```
 
-A difference under 2 % counts as noise, so it does not change the thread count
-because of one lucky run.
+A candidate must beat the current best by at least 2 % before the thread count
+changes; smaller differences are treated as measurement noise.
 
 The advice is written in the spelling the config file actually reads —
 `cpu.threads`, not a `threads` at the top of the file, which is ignored (the

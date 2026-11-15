@@ -2070,7 +2070,7 @@ cmd_autotune() {
     args=$(printf '%s' "$args" | sed 's/ -t [0-9]*//; s/ --health-restart [0-9]*//; s/ --print-time [0-9]*//')
     args=$(printf '%s' "$args" | sed 's| --log-file [^ ]*||')
 
-    say "measuring this machine, ${seconds}s per candidate (this builds the dataset each time)"
+    say "measuring this machine, 3 x ${seconds}s per candidate (dataset rebuilt for each of 3 rounds)"
     if ! out=$("$bin" $args --autotune="$seconds" 2>&1); then
         [ "$auto" = "1" ] && { log_os "autotune failed; keeping THREADS=$THREADS"; return 0; }
         die "the autotune run failed"
