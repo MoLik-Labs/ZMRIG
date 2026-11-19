@@ -16,6 +16,7 @@ set -eu
 INIT_SCRIPT="${1:?path to the init script}"
 OUT="${2:?path to the output archive}"
 CODEC="${3:-gz}"
+USB_CONFIG_HELPER="${INIT_SCRIPT%/*}/usb-config.sh"
 # The shared memory and CPU plan, which the init script sources before it
 # reserves anything. Same file as the one inside the image, so the boot and
 # `zmrig-os doctor` cannot disagree about how many pages this machine wants.
@@ -97,7 +98,7 @@ MODULES="loop squashfs overlay isofs sr_mod cdrom sd_mod usb-storage uas usbhid
          ahci libahci ata_piix ata_generic nvme nvme-core virtio_blk virtio_pci
          virtio_scsi virtio_net
          mmc_core mmc_block sdhci sdhci_pci sdhci_acpi
-         ext4 jbd2 mbcache crc16 vfat fat nls_cp437 nls_iso8859-1 xhci-pci xhci-hcd
+         ext4 jbd2 mbcache crc16 vfat fat exfat ntfs3 nls_cp437 nls_iso8859-1 xhci-pci xhci-hcd
          ehci-pci uhci-hcd ehci-hcd zram
          e1000 e1000e igb r8169 igc atlantic tg3
          usbnet cdc_ether r8152 ax88179_178a"
@@ -136,6 +137,12 @@ fi
 # ---------------------------------------------------------------- init
 cp "$INIT_SCRIPT" "$STAGE"/init
 chmod 755 "$STAGE"/init
+if [ -r "$USB_CONFIG_HELPER" ]; then
+    cp "$USB_CONFIG_HELPER" "$STAGE"/usb-config.sh
+    chmod 644 "$STAGE"/usb-config.sh
+else
+    echo "warning: no USB config helper at $USB_CONFIG_HELPER; USB JSON import is disabled" >&2
+fi
 
 cat > "$STAGE"/etc/mdev.conf <<'EOF'
 # Nothing to rename: mdev only has to create the device nodes.

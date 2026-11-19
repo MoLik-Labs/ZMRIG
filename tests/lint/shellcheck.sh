@@ -31,7 +31,7 @@ bad=0
 
 # Every tracked shell script, plus the extensionless ones this project ships as
 # shell (the initramfs init and the appliance tool have no shebang suffix).
-FILES=$(git ls-files '*.sh' 'os/init' 'os/overlay/usr/local/bin/zmrig-os' \
+FILES=$(git ls-files '*.sh' 'os/init' 'os/overlay/usr/local/bin/zmrig-os' 'os/overlay/etc/init.d/zmrig-wifi' \
           'os/overlay/usr/local/lib/zmrig/firstboot.sh' \
           'os/overlay/etc/periodic/daily/zmrig-auto' 2>/dev/null |
         grep -v '^legacy/' | grep -v '^web/' | sort -u)

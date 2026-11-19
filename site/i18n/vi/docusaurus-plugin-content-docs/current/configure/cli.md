@@ -217,22 +217,24 @@ Mặc định là `cache L3 / 2 MiB`, chặn trên bằng số CPU logic. Trên 
 408 H/s với một.
 
 ```bash
-zmrig --autotune=8        # không cần pool, 8 s mỗi phương án
+zmrig --autotune=8        # không cần pool; 3 x 8 s mỗi phương án + dựng lại dataset
 ```
+
+Lệnh chạy ba vòng có cùng thời lượng, xoay thứ tự ứng viên và so sánh hashrate
+trung vị. Mỗi vòng dựng lại dataset, nên tìm kiếm có thể mất vài phút trên CPU
+chậm. Output in kết quả từng vòng, bảng trung vị/độ dao động và đề xuất máy đọc
+được ở cuối:
 
 ```text
-   threads     hashrate  verdict
-         1   499.625 H/s  best so far
-         2   999.750 H/s  best so far
-best: 2 thread(s) at 999.750 H/s
 autotune-best-threads=2
-
-keep it:
-  "cpu": {"threads": 2}
-  or on the command line: -t 2
+autotune-best-rate=999.750
+autotune-rate-unit=H/s
 ```
 
-Chênh dưới 2 % tính là nhiễu, nên một lần chạy may mắn không làm đổi số thread.
+Ứng viên phải nhanh hơn kết quả tốt nhất ít nhất 2 % theo trung vị và cũng phải
+thắng hơn 2 % trong đa số của ít nhất hai cặp vòng hợp lệ thì mới đổi số thread.
+Quy tắc này loại đề xuất chỉ nhờ một lượt may mắn; nếu độ dao động lớn, hãy đo lại
+khi máy yên hơn hoặc tăng thời lượng `--autotune=SECONDS`.
 
 Lời khuyên đó viết đúng cách mà file cấu hình thật sự đọc — `cpu.threads`, chứ
 không phải `threads` ở đầu file: khoá đó bị bỏ qua (và miner nói ra ở stderr nếu

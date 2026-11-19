@@ -26,6 +26,11 @@ cd "$ROOT/site"
 CHECK=0
 [ "${1:-}" = "--check" ] && CHECK=1
 
+# A reused Rspack persistent cache can change opaque chunk hashes between
+# otherwise identical builds. Start from a clean Docusaurus cache so publish
+# and --check produce byte-for-byte identical assets, including in a dirty
+# developer checkout.
+rm -rf "$ROOT/site/.docusaurus"
 npm run build >/dev/null
 
 # Docusaurus only writes this when it deploys with gh-pages itself.

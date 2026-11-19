@@ -90,6 +90,45 @@ expect_ok "a real Monero address is accepted" "$TOOL" setup --wallet "$WALLET" -
 contains 'WALLET="46SQLW7D' "$(cat "$ROOTDIR/etc/zmrig/os.conf" 2>/dev/null)" &&
     ok "the wallet reaches os.conf" || bad "the wallet reaches os.conf"
 
+# A JSON file is data, never sourced shell; the wallet and optional rig values
+# are validated through the same setup path as console/CLI input.
+JSON_FILE=$(mktemp)
+printf '{"wallet":"%s","pool":"pool.json.example:10001","worker":"json-rig","mode":"max","algo":"rx/0","threads":4,"donate":2,"safe_temp":75}\n' "$WALLET" > "$JSON_FILE"
+expect_ok "setup imports a wallet profile from JSON" "$TOOL" setup --json "$JSON_FILE"
+JSON_CONF=$(cat "$ROOTDIR/etc/zmrig/os.conf")
+contains 'POOL="pool.json.example:10001"' "$JSON_CONF" && ok "JSON pool reaches os.conf" || bad "JSON pool reaches os.conf"
+contains 'WORKER="json-rig"' "$JSON_CONF" && ok "JSON worker reaches os.conf" || bad "JSON worker reaches os.conf"
+contains 'THREADS="4"' "$JSON_CONF" && ok "JSON thread limit reaches os.conf" || bad "JSON thread limit reaches os.conf"
+contains 'DONATE="2"' "$JSON_CONF" && ok "JSON fee reaches os.conf" || bad "JSON fee reaches os.conf"
+contains 'SAFE_TEMP="75"' "$JSON_CONF" && ok "JSON thermal cap reaches os.conf" || bad "JSON thermal cap reaches os.conf"
+rm -f "$JSON_FILE"
+JSON_FILE=$(mktemp)
+printf '{"wallet":42}\n' > "$JSON_FILE"
+expect_fail "JSON wallet must be a string" "$TOOL" setup --json "$JSON_FILE"
+jq -n --arg wallet "$WALLET" --arg pool "$(printf 'bad\"\nDONATE=10:10001')" '{wallet:$wallet,pool:$pool}' > "$JSON_FILE"
+expect_fail "JSON profile values cannot inject config keys" "$TOOL" setup --json "$JSON_FILE"
+rm -f "$JSON_FILE"
+
+# Wi-Fi setup keeps only the derived WPA PSK and writes a private profile.
+WIFI_STUB=$(mktemp -d)
+cat > "$WIFI_STUB/wpa_passphrase" <<'EOF'
+#!/bin/sh
+printf 'network={\n    ssid="Test network"\n    #psk=not-to-be-saved\n    psk=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n}\n'
+EOF
+chmod +x "$WIFI_STUB/wpa_passphrase"
+# The setup command deliberately requires root; report root only inside this
+# isolated fixture so the test still runs unprivileged and writes under ROOTDIR.
+printf '#!/bin/sh\nprintf "0\\n"\n' > "$WIFI_STUB/id"
+chmod +x "$WIFI_STUB/id"
+expect_ok "Wi-Fi WPA2 profile configures from a passphrase" env PATH="$WIFI_STUB:$PATH" "$TOOL" wifi --ssid 'Test network' --password 'test-password-123'
+WIFI_CONF="$ROOTDIR/etc/wpa_supplicant/wpa_supplicant.conf"
+[ -s "$WIFI_CONF" ] && ok "Wi-Fi profile is written" || bad "Wi-Fi profile is written"
+contains 'psk=0123456789abcdef' "$(cat "$WIFI_CONF" 2>/dev/null)" && ok "Wi-Fi profile contains a PSK" || bad "Wi-Fi profile contains a PSK"
+if grep -q 'not-to-be-saved' "$WIFI_CONF"; then bad "Wi-Fi plaintext passphrase is not saved"; else ok "Wi-Fi plaintext passphrase is not saved"; fi
+[ "$(stat -c %a "$WIFI_CONF" 2>/dev/null)" = 600 ] && ok "Wi-Fi profile permissions are private" || bad "Wi-Fi profile permissions are private"
+expect_fail "a short WPA2 passphrase is refused" env PATH="$WIFI_STUB:$PATH" "$TOOL" wifi --ssid test --password short
+rm -rf "$WIFI_STUB"
+
 expect_fail "a short address is refused" "$TOOL" setup --wallet "46SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ys"
 expect_fail "a base58-illegal character is refused" "$TOOL" setup --wallet "0SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ"
 expect_fail "a wrong leading character is refused" "$TOOL" setup --wallet "9SQLW7DXaq6GJaQbHUFMAhd1VYpfQFJQ2gfZo9TCB8bf9vnf1MUwAD2Fwj6KMsY4RU3oKA3x6hByg8BKg7FfMWn6ysb5tJ"
@@ -385,6 +424,28 @@ timeout 3 "$TOOL" run > "$ROOTDIR/wait.log" 2>&1
 contains "no wallet configured" "$(cat "$ROOTDIR/wait.log")" &&
     ok "the supervisor waits for a wallet instead of dying" ||
     bad "the supervisor waits for a wallet instead of dying"
+contains "retrying in 1s" "$(cat "$ROOTDIR/wait.log")" &&
+    ok "the supervisor polls promptly for first-boot provisioning" ||
+    bad "the supervisor polls promptly for first-boot provisioning"
+
+# Simulate the USB firstboot import writing os.conf while the supervisor is
+# asleep: the one-second initial retry should pick it up without a 30s stall.
+mkdir -p "$ROOTDIR/sleep-bin"
+printf 'AUTO_AUTOTUNE="0"\n' > "$ROOTDIR/etc/zmrig/os.conf"
+cat > "$ROOTDIR/sleep-bin/sleep" <<EOF
+#!/bin/sh
+if [ "\$1" = 1 ] && [ ! -e "$ROOTDIR/provisioned" ]; then
+    printf 'WALLET="%s"\nAUTO_AUTOTUNE="0"\n' "$WALLET" > "$ROOTDIR/etc/zmrig/os.conf"
+    touch "$ROOTDIR/provisioned"
+fi
+exit 0
+EOF
+chmod +x "$ROOTDIR/sleep-bin/sleep"
+expect_ok "supervisor sees config written during its short poll" env PATH="$ROOTDIR/sleep-bin:$PATH" "$TOOL" run
+contains "start:" "$(cat "$ROOTDIR/var/log/zmrig-os.log" 2>/dev/null)" &&
+    ok "first-boot wallet starts without the former 30s wait" ||
+    bad "first-boot wallet starts without the former 30s wait"
+rm -rf "$ROOTDIR/sleep-bin"
 
 touch "$ROOTDIR/run/zmrig/nostart"
 expect_ok "nostart boots without mining" "$TOOL" run

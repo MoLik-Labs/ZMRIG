@@ -69,6 +69,33 @@ that arms the governor.
 The wizard does not appear when a wallet is already known. `zmrig.os.nostart=1`
 boots the machine without mining, which is what a repair stick wants.
 
+### Import a wallet JSON from Ventoy USB
+
+For unattended Ventoy setup, place `rig.json` in the root of the Ventoy data
+partition, beside the ISO, then boot the image. ZMRIG OS scans removable USB
+partitions read-only (including Ventoy's usual exFAT, plus FAT32, NTFS and ext4)
+and imports the first recognized file: `zmrig.json`, `rig.json`, `wallet.json`,
+`config.json`, or `zmrig/rig.json` / `zmrig/config.json` (maximum 64 KiB).
+The JSON needs a `wallet` string; `pool`, `worker`, `mode`, `algo`, `threads`, `donate`, and
+`safe_temp` are optional. It is validated by the normal setup path before the
+miner uses it. No Ventoy persistence plugin is needed; the JSON stays on your
+USB and is read without modifying that partition. A malformed file or invalid
+wallet is reported and the on-screen setup remains available. For example, save
+this as plain UTF-8 `rig.json` (replace the wallet placeholder; do not include
+comments or a trailing comma):
+
+```json
+{
+  "wallet": "YOUR_MONERO_WALLET_ADDRESS",
+  "pool": "gulf.moneroocean.stream:10001",
+  "worker": "rig-01",
+  "mode": "max"
+}
+```
+
+Use one supported file per USB to avoid ambiguity; `zmrig.json` has priority if
+more than one supported filename is present.
+
 ## One command, no questions
 
 The wizard asks one question at a time, which is right at a keyboard. Over ssh,
@@ -86,6 +113,26 @@ tends to skip. `--coin` picks the algorithm the memory reservation is sized for,
 
 A wrong argument is refused before anything is written: a pool without a port, an
 address that is not an address, a mode that does not exist.
+
+A wallet can also be provisioned from JSON instead of pasted at the console:
+
+```json
+{ "wallet": "4...", "pool": "gulf.moneroocean.stream:10001", "worker": "rig-07", "mode": "max" }
+```
+
+```bash
+zmrig-os setup --json rig.json
+zmrig-os wifi --ssid 'Network name' --password 'your-WPA2-passphrase'
+```
+
+The JSON is parsed as data, and the wallet is validated before saving. The Wi-Fi
+command supports WPA2 on `wlan0`; the password is stored only as a derived WPA
+PSK. A live read-only ISO keeps settings for that boot only unless you prepare an
+ext4 data partition with `zmrig-os persist /dev/sdX1` and add
+`zmrig.os.data=/dev/sdX1` to the GRUB kernel line; that command formats the chosen
+device. Installed rigs persist the profile automatically. Adapter firmware
+varies, so use `--firmware all` when a less-common chipset needs a blob outside
+the selected common Wi-Fi firmware set.
 
 ## Keeping the kernel off the mining cores
 
@@ -428,7 +475,7 @@ Thread count is the one number that differs per box, and the cache heuristic
 assumes 2 MiB of L3 per thread. Let the machine answer instead:
 
 ```bash
-zmrig-os autotune 8     # 8 s per candidate, winning count pinned in the config
+zmrig-os autotune 8     # 3 x 8 s measurements per candidate + dataset rebuilds
 ```
 
 The result is written to `os.conf`; `THREADS="auto"` returns to the heuristic.

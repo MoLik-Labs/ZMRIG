@@ -36,7 +36,7 @@ một hai share stale là bình thường, và một cú tụt phải kéo dài 
 
 ## Build kiểm tra an toàn
 
-`./zmrig/tests/safety.sh` build một binary `ReleaseSafe` riêng rồi đưa cấu hình lỗi và dòng lệnh hostile vào thử. Binary cài đặt vẫn là `ReleaseFast`; bản safety làm lỗi undefined hiện ra trong test. `safety.sh` qua bảy kiểm tra trên bản build `ReleaseSafe` riêng: cấu hình sai dạng, đường dẫn NUL, merge config với CLI không rò rỉ cấp phát và dòng lệnh hostile.
+`./zmrig/tests/safety.sh` build một binary `ReleaseSafe` riêng rồi đưa cấu hình lỗi và dòng lệnh hostile vào thử. Binary cài đặt vẫn là `ReleaseFast`; bản safety giúp phát hiện hành vi không hợp lệ trong test. `safety.sh` qua bảy kiểm tra trên bản build `ReleaseSafe` riêng: cấu hình sai dạng, đường dẫn NUL, merge config với CLI không rò rỉ cấp phát và dòng lệnh hostile.
 
 ## Bộ test mạng — 30 case
 

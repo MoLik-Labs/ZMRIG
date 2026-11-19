@@ -79,7 +79,7 @@ sudo ./oneclick.sh purge      # remove everything, config included (asks first)
 | `--engine NAME` | `auto` (default), `xmrig` (every algorithm) or `zmrig` (the Zig miner, RandomX family). `auto` picks `zmrig` and advertises the RandomX family at login, which is what a switching pool needs to move this rig between coins; a non-RandomX `--algo` picks the C++ engine. See [The Zig engine](#the-zig-engine). |
 | `--profile NAME` | `free` (default, maximum hashrate), `watt` (explicit maximum-hashes-per-watt trade-off), or `auto` (same as `free`). Battery state never lowers the default performance. See [profiles](#profiles-free-vs-watt). |
 | `--max-temp C` | Safe thermal target, default `80` °C: sheds threads as the hottest CPU sensor reaches the target and pauses at target + 15 °C. `--no-thermal` explicitly opts out; otherwise `--max-temp` can set a different target (45..95 °C). |
-| `--autotune[=SEC]` | search for the best thread count after the build, `SEC` seconds per candidate (default 8). On by default for `zmrig`. |
+| `--autotune[=SEC]` | search for the best thread count after the build, three `SEC`-second measurements per candidate (default 8) plus dataset rebuilds. On by default for `zmrig`. |
 | `--no-autotune` | keep the built-in `L3 / 2 MiB` heuristic |
 | `--dry-run` | with `purge`: print what would be removed, delete nothing |
 | `--donate-level N` | developer fee in percent, `0`..`10` (default `3`; `0` turns it off). Written into `config.json` as `donate-level`, printed by `--check`, audited by `scripts/verify-fee.sh`. |

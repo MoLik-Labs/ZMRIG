@@ -218,7 +218,7 @@ mười máy trong [cài không cần người](/docs/install/installer).
 | hashrate chỉ bằng một phần tư bảng benchmark | không có huge pages (container hoặc VPS OpenVZ) | `zmrig --check` báo số trang; hỏi nhà cung cấp về trang 2 MiB |
 | máy ồn và nóng | mục tiêu đang cao so với tản nhiệt | `--max-temp 70`, hoặc `zmrig-os setup --max-temp 70` |
 | container dùng ít thread hơn số core | có hạn mức `--cpus` | `docker run ... args` rồi đọc `-t` nó đã chọn |
-| service khởi động lại liên tục | có người sửa config | `sudo journalctl -u zmrig -n 60`, đọc dòng đầu sau khi binary khởi động |
+| service khởi động lại liên tục | có người sửa config | `sudo journalctl -n 60 -u zmrig`, đọc dòng đầu sau khi binary khởi động |
 
 Bảng đầy đủ, kèm dòng log để nhận ra từng trường hợp, ở
 [lỗi thường gặp](/docs/operate/troubleshooting).

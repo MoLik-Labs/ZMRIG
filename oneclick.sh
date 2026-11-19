@@ -189,7 +189,7 @@ Options
                          down as the box warms, mining pauses at C+15
   --no-thermal           explicitly disable the thermal governor
   --autotune[=SEC]       search for the best thread count after install
-                         (default: on for zmrig, 8 s per candidate)
+                         (default: on for zmrig; 3 x SEC per candidate + dataset builds)
   --no-autotune          keep the built-in thread heuristic
   --no-health-restart    never exit to recover from a stalled miner
                          (default: exit after 15 min so systemd restarts it)
@@ -2166,7 +2166,7 @@ autotune_plan() {
     if [ "$ENGINE" != "zmrig" ]; then
         printf '%s' "not applicable (zmrig only); the C++ engine keeps its own heuristic"
     elif autotune_wanted; then
-        printf '%s' "${AUTOTUNE_SECONDS} s per candidate, winner written to config.json"
+        printf '%s' "3 x ${AUTOTUNE_SECONDS} s per candidate + dataset builds; winner written to config.json"
     else
         printf '%s' "off, keeping the built-in heuristic"
     fi
@@ -2188,7 +2188,7 @@ HEALTH_RESTART="${MINER_HEALTH_RESTART:-1}"
     bin=$(find_binary) || { warn "no zmrig binary to measure, keeping the heuristic"; return 0; }
 
     step "searching for the best thread count"
-    info "this takes about a minute per candidate and can be skipped with --no-autotune"
+    info "3 measurements per candidate (each rebuilds the dataset); this can take several minutes and can be skipped with --no-autotune"
 
     local out
     out=$("$bin" --autotune="${AUTOTUNE_SECONDS}" 2>&1) || {

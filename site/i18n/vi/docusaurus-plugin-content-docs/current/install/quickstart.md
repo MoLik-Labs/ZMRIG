@@ -52,7 +52,7 @@ Xem đúng danh sách đó mà không đụng vào máy:
     profile        free  (mặc định: hashrate tối đa, bất kể trạng thái pin)
     mode           auto (fast when RAM allows)
     huge pages     none yet, the installer reserves what the dataset needs
-    autotune       8 s per candidate, winner written to config.json
+    autotune       3 x 8 s per candidate + dataset builds; winner written to config.json
     service        zmrig.service (systemd)
 ```
 

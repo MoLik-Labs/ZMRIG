@@ -4,7 +4,7 @@
 # host script stays a plain orchestrator.
 #
 # Arguments: /tmp/chroot-setup.sh <kernel-package> <channel> [firmware]
-#   firmware = minimal (default) keeps only what a wired rig needs;
+#   firmware = minimal (default) keeps common wired and Wi-Fi blobs;
 #              all keeps the package's whole /lib/firmware.
 set -eu
 
@@ -46,6 +46,8 @@ apk add --no-progress --no-cache \
     openssh \
     ifupdown-ng \
     dhcpcd \
+    jq \
+    wpa_supplicant \
     zstd
 
 # ---------------------------------------------------------------- kernel
@@ -96,12 +98,11 @@ done
 #
 #   /boot/initramfs-*   the stock Alpine initramfs, ~170 MB. This image builds
 #                       its own (make-initramfs.sh) and never reads that one.
-#   /lib/firmware       GPU, Wi-Fi, InfiniBand and smart-NIC blobs. A rig has
-#                       wired ethernet and no display; the common drivers
-#                       (e1000e, igb, ixgbe, r8169 with its rtl_nic blobs) either
-#                       need no firmware or are in the keep list below.
+#   /lib/firmware       GPU, InfiniBand and unusual NIC blobs. The default keeps
+#                       common wired NIC firmware and common laptop Wi-Fi families
+#                       so a laptop can join a WPA2 network without a giant GPU set.
 #
-# `--firmware all` turns the second one off for a board with an exotic NIC.
+# `--firmware all` turns pruning off for an exotic adapter.
 say "removing the stock initramfs and unused firmware"
 
 rm -f /boot/initramfs-* /boot/System.map-* /boot/config-* /boot/initrd-* 2>/dev/null || true
@@ -114,9 +115,11 @@ elif [ -d /lib/firmware ]; then
     mkdir -p "$FWKEEP"
     before=$(du -sk /lib/firmware | cut -f1)
 
-    # Wired NIC firmware that some server boards genuinely need, plus CPU
-    # microcode, which is stability rather than features.
-    for keep in rtl_nic bnx2 bnx2x tg3 intel/ice amd-ucode; do
+    # Common wired NIC firmware, common laptop Wi-Fi families, and CPU
+    # microcode. This keeps Wi-Fi usable on Intel/Realtek/Qualcomm/MediaTek
+    # laptops without shipping every GPU and accelerator blob in the full set.
+    for keep in rtl_nic bnx2 bnx2x tg3 intel/ice amd-ucode \
+                iwlwifi ath10k ath11k ath12k brcm mediatek rtw88 rtw89 rtlwifi; do
         [ -e "/lib/firmware/$keep" ] || continue
         mkdir -p "$FWKEEP/$(dirname "$keep")"
         cp -a "/lib/firmware/$keep" "$FWKEEP/$keep"
