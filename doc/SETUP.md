@@ -61,6 +61,11 @@ Practically:
   git tag -a v6.26.0-mo9 -m "6.26.0-mo9" && git push origin v6.26.0-mo9
   ```
 
+  Before the merge/tag, move the top `CHANGELOG.md` heading from `Unreleased` to
+  the exact version being released. The appliance workflow refuses stable images
+  from `master` or `v*` tags while the changelog is still unreleased or its tag
+  does not match the miner version; BETA remains the rolling pre-release channel.
+
 Check the invariants at any time:
 
 ```bash
