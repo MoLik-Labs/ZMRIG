@@ -301,6 +301,9 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Refuse a stable image from an unreleased changelog
+        run: bash scripts/check-stable-release.sh "$GITHUB_REF" "$GITHUB_EVENT_NAME" "${{ inputs.channel || 'stable' }}"
+
       - name: Work out the tag
         id: tag
         run: |

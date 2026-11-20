@@ -16,7 +16,7 @@
     "test:duty": "bash zmrig/tests/duty.sh",
     "test:targets": "bash zmrig/tests/targets.sh",
     "test:oneclick": "bash tests/oneclick/plan.sh && bash tests/oneclick/config.sh && bash tests/oneclick/governor.sh && bash tests/oneclick/tune-targets.sh && bash tests/oneclick/light-fallback.sh && bash tests/oneclick/purge.sh",
-    "test:releases": "bash tests/releases/latest-iso.test.sh && bash tests/releases/version-consistency.test.sh",
+    "test:releases": "bash tests/releases/latest-iso.test.sh && bash tests/releases/version-consistency.test.sh && bash tests/releases/changelog-gate.sh",
     "test:serve": "cd serve && npm test",
     "test:host": "node --test host/tests/*.test.js",
     "test:docs": "bash tests/docs/links.sh && bash tests/docs/pages.sh && bash tests/docs/identity.sh && bash tests/docs/setup-page.sh",

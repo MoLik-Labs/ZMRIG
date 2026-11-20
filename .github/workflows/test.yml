@@ -222,6 +222,9 @@ jobs:
       - name: One version, in every file that carries it
         run: bash tests/releases/version-consistency.test.sh
 
+      - name: Stable image publishing requires a released changelog entry
+        run: bash tests/releases/changelog-gate.sh
+
   # The control plane. Zero dependencies, so this is `node --test` and nothing
   # to install; the agent half runs against the same server in os/tests/fleet.sh.
   fleet:
