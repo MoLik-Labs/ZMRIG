@@ -5,34 +5,26 @@
   },
   "sidebar.docs.category.Install": {
     "message": "Cài đặt",
-    "description": "The label for category 'Install' in sidebar 'docs'"
+    "description": "Task-first install instructions"
   },
-  "sidebar.docs.category.Configure": {
-    "message": "Cấu hình",
-    "description": "The label for category 'Configure' in sidebar 'docs'"
+  "sidebar.docs.category.Operate": {
+    "message": "Vận hành",
+    "description": "Monitoring and configuration"
   },
-  "sidebar.docs.category.Run": {
-    "message": "Chạy",
-    "description": "The label for category 'Run' in sidebar 'docs'"
+  "sidebar.docs.category.Fleet": {
+    "message": "Fleet và appliance",
+    "description": "Rig and fleet tools"
   },
-  "sidebar.docs.category.Pools and money": {
-    "message": "Pool và tiền",
-    "description": "The label for category 'Pools and money' in sidebar 'docs'"
-  },
-  "sidebar.docs.category.A whole fleet": {
-    "message": "Cả một fleet",
-    "description": "The label for category 'A whole fleet' in sidebar 'docs'"
+  "sidebar.docs.category.Pools and economics": {
+    "message": "Pool và kinh tế",
+    "description": "Pool choices and mining economics"
   },
   "sidebar.docs.category.Reference": {
     "message": "Tra cứu",
-    "description": "The label for category 'Reference' in sidebar 'docs'"
+    "description": "Reference material"
   },
   "sidebar.docs.category.Development": {
     "message": "Phát triển",
-    "description": "The label for category 'Development' in sidebar 'docs'"
-  },
-  "sidebar.docs.category.Appliance": {
-    "message": "Máy đào (ảnh ISO)",
-    "description": "The label for category 'Appliance' in sidebar 'docs'"
+    "description": "Architecture and contributor testing"
   }
 }

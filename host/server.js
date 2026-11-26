@@ -14,11 +14,12 @@
 //   the bots        Telegram and/or Discord long-poll, configured by the same
 //                   FLEET_* environment the control plane has always used
 //   the rigs        POST /v1/hello — the device protocol, unchanged
+//                   /api/v1/* — the authenticated OpenAPI fleet API
 //   the people      GET /              the documentation site (committed, no build)
 //                   GET /download      the download page with checksums
 //                   GET /iso/v3|v2|beta  302 to the newest image on that channel
 //                   GET /api/releases.json the same data, for a script
-//                   GET /healthz       one health check covering all three
+//                   GET /healthz       one health check covering all three jobs
 //
 // The site is `web/`, the committed build of `site/` that GitHub Pages serves
 // from the same commit. Serving it here costs nothing at deploy time: no npm
@@ -52,9 +53,9 @@ function log(message) {
   process.stdout.write(`${stamp()} ${message}\n`);
 }
 
-/** Paths the device protocol owns. Everything else is the documentation site. */
+/** Paths the fleet protocol and operator API own. Everything else is the site. */
 function isDevicePath(pathname) {
-  return pathname === '/v1/hello' || pathname.startsWith('/v1/');
+  return pathname === '/v1/hello' || pathname.startsWith('/v1/') || pathname.startsWith('/api/v1/');
 }
 
 function version() {
@@ -206,7 +207,7 @@ function start(env = process.env) {
   // two checks are warnings and only a genuinely broken setting is fatal. A
   // deploy that serves pages and receives check-ins while the operator has not
   // connected a bot yet is a first deployment, not a misconfiguration.
-  const fatal = problems.filter((problem) => /^PORT /.test(problem));
+  const fatal = problems.filter((problem) => /^PORT /.test(problem) || /^FLEET_API_TOKEN /.test(problem));
   for (const problem of problems.filter((item) => !fatal.includes(item))) {
     log(`warning: ${problem} - the site is served regardless`);
   }
@@ -226,6 +227,7 @@ function start(env = process.env) {
     site.warm();
     log(`rigs     ${app.store.devices().filter((device) => device.owner).length} enrolled`);
     log(`bots     ${app.platform.telegram ? 'telegram' : ''}${app.platform.telegram && app.platform.discord ? ' + ' : ''}${app.platform.discord ? 'discord' : ''}${!app.platform.telegram && !app.platform.discord ? 'none (no tokens)' : ''}`);
+    log(`fleet API ${app.config.api_token ? 'enabled (/api/v1)' : 'off (no FLEET_API_TOKEN)'}`);
     if (app.roster.source) log(`roster   ${app.roster.rigs.size} rig(s) from ${app.roster.source}`);
   });
 

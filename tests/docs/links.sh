@@ -10,7 +10,9 @@
 #
 #   bash tests/docs/links.sh
 #
-# Exit code 0 when every link resolves, 1 otherwise.
+# Vendored agent skills in .agents/ are reference material rather than product
+# documentation; their upstream anchors follow the source site's slugger.
+# Exit code 0 when every product-documentation link resolves, 1 otherwise.
 
 set -uo pipefail
 
@@ -26,7 +28,7 @@ bad()  { fail=$((fail + 1)); printf ' FAIL %s\n' "$1"; }
 files=()
 while IFS= read -r file; do files+=("$file"); done < <(
     find . -name node_modules -prune -o \
-         \( -path './.git' -o -path './build' -o -path './zmrig/out' -o -path './src/3rdparty' \) -prune -o \
+         \( -path './.git' -o -path './build' -o -path './.agents' -o -path './zmrig/out' -o -path './src/3rdparty' \) -prune -o \
          -name '*.md' -print | sort
 )
 

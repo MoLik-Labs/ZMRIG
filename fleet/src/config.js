@@ -60,6 +60,9 @@ function load(env = process.env) {
     // answers rigs and /healthz, which is the right default for a bot-only host.
     web_password: text(env, 'FLEET_WEB_PASSWORD', ''),
     web_enabled: text(env, 'FLEET_WEB_PASSWORD', '') !== '',
+    // The versioned JSON operator API is disabled unless a high-entropy token
+    // is explicitly configured. It is separate from the browser password.
+    api_token: text(env, 'FLEET_API_TOKEN', ''),
 
     telegram_token: text(env, 'TELEGRAM_BOT_TOKEN', ''),
     discord_token: text(env, 'DISCORD_BOT_TOKEN', ''),
@@ -112,10 +115,10 @@ function validate(config) {
   const problems = [];
   const warnings = [];
 
-  if (!config.telegram_token && !config.discord_token && !config.web_password) {
-    problems.push('nothing to run: set TELEGRAM_BOT_TOKEN, DISCORD_BOT_TOKEN and/or FLEET_WEB_PASSWORD');
+  if (!config.telegram_token && !config.discord_token && !config.web_password && !config.api_token) {
+    problems.push('nothing to run: set a bot token, FLEET_WEB_PASSWORD or FLEET_API_TOKEN');
   }
-  if (config.admins.length === 0 && !config.web_password) {
+  if (config.admins.length === 0 && !config.web_password && !config.api_token) {
     problems.push('no admins: set FLEET_ADMIN_IDS (Telegram ids) and/or DISCORD_ADMIN_IDS');
   }
   if (config.admins.length === 0 && config.web_password) {
@@ -123,6 +126,9 @@ function validate(config) {
   }
   if (config.web_password && config.web_password.length < 12) {
     warnings.push('FLEET_WEB_PASSWORD is shorter than 12 characters');
+  }
+  if (config.api_token && config.api_token.length < 32) {
+    problems.push('FLEET_API_TOKEN must contain at least 32 characters; API access will not start with a weak token');
   }
   if (config.telegram_token && !/^\d+:[A-Za-z0-9_-]{30,}$/.test(config.telegram_token)) {
     warnings.push('TELEGRAM_BOT_TOKEN does not look like a bot token (123456:ABC-DEF...)');

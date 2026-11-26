@@ -8,6 +8,14 @@ const REPO = "https://github.com/MoLik-Labs/ZMRIG";
 const SITE = process.env.SITE_URL || "https://molik-labs.github.io";
 const BASE = process.env.SITE_BASE_URL || "/ZMRIG/";
 const VERSION = require("./package.json").version;
+const THEME_PRESETS = require("./src/theme/theme-presets.json");
+
+function themeBootstrap() {
+  const choices = JSON.stringify(THEME_PRESETS.themes.map(({ id, mode, palette }) => ({ id, mode, palette })));
+  const defaultChoice = JSON.stringify(THEME_PRESETS.default);
+  const storageKey = JSON.stringify(THEME_PRESETS.storageKey);
+  return `(()=>{const choices=${choices};const fallback=${defaultChoice};const key=${storageKey};const root=document.documentElement;let id=fallback;try{const stored=localStorage.getItem(key);if(choices.some((choice)=>choice.id===stored))id=stored}catch{}const choice=choices.find((item)=>item.id===id)||choices[0];if(choice.palette)root.setAttribute("data-palette",choice.palette);else root.removeAttribute("data-palette");if(choice.mode==="system"){root.setAttribute("data-theme-choice","system");root.setAttribute("data-theme",matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");try{localStorage.removeItem("theme");localStorage.setItem(key,id)}catch{}}else{root.setAttribute("data-theme-choice",choice.mode);root.setAttribute("data-theme",choice.mode);try{localStorage.setItem("theme",choice.mode);localStorage.setItem(key,id)}catch{}}})();`;
+}
 
 // Algolia DocSearch is the search of record for this site. The keys are issued
 // per site by Algolia when an application is accepted (see doc/DOCS-SITE.md).
@@ -30,7 +38,7 @@ const algolia = algoliaConfig();
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   title: "ZMRIG",
-  tagline: "RandomX miner with a 3 % developer fee you can see and switch off",
+  tagline: "Self-hosted mining tools with a transparent, configurable fee policy, by @nggkhaiz.",
   // One tone, one shape: a bold Z (bar, diagonal, bar) drawn on a 32 unit grid.
   // `logo.svg` and `logo-dark.svg` are the same geometry in black and white;
   // `favicon.svg` picks the tone from the browser's colour scheme so it stays
@@ -42,6 +50,7 @@ const config = {
     { tagName: "link", attributes: { rel: "icon", type: "image/png", sizes: "192x192", href: `${BASE}img/favicon-192.png` } },
     { tagName: "meta", attributes: { name: "theme-color", content: "#ffffff", media: "(prefers-color-scheme: light)" } },
     { tagName: "meta", attributes: { name: "theme-color", content: "#0b0b0c", media: "(prefers-color-scheme: dark)" } },
+    { tagName: "script", attributes: {}, innerHTML: themeBootstrap() },
   ],
 
   // The Rust toolchain Docusaurus 3.6+ offers: rspack instead of webpack, SWC
@@ -151,7 +160,7 @@ const config = {
         { name: "twitter:card", content: "summary_large_image" },
       ],
       colorMode: {
-        defaultMode: "light",
+        defaultMode: "dark",
         disableSwitch: false,
         respectPrefersColorScheme: true,
       },
@@ -161,25 +170,28 @@ const config = {
         logo: { alt: "ZMRIG", src: "img/logo.svg", srcDark: "img/logo-dark.svg" },
         items: [
           {
-            type: "docSidebar",
-            sidebarId: "docs",
-            position: "left",
-            label: "Documentation",
-          },
-          {
-            to: "/docs/install/quickstart",
+            to: "/docs/install/builder",
             position: "left",
             label: "Install",
           },
           {
-            to: "/docs/economics/profitability",
+            type: "dropdown",
             position: "left",
-            label: "Calculator",
+            label: "Fleet",
+            items: [
+              { label: "ZMRIG OS", to: "/docs/appliance/iso" },
+              { label: "Web dashboard", to: "/docs/fleet/dashboard" },
+              { label: "Operator API", to: "/docs/fleet/api" },
+              { label: "Telegram and Discord", to: "/docs/fleet/telegram" },
+              { label: "Proxy", to: "/docs/fleet/proxy" },
+              { label: "Self-hosted pool", to: "/docs/fleet/pool" },
+            ],
           },
           {
-            to: "/docs/reference/benchmarks",
+            type: "docSidebar",
+            sidebarId: "docs",
             position: "left",
-            label: "Benchmarks",
+            label: "Docs",
           },
           {
             // On the Pages deployment this is the releases page; `serve/` sets
@@ -189,7 +201,7 @@ const config = {
             // link against pages Docusaurus knows about, and that page is served
             // by Node, not by Docusaurus.
             href: process.env.SITE_DOWNLOAD_URL || `${REPO}/releases`,
-            position: "left",
+            position: "right",
             label: "Download",
           },
           { type: "localeDropdown", position: "right" },
@@ -240,7 +252,7 @@ const config = {
             ],
           },
         ],
-        copyright: `ZMRIG ${VERSION} · GPL-3.0 · made by <a href="https://github.com/NggKhaiz">@nggkhaiz</a> · no tracking, no accounts · the 3 % fee is printed and switchable off`,
+        copyright: `ZMRIG ${VERSION} · GPL-3.0 · made by <a href="https://github.com/NggKhaiz">@nggkhaiz</a> · no telemetry or required account · fee policy is disclosed and configurable`,
       },
       docs: {
         sidebar: {

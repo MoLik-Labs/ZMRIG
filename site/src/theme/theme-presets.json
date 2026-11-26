@@ -1,0 +1,14 @@
+{
+  "default": "forest",
+  "storageKey": "zmrig-palette",
+  "themes": [
+    { "id": "system", "mode": "system", "palette": null, "label": { "en": "System", "vi": "Hệ thống" } },
+    { "id": "light", "mode": "light", "palette": null, "label": { "en": "Light", "vi": "Sáng" } },
+    { "id": "dark", "mode": "dark", "palette": null, "label": { "en": "Dark", "vi": "Tối" } },
+    { "id": "forest", "mode": "dark", "palette": "forest", "label": { "en": "Forest", "vi": "Forest · xanh rừng" } },
+    { "id": "catppuccin-mocha", "mode": "dark", "palette": "catppuccin-mocha", "label": { "en": "Catppuccin Mocha", "vi": "Catppuccin Mocha" } },
+    { "id": "nord", "mode": "dark", "palette": "nord", "label": { "en": "Nord", "vi": "Nord" } },
+    { "id": "dracula", "mode": "dark", "palette": "dracula", "label": { "en": "Dracula", "vi": "Dracula" } },
+    { "id": "tokyo-night", "mode": "dark", "palette": "tokyo-night", "label": { "en": "Tokyo Night", "vi": "Tokyo Night" } }
+  ]
+}

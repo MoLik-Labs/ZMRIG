@@ -16,6 +16,7 @@ const format = require('./format');
 const alerts = require('./alerts');
 const { presence } = require('./store');
 const { createWeb } = require('./web');
+const { createApi } = require('./api');
 
 const MAX_BODY = 64 * 1024;
 
@@ -106,11 +107,15 @@ function createHandler({
   // Null when no password is configured: the dashboard is opt-in, and a bot-only
   // host has no HTML surface at all.
   const web = dashboard ? createWeb({ config, store, log, releases, now, roster }) : null;
+  const operatorApi = createApi({ config, store, now });
 
   const handler = async function handle(request, response) {
     const url = new URL(request.url, 'http://localhost');
 
     if (url.pathname === '/healthz') return json(response, 200, { ok: true, up: true });
+    if (url.pathname === '/api/v1/openapi.json' || url.pathname.startsWith('/api/v1/')) {
+      return operatorApi(request, response, url);
+    }
 
     // The dashboard owns everything that is not the device protocol or the
     // health check, including `/`.

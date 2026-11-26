@@ -7,20 +7,44 @@
     "message": "ZMRIG",
     "description": "The alt text of navbar logo"
   },
-  "item.label.Documentation": {
-    "message": "Tài liệu",
-    "description": "Navbar item with label Documentation"
-  },
   "item.label.Install": {
     "message": "Cài đặt",
     "description": "Navbar item with label Install"
   },
-  "item.label.Calculator": {
-    "message": "Máy tính",
-    "description": "Navbar item with label Calculator"
+  "item.label.Fleet": {
+    "message": "Fleet",
+    "description": "Navbar dropdown for the ZMRIG OS and fleet tools"
   },
-  "item.label.Benchmarks": {
-    "message": "Hiệu năng",
-    "description": "Navbar item with label Benchmarks"
+  "item.label.Docs": {
+    "message": "Tài liệu",
+    "description": "Navbar documentation sidebar item"
+  },
+  "item.label.Download": {
+    "message": "Tải xuống",
+    "description": "Navbar item with label Download"
+  },
+  "item.label.ZMRIG OS": {
+    "message": "ZMRIG OS",
+    "description": "Fleet menu item"
+  },
+  "item.label.Web dashboard": {
+    "message": "Dashboard web",
+    "description": "Fleet menu item"
+  },
+  "item.label.Operator API": {
+    "message": "API vận hành",
+    "description": "Fleet menu item"
+  },
+  "item.label.Telegram and Discord": {
+    "message": "Telegram và Discord",
+    "description": "Fleet menu item"
+  },
+  "item.label.Proxy": {
+    "message": "Proxy",
+    "description": "Fleet menu item"
+  },
+  "item.label.Self-hosted pool": {
+    "message": "Pool tự host",
+    "description": "Fleet menu item"
   }
 }

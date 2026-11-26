@@ -49,6 +49,7 @@ test("the site has the pages the documentation promises", () => {
     "economics/report-codes.md",
     "fleet/telegram.md",
     "fleet/dashboard.md",
+    "fleet/api.md",
     "fleet/proxy.md",
     "fleet/pool.md",
     "reference/benchmarks.md",
@@ -117,8 +118,15 @@ test("theme strings are translated, not left in English", () => {
     JSON.parse(fs.readFileSync(path.join(SITE, "i18n", "vi", ...parts), "utf8"));
 
   const navbar = read("docusaurus-theme-classic", "navbar.json");
-  assert.equal(navbar["item.label.Documentation"].message, "Tài liệu");
-  assert.equal(navbar["item.label.Calculator"].message, "Máy tính");
+  for (const [key, message] of Object.entries({
+    Install: "Cài đặt",
+    Fleet: "Fleet",
+    Docs: "Tài liệu",
+    Download: "Tải xuống",
+    "Operator API": "API vận hành",
+  })) {
+    assert.equal(navbar[`item.label.${key}`]?.message, message, `${key} navbar label`);
+  }
 
   const footer = read("docusaurus-theme-classic", "footer.json");
   for (const [key, entry] of Object.entries(footer)) {
@@ -141,12 +149,13 @@ test("the language switch and the theme switch are both configured", () => {
   assert.match(config, /type:\s*"localeDropdown"/);
   assert.match(config, /colorMode:/);
   assert.match(config, /respectPrefersColorScheme:\s*true/);
-  // The three-state toggle is the only thing that offers "system".
   const toggle = fs.readFileSync(
     path.join(SITE, "src", "theme", "ColorModeToggle", "index.js"),
     "utf8"
   );
-  assert.match(toggle, /value:\s*null/);
-  assert.match(toggle, /setColorMode\(option\.value\)/);
-  assert.match(toggle, /Hệ thống/);
+  assert.match(toggle, /<select/);
+  assert.match(toggle, /setColorMode\(preset\.mode === "system" \? null : preset\.mode\)/);
+  assert.match(toggle, /PRESETS\.themes\.map/);
+  const presets = JSON.parse(fs.readFileSync(path.join(SITE, "src", "theme", "theme-presets.json"), "utf8"));
+  assert.equal(presets.themes.find((preset) => preset.id === "system").label.vi, "Hệ thống");
 });

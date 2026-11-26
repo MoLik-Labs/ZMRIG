@@ -503,9 +503,10 @@ zmrig.os.install=/dev/nvme0n1   # optional: write it to the disk and be done</co
 function docs({ config, csrf }) {
   const url = config.public_url || `http://localhost:${config.port}`;
   const body = `<h1>API and protocol</h1>
-    <p class="muted">This page is the reference for the small surface the control plane
-    exposes. The user-facing documentation is
-    <a href="https://molik-labs.github.io/ZMRIG/docs/fleet/telegram">on the site</a>.</p>
+    <p class="muted">This page describes the rig protocol and operator API. See the
+    <a href="https://molik-labs.github.io/ZMRIG/docs/fleet/telegram">chat command guide</a>
+    and <a href="https://molik-labs.github.io/ZMRIG/docs/fleet/api">OpenAPI guide</a>
+    for client setup and authentication.</p>
 
     <h2>Check-in</h2>
     <p>A rig makes exactly one request, once a minute. It never listens.</p>
@@ -534,6 +535,11 @@ Content-Type: application/json
     <h2>Endpoints</h2>
     <table><thead><tr><th>path</th><th>auth</th></tr></thead><tbody>
       <tr><td><code>POST /v1/hello</code></td><td>device key</td></tr>
+      <tr><td><code>GET /api/v1/devices[?limit=&amp;after=]</code></td><td>bearer token, when <code>FLEET_API_TOKEN</code> is set</td></tr>
+      <tr><td><code>GET /api/v1/devices/{id}</code></td><td>bearer token</td></tr>
+      <tr><td><code>GET /api/v1/audit[?limit=]</code></td><td>bearer token</td></tr>
+      <tr><td><code>POST /api/v1/devices/{id}/commands</code></td><td>bearer token; validated and queued</td></tr>
+      <tr><td><code>GET /api/v1/openapi.json</code></td><td>public API contract, no fleet data</td></tr>
       <tr><td><code>GET /healthz</code></td><td>public, no fleet data</td></tr>
       <tr><td><code>GET /</code> and the pages here</td><td>session cookie from <code>FLEET_WEB_PASSWORD</code></td></tr>
     </tbody></table>
@@ -546,6 +552,7 @@ Content-Type: application/json
       <dt>heat alert</dt><dd>${config.alert_temp} C</dd>
       <dt>queue limit</dt><dd>${config.queue_limit} commands per rig</dd>
       <dt>dashboard</dt><dd>${config.web_enabled ? 'enabled' : 'disabled'}</dd>
+      <dt>operator API</dt><dd>${config.api_token ? 'enabled (bearer token required)' : 'disabled'}</dd>
     </dl>`;
 
   return page({ title: 'API', active: '/docs', body, csrf });

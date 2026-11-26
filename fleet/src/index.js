@@ -156,6 +156,7 @@ function start(env = process.env) {
     app.log(`admins   ${config.admins.join(' ') || 'none'}`);
     app.log(`interval ${config.interval}s, offline after ${config.offline_after}s`);
     app.log(`web      ${web ? 'enabled at /' : 'off (no FLEET_WEB_PASSWORD)'}`);
+    app.log(`API      ${config.api_token ? 'enabled at /api/v1 (bearer token)' : 'off (no FLEET_API_TOKEN)'}`);
   });
 
   server.on('error', (error) => {
@@ -215,6 +216,7 @@ function check(env = process.env) {
   );
   process.stdout.write(`interval   ${config.interval}s\n`);
   process.stdout.write(`web        ${config.web_password ? 'enabled' : 'off (FLEET_WEB_PASSWORD unset)'}\n`);
+  process.stdout.write(`API        ${config.api_token ? 'enabled (/api/v1)' : 'off (FLEET_API_TOKEN unset)'}\n`);
   process.stdout.write(`total      ${format.hashrate(devices.reduce((sum, device) => sum + (Number(device.status && device.status.hashrate) || 0), 0))}\n`);
 
   for (const warning of warnings) process.stdout.write(`warning    ${warning}\n`);

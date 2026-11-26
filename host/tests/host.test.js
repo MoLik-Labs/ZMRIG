@@ -102,6 +102,27 @@ test('a rig and a browser are answered by different halves of the same port', as
   }
 });
 
+test('the versioned operator API reaches fleet before the static-site fallback', async () => {
+  const token = 'host-test-api-token-with-at-least-32-characters';
+  const server = await start({ env: { FLEET_API_TOKEN: token } });
+  try {
+    const contract = await get(server, '/api/v1/openapi.json');
+    assert.strictEqual(contract.status, 200);
+    assert.strictEqual(JSON.parse(contract.body).openapi, '3.1.0');
+
+    const unauthorised = await get(server, '/api/v1/devices');
+    assert.strictEqual(unauthorised.status, 401);
+    const devices = await get(server, '/api/v1/devices', {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    assert.strictEqual(devices.status, 200);
+    assert.deepStrictEqual(JSON.parse(devices.body).items, []);
+  } finally {
+    await server.close();
+    server.cleanup();
+  }
+});
+
 test('one health check answers for all three jobs', async () => {
   const server = await start();
   try {
