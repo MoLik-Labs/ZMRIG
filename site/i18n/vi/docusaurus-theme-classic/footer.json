@@ -68,7 +68,7 @@
     "description": "The label of footer link with label=Issues linking to https://github.com/MoLik-Labs/ZMRIG/issues"
   },
   "copyright": {
-    "message": "ZMRIG 6.32.1 · GPL-3.0 · làm bởi <a href=\"https://github.com/NggKhaiz\">@nggkhaiz</a> · không tracking, không tài khoản, không phí developer",
+    "message": "ZMRIG · GPL-3.0 · làm bởi <a href=\"https://github.com/NggKhaiz\">@nggkhaiz</a> · không telemetry hay bắt buộc tài khoản · phí được công khai và cấu hình được",
     "description": "The footer copyright"
   }
 }

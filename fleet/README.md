@@ -149,6 +149,37 @@ The fleet's memory is one JSON file at `FLEET_STATE`. On a free instance that is
 enrolled again. Attach a disk and point `FLEET_STATE` at it once the fleet is
 real.
 
+### Operator JSON API
+
+For automation or a custom client, set a separate `FLEET_API_TOKEN` with at least
+32 characters. It is disabled when unset and must only be sent over HTTPS. The
+OpenAPI 3.1 contract is public at `/api/v1/openapi.json`; control routes require
+`Authorization: Bearer <token>` and return JSON. No browser CORS access is enabled.
+
+```bash
+curl --fail-with-body \\
+  -H "Authorization: Bearer $FLEET_API_TOKEN" \\
+  'https://fleet.example.com/api/v1/devices?limit=50'
+
+curl --fail-with-body -X POST \\
+  -H "Authorization: Bearer $FLEET_API_TOKEN" \\
+  -H 'Content-Type: application/json' \\
+  -d '{"command":"setup","args":{"mode":"safe","maxtemp":72,"threads":8}}' \\
+  'https://fleet.example.com/api/v1/devices/ZMR-1A2B-3C4D-5E6F/commands'
+```
+
+The API supports cursor-paginated `GET /api/v1/devices`,
+`GET /api/v1/devices/{id}`, `GET /api/v1/audit`, and
+`POST /api/v1/devices/{id}/commands`. Commands are allow-listed (`start`,
+`stop`, `restart`, `update`, `reboot`, `log`, and validated `setup` fields); every
+change is queued for the rig's next check-in, subject to the configured queue
+limit, and recorded in the audit log. The JSON views never expose rig keys,
+enrolment codes, or queued wallet values. Tokens are
+compared in constant time, responses are non-cacheable, and a per-client rate
+limit applies. Rotate the API token by replacing the environment secret and
+restarting the service. This API is a single-operator control surface, not a
+public hosted mining API.
+
 ### 3. Point the rigs at it
 
 On the rig, once:
@@ -178,8 +209,8 @@ Then `zmrig-os id` prints the ID and the code, and `/enroll` does the rest.
 ## Tests
 
 ```bash
-npm test                        # 58: identity, store, commands, HTTP, dashboard, rendering
-bash ../os/tests/fleet.sh       # 26: the shell agent against this server
+npm test                        # identity, store, commands, HTTP API, dashboard and rendering
+bash ../os/tests/fleet.sh       # shell-agent controls against this server
 ```
 
 `os/tests/fleet.sh` starts this server on loopback with a test-only control port

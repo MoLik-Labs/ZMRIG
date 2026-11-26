@@ -1,12 +1,6 @@
-// Sidebar for the documentation. Every doc is listed by id, so a page can
-// never be published without a place in the navigation — `onBrokenLinks:
-// "throw"` then catches a link to a page that was renamed or removed.
-//
-// The Vietnamese translation mirrors these ids exactly; Docusaurus resolves
-// each id against the current locale and falls back to English if a page is
-// missing, which is why `npm run check:i18n` in the repository compares the
-// two file trees.
-
+// Task-first documentation navigation. Installation stays near the top; users
+// who are running hardware reach operations and fleet guidance without paging
+// through contributor reference material.
 /** @type {import('@docusaurus/plugin-content-docs').SidebarsConfig} */
 const sidebars = {
   docs: [
@@ -17,9 +11,9 @@ const sidebars = {
       collapsible: true,
       collapsed: false,
       items: [
-        "install/setup",
         "install/quickstart",
         "install/builder",
+        "install/setup",
         "install/installer",
         "install/engines",
         "install/docker",
@@ -27,30 +21,35 @@ const sidebars = {
     },
     {
       type: "category",
-      label: "Appliance",
+      label: "Operate",
       collapsible: true,
-      items: ["appliance/iso", "appliance/web"],
-    },
-    {
-      type: "category",
-      label: "Configure",
-      collapsible: true,
-      items: ["configure/config-file", "configure/cli"],
-    },
-    {
-      type: "category",
-      label: "Run",
-      collapsible: true,
+      collapsed: false,
       items: [
         "operate/monitoring",
-        "operate/networks",
         "operate/performance",
+        "operate/networks",
         "operate/troubleshooting",
+        "configure/config-file",
+        "configure/cli",
       ],
     },
     {
       type: "category",
-      label: "Pools and money",
+      label: "Fleet",
+      collapsible: true,
+      items: [
+        "appliance/iso",
+        "appliance/web",
+        "fleet/dashboard",
+        "fleet/api",
+        "fleet/telegram",
+        "fleet/proxy",
+        "fleet/pool",
+      ],
+    },
+    {
+      type: "category",
+      label: "Pools and economics",
       collapsible: true,
       items: [
         "pools/choosing",
@@ -58,12 +57,6 @@ const sidebars = {
         "economics/profitability",
         "economics/report-codes",
       ],
-    },
-    {
-      type: "category",
-      label: "A whole fleet",
-      collapsible: true,
-      items: ["fleet/telegram", "fleet/dashboard", "fleet/proxy", "fleet/pool"],
     },
     {
       type: "category",

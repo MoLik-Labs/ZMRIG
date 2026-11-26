@@ -240,12 +240,16 @@ fi
 
 # --- 5. language and theme controls are on every page ---------------------
 # Both are requirements, not decoration: English is the default and Vietnamese
-# is a full translation, and the theme control has to offer system/light/dark.
+# is a full translation, and the native theme picker exposes every palette.
 switches=0
 while IFS= read -r page; do
-    # The labels are translated, so look for either spelling of "system".
-    if grep -q 'zm-theme-switch' "$page" &&
-       { grep -q 'title="System"' "$page" || grep -q 'title="Hệ thống"' "$page"; }; then
+    # A real select is keyboard-operable and its localized accessible label is
+    # present in the server-rendered page before hydration.
+    if grep -q 'data-theme-picker' "$page" &&
+       { grep -q 'aria-label="Colour theme"' "$page" || grep -q 'aria-label="Giao diện màu"' "$page"; } &&
+       grep -q 'option value="forest"' "$page" &&
+       grep -q 'option value="catppuccin-mocha"' "$page" &&
+       grep -q 'option value="nord"' "$page"; then
         switches=$((switches + 1))
     fi
 done < <(find docs vi/docs -name '*.html' 2>/dev/null)

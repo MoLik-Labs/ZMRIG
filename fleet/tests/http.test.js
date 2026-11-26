@@ -64,6 +64,122 @@ function hello(fleet, body, options = {}) {
   });
 }
 
+const API_TOKEN = 'test-api-token-that-is-at-least-32-bytes-long';
+
+function api(fleet, path, options = {}) {
+  return fetch(`${fleet.base}${path}`, {
+    ...options,
+    headers: {
+      ...(options.body ? { 'content-type': 'application/json' } : {}),
+      ...(options.headers || {}),
+      ...(options.auth === false ? {} : { authorization: `Bearer ${options.token || API_TOKEN}` }),
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+}
+
+test('the operator API is opt-in and publishes an OpenAPI contract', async () => {
+  const fleet = await rig();
+  try {
+    assert.equal((await api(fleet, '/api/v1/devices')).status, 404);
+    const weakToken = await rig({ api_token: 'too-short' });
+    try {
+      assert.equal((await api(weakToken, '/api/v1/devices', { token: 'too-short' })).status, 404);
+    } finally {
+      await weakToken.close();
+    }
+    const specResponse = await fetch(`${fleet.base}/api/v1/openapi.json`);
+    assert.equal(specResponse.status, 200);
+    const spec = await specResponse.json();
+    assert.equal(spec.openapi, '3.1.0');
+    assert.ok(spec.paths['/api/v1/devices']);
+    assert.ok(spec.paths['/api/v1/audit']);
+    assert.ok(spec.paths['/api/v1/devices/{id}/commands']);
+  } finally {
+    await fleet.close();
+  }
+});
+
+test('the operator API authenticates, paginates, and never returns rig credentials', async () => {
+  const fleet = await rig({ api_token: API_TOKEN });
+  try {
+    assert.equal((await api(fleet, '/api/v1/devices', { auth: false })).status, 401);
+    assert.equal((await api(fleet, '/api/v1/devices', { token: 'wrong-token' })).status, 401);
+    await (await hello(fleet, { status: { state: 'mining', hashrate: 900, wallet: '4example' } })).json();
+    const record = fleet.store.get(ids.deviceId(fleet.key));
+    fleet.store.enrol(record.id, 'tg:1', 'lab rig');
+    const secondKey = crypto.randomBytes(32).toString('hex');
+    await (await hello(fleet, { status: { state: 'stopped' } }, { key: secondKey })).json();
+    const secondRecord = fleet.store.get(ids.deviceId(secondKey));
+    fleet.store.enrol(secondRecord.id, 'tg:1', 'second rig');
+
+    const response = await api(fleet, '/api/v1/devices?limit=1');
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.items.length, 1);
+    assert.equal(result.total, 2);
+    assert.ok(result.next_cursor);
+    assert.equal(result.items[0].presence, 'online');
+    assert.equal(JSON.stringify(result).includes(fleet.key), false);
+    assert.equal(JSON.stringify(result).includes(secondKey), false);
+    assert.equal(JSON.stringify(result).includes(record.secret_hash), false);
+    assert.equal(JSON.stringify(result).includes(secondRecord.secret_hash), false);
+
+    const nextResponse = await api(fleet, `/api/v1/devices?limit=1&after=${result.next_cursor}`);
+    const nextPage = await nextResponse.json();
+    assert.equal(nextPage.items.length, 1);
+    assert.notEqual(nextPage.items[0].id, result.items[0].id);
+
+    const detailResponse = await api(fleet, `/api/v1/devices/${record.id}`);
+    assert.equal(detailResponse.status, 200);
+    const detail = await detailResponse.json();
+    assert.equal(detail.device.label, 'lab rig');
+    assert.equal('secret_hash' in detail.device, false);
+    assert.equal('code' in detail.device, false);
+  } finally {
+    await fleet.close();
+  }
+});
+
+test('the operator API validates and queues allow-listed rig commands', async () => {
+  const fleet = await rig({ api_token: API_TOKEN, queue_limit: 1 });
+  try {
+    await (await hello(fleet, { status: { state: 'mining' } })).json();
+    const record = fleet.store.get(ids.deviceId(fleet.key));
+    fleet.store.enrol(record.id, 'tg:1', 'test rig');
+
+    const queued = await api(fleet, `/api/v1/devices/${record.id}/commands`, {
+      method: 'POST', body: { command: 'setup', args: { mode: 'safe', maxtemp: 72, threads: 4 } },
+    });
+    assert.equal(queued.status, 202);
+    const acknowledgement = await queued.json();
+    assert.equal(acknowledgement.status, 'queued');
+    assert.equal(record.queue.length, 1);
+    assert.deepEqual(record.queue[0].args, { mode: 'safe', maxtemp: 72, threads: 4 });
+    assert.equal(fleet.store.recent(1)[0].actor, 'api');
+    const auditResponse = await api(fleet, '/api/v1/audit?limit=1');
+    assert.equal(auditResponse.status, 200);
+    const audit = await auditResponse.json();
+    assert.equal(audit.items.length, 1);
+    assert.equal(audit.items[0].action, 'setup:maxtemp,mode,threads');
+    assert.equal(audit.items[0].device_id, record.id);
+
+    const full = await api(fleet, `/api/v1/devices/${record.id}/commands`, {
+      method: 'POST', body: { command: 'stop' },
+    });
+    assert.equal(full.status, 409);
+    assert.equal(record.queue.length, 1);
+
+    const invalid = await api(fleet, `/api/v1/devices/${record.id}/commands`, {
+      method: 'POST', body: { command: 'shell', args: { command: 'rm -rf /' } },
+    });
+    assert.equal(invalid.status, 400);
+    assert.equal(record.queue.length, 1);
+  } finally {
+    await fleet.close();
+  }
+});
+
 test('a rig with no key gets nothing', async () => {
   const fleet = await rig();
   try {
